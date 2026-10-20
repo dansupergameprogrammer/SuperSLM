@@ -1,0 +1,100 @@
+Alpha wing, scan and then hold north ridge.
+Bravo wing at north ridge: sweep it, keep it.
+Charlie team, check north ridge before holding that ground.
+Delta scout, first scan north ridge, then stay on it.
+Echo battery should sweep and hold north ridge.
+Foxtrot patrol, sensor pass on north ridge; maintain position there.
+Golf squad, cover north ridge with a scan and a hold.
+Hotel drone, scan north ridge, remain over the same spot.
+India unit, north ridge is both your sweep and hold point.
+Juliet group, look over north ridge and keep station there.
+At east bridge, Alpha wing scans first and holds after.
+Bravo wing, sweep east bridge; hold that same bridge.
+Charlie team, check east bridge and then keep it.
+Delta scout, east bridge scan, east bridge hold, in order.
+Echo battery, run sensors at east bridge and remain there.
+Foxtrot patrol, inspect east bridge, then hold the span.
+Golf squad should scan and hold east bridge.
+Hotel drone, sweep east bridge before maintaining station above it.
+India unit, east bridge gets a scan followed by a hold.
+Juliet group, scan the east bridge; afterward stay on site.
+Alpha wing, south gate is for both actions: scan, hold.
+Bravo wing, look over south gate then secure it in place.
+Charlie team, scan south gate and hold that gate.
+Delta scout, south gate sensor pass; maintain that spot afterward.
+Echo battery, sweep at south gate and stay there.
+Foxtrot patrol, scan south gate before holding position at it.
+Golf squad, inspect south gate, then remain on that ground.
+Hotel drone, search south gate and keep station over it.
+India unit, run a south gate scan, hold the gate after.
+Juliet group, south gate: check it and stay put there.
+Alpha wing, west tower scan first, hold same tower second.
+Bravo wing, sweep west tower and retain the position.
+Charlie team, look around west tower; hold it afterward.
+Delta scout, scan west tower; remain at the tower.
+Echo battery, cover west tower with sensors and then hold it.
+Foxtrot patrol, search west tower and keep that station.
+Golf squad, scan the west tower before settling in there.
+Hotel drone, west tower check, followed by holding overhead.
+India unit should inspect and hold west tower.
+Juliet group, sweep west tower, don't leave that post.
+Alpha wing, upper deck scan, then hold upper deck.
+Bravo wing, inspect upper deck and stay on it.
+Charlie team, run sensors on upper deck; maintain that position.
+Delta scout, sweep the upper deck before holding it.
+Echo battery, upper deck for both: search first, hold second.
+Foxtrot patrol, check upper deck, keep it after.
+Golf squad should scan and remain on upper deck.
+Hotel drone, look over upper deck then hover there.
+India unit, upper deck gets the sensor pass and the hold.
+Juliet group, survey upper deck, then hold the same location.
+Alpha wing, scan lower tunnel and hold inside it.
+Bravo wing, sweep lower tunnel, maintain that tunnel post.
+Charlie team, check lower tunnel before staying there.
+Delta scout, sensor pass in lower tunnel; hold afterward.
+Echo battery should scan and secure lower tunnel.
+Foxtrot patrol, look along lower tunnel, then remain there.
+Golf squad, search lower tunnel and keep station inside.
+Hotel drone, scan lower tunnel, hold at that same place.
+India unit, lower tunnel is your scan site and hold point.
+Juliet group, inspect lower tunnel, then stay put.
+At river crossing, Alpha wing scans and holds.
+Bravo wing, river crossing sweep, followed by a hold there.
+Charlie team, check river crossing and keep that crossing.
+Delta scout, scan the river crossing before remaining on it.
+Echo battery, sensors at river crossing, then hold that bank.
+Foxtrot patrol should search and hold river crossing.
+Golf squad, look over river crossing; stay at the same spot.
+Hotel drone, river crossing scan, remain overhead afterward.
+India unit, inspect river crossing and maintain position there.
+Juliet group, sweep river crossing, then hold that location.
+Alpha wing, supply depot: scan it, hold it.
+Bravo wing, check supply depot and stay in that compound.
+Charlie team, sweep supply depot before holding it.
+Delta scout, sensor pass at supply depot; keep that post.
+Echo battery, scan supply depot, remain there after.
+Foxtrot patrol, search supply depot and hold the site.
+Golf squad, inspect supply depot then stay on station.
+Hotel drone, scan supply depot and maintain overhead position.
+India unit, supply depot is both the scan and hold target.
+Juliet group, sweep supply depot, keep it afterward.
+Alpha wing, at radar mast run sensors, then hold the mast.
+Bravo wing, scan radar mast and remain there.
+Charlie team, check radar mast; retain that position.
+Delta scout, radar mast sweep followed by a hold.
+Echo battery should inspect and hold radar mast.
+Foxtrot patrol, look around radar mast, then stay at it.
+Golf squad, search radar mast and maintain station.
+Hotel drone, scan radar mast, hover there after.
+India unit, radar mast for the scan and subsequent hold.
+Juliet group, sweep radar mast, keep the same post.
+Alpha wing, landing zone scan, hold there afterward.
+Bravo wing, look over landing zone and keep it.
+Charlie team, sweep landing zone; remain on the pad.
+Delta scout, check landing zone before holding it.
+Echo battery, sensor pass on landing zone, then hold.
+Foxtrot patrol should scan and stay at landing zone.
+Golf squad, inspect landing zone, keep station there.
+Hotel drone, scan landing zone, hover over it afterward.
+India unit, landing zone is your sweep site and hold point.
+Juliet group, search landing zone then maintain position.

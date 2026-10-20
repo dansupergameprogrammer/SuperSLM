@@ -1,0 +1,4 @@
+*.md text eol=lf
+*.txt text eol=lf
+*.tsv text eol=lf
+.gitattributes text eol=lf

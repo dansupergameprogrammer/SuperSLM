@@ -1,0 +1,40 @@
+Cancel Alpha wing's old move; scan north ridge instead.
+Bravo wing, drop that earlier relocation, but sweep north ridge now.
+Charlie team, never mind the move; check north ridge.
+Delta scout, retract the old route, run sensors at north ridge.
+Echo battery, abort previous movement; survey north ridge as the replacement.
+Foxtrot patrol, scrap the move and search north ridge.
+Golf squad, stop the old order; inspect north ridge.
+Hotel drone, don't fly that route; scan north ridge instead.
+India unit, withdraw prior movement, check north ridge now.
+Juliet group, change of plan: cancel the move, sweep north ridge.
+Alpha wing, old movement cancelled; scan east bridge.
+Bravo wing, disregard the move but inspect east bridge.
+Charlie team, strike the previous route and check east bridge.
+Delta scout, abort relocation, survey east bridge now.
+Echo battery, move is off; run sensors at east bridge.
+Foxtrot patrol, forget the trip, search east bridge instead.
+Golf squad, cancel that move; sweep east bridge.
+Hotel drone, don't run the old route; scan east bridge.
+India unit, revoke the movement, inspect east bridge now.
+Juliet group, stand down from the move; check east bridge.
+Alpha wing, drop the prior move, scan south gate.
+Bravo wing, old destination revoked, sweep south gate.
+Charlie team, never mind moving; inspect south gate.
+Delta scout, cancel that relocation and survey south gate.
+Echo battery, previous move off, sensors on south gate now.
+Foxtrot patrol, scratch the route; search south gate.
+Golf squad, abort old movement, check south gate instead.
+Hotel drone, no old flight path; scan south gate.
+India unit, cancel earlier trip and inspect south gate.
+Juliet group, withdraw move request; sweep south gate now.
+Alpha wing, stop the old move; scan west tower.
+Bravo wing, cancel relocation, check west tower in its place.
+Charlie team, old route off, inspect west tower.
+Delta scout, discard the move; survey west tower.
+Echo battery, never mind movement, scan west tower instead.
+Foxtrot patrol, revoke that trip and search west tower.
+Golf squad, drop earlier move, sweep west tower.
+Hotel drone, old flight cancelled; scan west tower.
+India unit, scratch the relocation, check west tower.
+Juliet group, abort prior movement; inspect west tower now.

@@ -1,0 +1,168 @@
+{
+  "cross_split_4gram_jaccard": 0.000295,
+  "gate_failures": [],
+  "literal_label_text_count": 0,
+  "literal_label_text_examples": [],
+  "pc2": {
+    "dependency": {
+      "complete_pairs": 40,
+      "distinct_pair_shapes": 40,
+      "mean_pair_token_jaccard": 0.916922,
+      "minimum_pair_token_jaccard": 0.806452,
+      "pairs": 40
+    },
+    "ordering": {
+      "complete_pairs": 40,
+      "distinct_pair_shapes": 40,
+      "mean_pair_token_jaccard": 0.919356,
+      "minimum_pair_token_jaccard": 0.818182,
+      "pairs": 40
+    },
+    "simple_trigger": {
+      "complete_pairs": 40,
+      "distinct_pair_shapes": 40,
+      "mean_pair_token_jaccard": 0.899139,
+      "minimum_pair_token_jaccard": 0.769231,
+      "pairs": 40
+    }
+  },
+  "pc2_lexical_leave_pair_out_accuracy": 0.608333,
+  "per_stratum": {
+    "G/above_cap": {
+      "distinct_shapes": 84,
+      "max_shape_share": 0.05,
+      "rows": 100
+    },
+    "G/cancellation": {
+      "distinct_shapes": 86,
+      "max_shape_share": 0.03,
+      "rows": 100
+    },
+    "G/conjunction": {
+      "distinct_shapes": 100,
+      "max_shape_share": 0.01,
+      "rows": 100
+    },
+    "G/correction": {
+      "distinct_shapes": 97,
+      "max_shape_share": 0.02,
+      "rows": 100
+    },
+    "G/nested_condition": {
+      "distinct_shapes": 99,
+      "max_shape_share": 0.02,
+      "rows": 100
+    },
+    "G/parallel": {
+      "distinct_shapes": 91,
+      "max_shape_share": 0.02,
+      "rows": 100
+    },
+    "G/pronoun": {
+      "distinct_shapes": 97,
+      "max_shape_share": 0.02,
+      "rows": 100
+    },
+    "G/punctuation_free": {
+      "distinct_shapes": 88,
+      "max_shape_share": 0.03,
+      "rows": 100
+    },
+    "G/shared_argument": {
+      "distinct_shapes": 99,
+      "max_shape_share": 0.02,
+      "rows": 100
+    },
+    "G/zero_action": {
+      "distinct_shapes": 96,
+      "max_shape_share": 0.02,
+      "rows": 100
+    },
+    "N/ambiguous_executable": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "N/cancellation": {
+      "distinct_shapes": 94,
+      "max_shape_share": 0.03,
+      "rows": 100
+    },
+    "N/zero_action": {
+      "distinct_shapes": 97,
+      "max_shape_share": 0.02,
+      "rows": 100
+    },
+    "U/at_cap": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "U/cap_plus_one": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "U/correction": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "U/nested_condition": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "U/parallel": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "U/pronoun": {
+      "distinct_shapes": 39,
+      "max_shape_share": 0.05,
+      "rows": 40
+    },
+    "U/shared_argument": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "development": {
+      "distinct_shapes": 139,
+      "max_shape_share": 0.045,
+      "rows": 200
+    },
+    "pc2/dependency/T": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "pc2/dependency/W": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "pc2/ordering/T": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "pc2/ordering/W": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "pc2/simple_trigger/T": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    },
+    "pc2/simple_trigger/W": {
+      "distinct_shapes": 40,
+      "max_shape_share": 0.025,
+      "rows": 40
+    }
+  },
+  "trace_label_fields": []
+}

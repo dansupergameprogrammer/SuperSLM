@@ -1,0 +1,3688 @@
+{
+ "fixtures": {
+  "TL-1": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "beacon",
+        "predicate": "lit",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     3,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-2": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "beacon",
+        "predicate": "lit",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-3": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "gate",
+        "predicate": "opened",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {},
+     "events": [
+      "gate|opened"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {},
+     "events": [
+      "gate|opened"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     5,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-4": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "gate",
+        "predicate": "open",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": true,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     2,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-5a": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [],
+      "start_any": [
+       {
+        "instance": "green flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       },
+       {
+        "instance": "red flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {},
+     "events": [
+      "green flare|fires"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     2,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-5b": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [],
+      "start_any": [
+       {
+        "instance": "green flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       },
+       {
+        "instance": "red flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {},
+     "events": [
+      "red flare|fires"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     3,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-6": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "a",
+        "predicate": "on",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       },
+       {
+        "instance": "b",
+        "predicate": "on",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "a|on": false,
+      "b|on": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "a|on": false,
+      "b|on": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "a|on": true,
+      "b|on": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "a|on": true,
+      "b|on": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "a|on": true,
+      "b|on": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "a|on": true,
+      "b|on": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "a|on": true,
+      "b|on": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "a|on": true,
+      "b|on": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "a|on": true,
+      "b|on": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": []
+  },
+  "TL-7": {
+   "batch": [
+    {
+     "action": "hold",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "beacon",
+        "predicate": "lit",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     4,
+     0,
+     "end"
+    ]
+   ]
+  },
+  "TL-8a": {
+   "batch": [
+    {
+     "action": "scan",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": [
+       {
+        "instance": "gate",
+        "predicate": "open",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ]
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     2,
+     0,
+     "suspend"
+    ],
+    [
+     4,
+     0,
+     "resume"
+    ]
+   ]
+  },
+  "TL-8b": {
+   "batch": [
+    {
+     "action": "scan",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": [
+       {
+        "instance": "gate",
+        "predicate": "open",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ]
+     },
+     "after": [],
+     "during_policy": "end"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     2,
+     0,
+     "end"
+    ]
+   ]
+  },
+  "TL-9": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "gauge",
+        "predicate": "level",
+        "kind": "numeric",
+        "cmp": "reaches",
+        "value": {
+         "num": 50,
+         "den": 1
+        },
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "gauge|level": 30
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "gauge|level": 30
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "gauge|level": 45
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "gauge|level": 55
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "gauge|level": 55
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "gauge|level": 55
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "gauge|level": 55
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "gauge|level": 55
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "gauge|level": 55
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     2,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-10": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "gauge",
+        "predicate": "level",
+        "kind": "numeric",
+        "cmp": "reaches",
+        "value": {
+         "num": 50,
+         "den": 1
+        },
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "gauge|level": 70
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "gauge|level": 70
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "gauge|level": 60
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "gauge|level": 45
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "gauge|level": 45
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "gauge|level": 45
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "gauge|level": 45
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "gauge|level": 45
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "gauge|level": 45
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     2,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-11": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "turrets",
+        "predicate": "standing",
+        "kind": "count",
+        "cmp": "at_most",
+        "value": {
+         "num": 0,
+         "den": 1
+        },
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "turrets|standing": [
+       true,
+       true
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "turrets|standing": [
+       true,
+       true
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "turrets|standing": [
+       true,
+       false
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "turrets|standing": [
+       false,
+       false
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "turrets|standing": [
+       false,
+       false
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "turrets|standing": [
+       false,
+       false
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "turrets|standing": [
+       false,
+       false
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "turrets|standing": [
+       false,
+       false
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "turrets|standing": [
+       false,
+       false
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     2,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-12": {
+   "batch": [
+    {
+     "action": "hold",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "charlie",
+        "predicate": "health",
+        "kind": "numeric",
+        "cmp": "below",
+        "value": {
+         "num": 75,
+         "den": 2
+        },
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "charlie|health": 40
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "charlie|health": 40
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "charlie|health": 38
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "charlie|health": 37
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "charlie|health": 37
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "charlie|health": 37
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "charlie|health": 37
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "charlie|health": 37
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "charlie|health": 37
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     2,
+     0,
+     "end"
+    ]
+   ]
+  },
+  "TL-13a": {
+   "batch": [
+    {
+     "action": "wait",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "red flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "wait",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "green flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "green flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "wait",
+         "ref": 1
+        }
+       },
+       {
+        "instance": "red flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "wait",
+         "ref": 0
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {},
+     "events": [
+      "green flare|fires"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {},
+     "events": [
+      "red flare|fires"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     0,
+     1,
+     "start"
+    ],
+    [
+     2,
+     1,
+     "end"
+    ],
+    [
+     4,
+     0,
+     "end"
+    ],
+    [
+     4,
+     2,
+     "start"
+    ]
+   ]
+  },
+  "TL-13b": {
+   "batch": [
+    {
+     "action": "wait",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "red flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "wait",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "green flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "green flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "wait",
+         "ref": 1
+        }
+       },
+       {
+        "instance": "red flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "wait",
+         "ref": 0
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {},
+     "events": [
+      "green flare|fires"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [
+      0
+     ],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {},
+     "events": [
+      "red flare|fires"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     0,
+     1,
+     "start"
+    ],
+    [
+     2,
+     1,
+     "end"
+    ],
+    [
+     3,
+     0,
+     "cancelled"
+    ],
+    [
+     3,
+     2,
+     "ConditionUnreachable"
+    ]
+   ]
+  },
+  "TL-13c": {
+   "batch": [
+    {
+     "action": "wait",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "beacon",
+        "predicate": "lit",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "beacon",
+        "predicate": "lit",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "wait",
+         "ref": 0
+        }
+       },
+       {
+        "instance": "gate",
+        "predicate": "open",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "beacon|lit": false,
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "beacon|lit": false,
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "beacon|lit": false,
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "beacon|lit": true,
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "beacon|lit": false,
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "beacon|lit": false,
+      "gate|open": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "beacon|lit": false,
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "beacon|lit": false,
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "beacon|lit": false,
+      "gate|open": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     2,
+     0,
+     "end"
+    ],
+    [
+     5,
+     1,
+     "start"
+    ]
+   ]
+  },
+  "TL-14": {
+   "batch": [
+    {
+     "action": "move",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "beacon",
+        "predicate": "lit",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [
+      0
+     ],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [
+      0
+     ],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     3,
+     0,
+     "end"
+    ],
+    [
+     3,
+     1,
+     "start"
+    ]
+   ]
+  },
+  "TL-15": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "beacon",
+        "predicate": "lit",
+        "kind": "state",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       },
+       {
+        "instance": "gate",
+        "predicate": "opened",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [
+      "gate|opened"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": true
+    },
+    {
+     "t": 4,
+     "values": {
+      "beacon|lit": false
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "beacon|lit": true
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     5,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-16": {
+   "batch": [
+    {
+     "action": "move",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "alpha",
+        "predicate": "arrives",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [
+      0
+     ],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {},
+     "events": [
+      "alpha|arrives"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {},
+     "events": [],
+     "complete": [
+      0
+     ],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {},
+     "events": [
+      "alpha|arrives"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     3,
+     0,
+     "end"
+    ],
+    [
+     5,
+     1,
+     "start"
+    ]
+   ]
+  },
+  "TL-17": {
+   "batch": [
+    {
+     "action": "move",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "hold",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "alpha",
+        "predicate": "arrives",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [
+      0
+     ],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {},
+     "events": [
+      "alpha|arrives"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {},
+     "events": [],
+     "complete": [
+      0
+     ],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {},
+     "events": [
+      "alpha|arrives"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     3,
+     0,
+     "end"
+    ],
+    [
+     3,
+     1,
+     "start"
+    ],
+    [
+     6,
+     1,
+     "end"
+    ]
+   ]
+  },
+  "TL-18": {
+   "batch": [
+    {
+     "action": "move",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "wait",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [
+      0
+     ],
+     "during_policy": "suspend"
+    },
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "flare",
+        "predicate": "fires",
+        "kind": "event",
+        "cmp": "none",
+        "value": null,
+        "negated": false,
+        "binding": {
+         "mode": "wait",
+         "ref": 1
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [
+      0
+     ],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {},
+     "events": [
+      "flare|fires"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {},
+     "events": [],
+     "complete": [
+      0
+     ],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {},
+     "events": [
+      "flare|fires"
+     ],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {},
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     3,
+     0,
+     "end"
+    ],
+    [
+     3,
+     1,
+     "start"
+    ],
+    [
+     5,
+     1,
+     "end"
+    ],
+    [
+     5,
+     2,
+     "start"
+    ]
+   ]
+  },
+  "TL-19": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "gauge",
+        "predicate": "level",
+        "kind": "numeric",
+        "cmp": "reaches",
+        "value": {
+         "num": 50,
+         "den": 1
+        },
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "gauge|level": 30
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "gauge|level": 70
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "gauge|level": 60
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "gauge|level": 50
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "gauge|level": 50
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "gauge|level": 50
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "gauge|level": 50
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "gauge|level": 50
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "gauge|level": 50
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     2,
+     0,
+     "start"
+    ]
+   ]
+  },
+  "TL-20": {
+   "batch": [
+    {
+     "action": "hold",
+     "aspect": "durative",
+     "trigger": {
+      "start_all": [],
+      "start_any": [],
+      "stop_any": [
+       {
+        "instance": "charlie",
+        "predicate": "health",
+        "kind": "numeric",
+        "cmp": "below",
+        "value": {
+         "num": 75,
+         "den": 2
+        },
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "charlie|health": [
+       375,
+       10
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "charlie|health": [
+       375,
+       10
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "charlie|health": [
+       374,
+       10
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "charlie|health": [
+       374,
+       10
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "charlie|health": [
+       374,
+       10
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "charlie|health": [
+       374,
+       10
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "charlie|health": [
+       374,
+       10
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "charlie|health": [
+       374,
+       10
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "charlie|health": [
+       374,
+       10
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     0,
+     0,
+     "start"
+    ],
+    [
+     1,
+     0,
+     "end"
+    ]
+   ]
+  },
+  "TL-21": {
+   "batch": [
+    {
+     "action": "fire",
+     "aspect": "punctual",
+     "trigger": {
+      "start_all": [
+       {
+        "instance": "gauge",
+        "predicate": "ratio",
+        "kind": "numeric",
+        "cmp": "above",
+        "value": {
+         "num": 1,
+         "den": 1
+        },
+        "negated": false,
+        "binding": {
+         "mode": "passive",
+         "ref": null
+        }
+       }
+      ],
+      "start_any": [],
+      "stop_any": [],
+      "during_all": []
+     },
+     "after": [],
+     "during_policy": "suspend"
+    }
+   ],
+   "timeline": [
+    {
+     "t": -1,
+     "values": {
+      "gauge|ratio": [
+       100000000000000000,
+       100000000000000000
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 0,
+     "values": {
+      "gauge|ratio": [
+       100000000000000000,
+       100000000000000000
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 1,
+     "values": {
+      "gauge|ratio": [
+       100000000000000000,
+       100000000000000000
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 2,
+     "values": {
+      "gauge|ratio": [
+       100000000000000001,
+       100000000000000000
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 3,
+     "values": {
+      "gauge|ratio": [
+       100000000000000001,
+       100000000000000000
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 4,
+     "values": {
+      "gauge|ratio": [
+       100000000000000001,
+       100000000000000000
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 5,
+     "values": {
+      "gauge|ratio": [
+       100000000000000001,
+       100000000000000000
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 6,
+     "values": {
+      "gauge|ratio": [
+       100000000000000001,
+       100000000000000000
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    },
+    {
+     "t": 7,
+     "values": {
+      "gauge|ratio": [
+       100000000000000001,
+       100000000000000000
+      ]
+     },
+     "events": [],
+     "complete": [],
+     "cancel": [],
+     "save_load": false
+    }
+   ],
+   "expected": [
+    [
+     2,
+     0,
+     "start"
+    ]
+   ]
+  }
+ },
+ "mutant_fixtures": {
+  "start_any_as_and": [
+   "TL-5a",
+   "TL-5b"
+  ],
+  "start_all_as_or": [
+   "TL-6"
+  ],
+  "state_as_edge": [
+   "TL-2"
+  ],
+  "event_as_level": [
+   "TL-15"
+  ],
+  "ignore_during": [
+   "TL-8a",
+   "TL-8b"
+  ],
+  "ignore_stop": [
+   "TL-7"
+  ],
+  "ignore_negated": [
+   "TL-4"
+  ],
+  "reaches_as_below": [
+   "TL-9"
+  ],
+  "rational_rounded": [
+   "TL-20"
+  ],
+  "ignore_wait_completion": [
+   "TL-13c"
+  ],
+  "latch_dropped_on_load": [
+   "TL-15"
+  ],
+  "events_from_t0": [
+   "TL-16",
+   "TL-17"
+  ],
+  "reaches_side_from_pre_request": [
+   "TL-19"
+  ],
+  "scaled_as_float": [
+   "TL-21"
+  ]
+ }
+}

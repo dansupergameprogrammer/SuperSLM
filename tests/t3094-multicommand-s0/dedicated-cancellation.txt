@@ -1,0 +1,100 @@
+Alpha wing's north ridge move, stop it. No follow-up.
+Bravo wing, never mind north ridge; stand by.
+Charlie team, rescind the north ridge order.
+Delta scout, that north ridge instruction is void.
+Echo battery, cancel your pending north ridge movement.
+Foxtrot patrol, hold off; north ridge has been withdrawn.
+Golf squad, I take back the north ridge command.
+Hotel drone, don't fly north ridge after all.
+India unit, erase that north ridge destination.
+Juliet group, drop the north ridge order entirely.
+Alpha wing, the east bridge move is withdrawn.
+Bravo wing, no go on east bridge now.
+Charlie team, strike the east bridge assignment.
+Delta scout, cancel the earlier east bridge directive.
+Echo battery, stand down; east bridge is revoked.
+Foxtrot patrol, never mind east bridge.
+Golf squad, east bridge isn't an order anymore.
+Hotel drone, abort the east bridge flight.
+India unit, take back my east bridge move instruction.
+Juliet group, disregard the east bridge destination.
+Alpha wing, I cancel your south gate move.
+Bravo wing, don't proceed south gate.
+Charlie team, south gate directive withdrawn.
+Delta scout, ignore my earlier south gate command.
+Echo battery, south gate is scratched from the queue.
+Foxtrot patrol, stop the planned south gate relocation.
+Golf squad, no south gate movement from that order.
+Hotel drone, abort the south gate trip.
+India unit, my south gate instruction no longer stands.
+Juliet group, withdraw from the south gate order.
+Alpha wing, disregard that west tower assignment.
+Bravo wing, the west tower move is off.
+Charlie team, stop before west tower; order cancelled.
+Delta scout, forget the west tower destination.
+Echo battery, delete the west tower move request.
+Foxtrot patrol, west tower no longer applies.
+Golf squad, cancel what I said about west tower.
+Hotel drone, stay put; west tower trip revoked.
+India unit, don't act on the west tower command.
+Juliet group, pull the west tower order.
+Alpha wing, upper deck was withdrawn.
+Bravo wing, scratch that upper deck instruction.
+Charlie team, stand down on upper deck.
+Delta scout, the upper deck task is cancelled.
+Echo battery, do not execute that upper deck move.
+Foxtrot patrol, no upper deck assignment anymore.
+Golf squad, I revoke the upper deck directive.
+Hotel drone, abort flight to upper deck.
+India unit, forget about the upper deck order.
+Juliet group, upper deck movement is off.
+Alpha wing, lower tunnel order is void.
+Bravo wing, stand by, lower tunnel cancelled.
+Charlie team, withdraw the lower tunnel move.
+Delta scout, stop the lower tunnel assignment.
+Echo battery, discard that lower tunnel command.
+Foxtrot patrol, the lower tunnel trip is off.
+Golf squad, no lower tunnel action now.
+Hotel drone, don't enter lower tunnel from that order.
+India unit, cancel the move into lower tunnel.
+Juliet group, lower tunnel no longer requested.
+Alpha wing, cancel river crossing. Stop.
+Bravo wing, revoke that river crossing route.
+Charlie team, withdraw the river crossing command.
+Delta scout, river crossing is off the queue.
+Echo battery, disregard the river crossing assignment.
+Foxtrot patrol, don't take river crossing after all.
+Golf squad, no movement to river crossing.
+Hotel drone, abort the river crossing flight.
+India unit, strike the river crossing order.
+Juliet group, my river crossing direction is withdrawn.
+Alpha wing, the supply depot order is cancelled.
+Bravo wing, stop; supply depot isn't active.
+Charlie team, rescind supply depot.
+Delta scout, delete the supply depot task.
+Echo battery, no go on supply depot.
+Foxtrot patrol, withdraw the supply depot move.
+Golf squad, ignore my supply depot instruction.
+Hotel drone, abort flight to supply depot.
+India unit, scratch the supply depot destination.
+Juliet group, cancel what I said about supply depot.
+Alpha wing, radar mast directive revoked.
+Bravo wing, radar mast no longer stands.
+Charlie team, retract the radar mast command.
+Delta scout, no radar mast move from me.
+Echo battery, stop the radar mast relocation.
+Foxtrot patrol, disregard radar mast entirely.
+Golf squad, the radar mast task is off.
+Hotel drone, abort the radar mast flight.
+India unit, cancel that radar mast assignment.
+Juliet group, hold off on radar mast; withdrawn.
+Alpha wing, forget the landing zone move.
+Bravo wing, landing zone has been cancelled.
+Charlie team, scratch the landing zone directive.
+Delta scout, don't act on landing zone.
+Echo battery, I take back that landing zone order.
+Foxtrot patrol, no go at landing zone.
+Golf squad, withdraw the landing zone instruction.
+Hotel drone, abort flight to landing zone.
+India unit, revoke the landing zone destination.
+Juliet group, the landing zone order is void.

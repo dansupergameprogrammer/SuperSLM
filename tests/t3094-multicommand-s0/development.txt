@@ -1,0 +1,200 @@
+Alpha wing, scan north ridge.
+Bravo wing, give north ridge a sweep.
+Charlie team, inspect north ridge.
+Delta scout, run sensors across north ridge.
+Echo battery, survey north ridge.
+Foxtrot patrol, check north ridge for contacts.
+Golf squad, search the north ridge area.
+Hotel drone, scan over north ridge.
+India unit, look over north ridge.
+Juliet group, scope north ridge.
+East bridge scan for Alpha wing.
+Bravo wing, sweep the east bridge span.
+Charlie team, check east bridge now.
+Delta scout, inspect east bridge approaches.
+Echo battery, run a scan at east bridge.
+Foxtrot patrol, search east bridge for movement.
+Golf squad, survey east bridge.
+Hotel drone, look down at east bridge.
+India unit, sweep east bridge with sensors.
+Juliet group, examine east bridge.
+Alpha wing, check south gate.
+Bravo wing, scan the south gate frontage.
+Charlie team, survey south gate now.
+Delta scout, inspect south gate from there.
+Echo battery, search south gate for heat.
+Foxtrot patrol, run sensors at south gate.
+Golf squad, look over south gate.
+Hotel drone, sweep above south gate.
+India unit, scan south gate thoroughly.
+Juliet group, check the south gate area.
+Alpha wing, survey west tower.
+Bravo wing, scan west tower walls.
+Charlie team, search west tower.
+Delta scout, sweep west tower with sensors.
+Echo battery, inspect west tower.
+Foxtrot patrol, check west tower for signs.
+Golf squad, run a west tower scan.
+Hotel drone, look over west tower from above.
+India unit, examine west tower now.
+Juliet group, scope out west tower.
+Alpha wing, scan upper deck.
+Bravo wing, inspect the upper deck surface.
+Charlie team, check upper deck for movement.
+Delta scout, survey upper deck.
+Echo battery, sweep upper deck with sensors.
+Foxtrot patrol, look around upper deck.
+Golf squad, search upper deck.
+Hotel drone, scan above upper deck.
+India unit, inspect upper deck now.
+Juliet group, check the upper deck perimeter.
+Alpha wing, search lower tunnel.
+Bravo wing, scan lower tunnel walls.
+Charlie team, inspect lower tunnel.
+Delta scout, sweep the lower tunnel route.
+Echo battery, check lower tunnel for heat.
+Foxtrot patrol, survey lower tunnel.
+Golf squad, examine lower tunnel.
+Hotel drone, look down lower tunnel.
+India unit, run sensors in lower tunnel.
+Juliet group, scan the lower tunnel floor.
+Alpha wing, inspect river crossing.
+Bravo wing, check the river crossing bank.
+Charlie team, survey river crossing.
+Delta scout, search river crossing for contacts.
+Echo battery, scan river crossing.
+Foxtrot patrol, sweep the river crossing.
+Golf squad, look over river crossing.
+Hotel drone, examine river crossing from above.
+India unit, scope the river crossing route.
+Juliet group, run sensors at river crossing.
+Alpha wing, search supply depot.
+Bravo wing, check supply depot stores.
+Charlie team, inspect the supply depot.
+Delta scout, scan supply depot entrances.
+Echo battery, survey supply depot.
+Foxtrot patrol, sweep supply depot yard.
+Golf squad, look around supply depot.
+Hotel drone, examine supply depot roof.
+India unit, run sensors across supply depot.
+Juliet group, check supply depot for contacts.
+Alpha wing, scan radar mast.
+Bravo wing, inspect radar mast support.
+Charlie team, search radar mast base.
+Delta scout, survey radar mast.
+Echo battery, check radar mast for signals.
+Foxtrot patrol, sweep the radar mast area.
+Golf squad, look around radar mast.
+Hotel drone, scan above radar mast.
+India unit, examine radar mast.
+Juliet group, run sensors near radar mast.
+Alpha wing, inspect landing zone.
+Bravo wing, check landing zone markers.
+Charlie team, survey landing zone.
+Delta scout, scan landing zone approaches.
+Echo battery, search landing zone.
+Foxtrot patrol, sweep the landing zone.
+Golf squad, examine landing zone.
+Hotel drone, look over landing zone from above.
+India unit, run sensors at landing zone.
+Juliet group, scope landing zone.
+Alpha wing, do a north ridge sensor pass.
+Bravo wing, check what is visible at north ridge.
+Charlie team, one scan of north ridge, please.
+Delta scout, inspect the north ridge line.
+Echo battery, read the north ridge ground with sensors.
+Foxtrot patrol, sweep north ridge for activity.
+Golf squad, can you scan north ridge now.
+Hotel drone, survey north ridge from overhead.
+India unit, search north ridge for movement.
+Juliet group, examine the north ridge position.
+Alpha wing, give east bridge a sensor pass.
+Bravo wing, check what is moving on east bridge.
+Charlie team, one sweep at east bridge.
+Delta scout, inspect the east bridge rails.
+Echo battery, scan east bridge for signatures.
+Foxtrot patrol, read the east bridge area.
+Golf squad, search east bridge from your position.
+Hotel drone, survey east bridge traffic.
+India unit, examine the east bridge landing.
+Juliet group, scope the east bridge crossing.
+Alpha wing, run a south gate sensor pass.
+Bravo wing, check what is near south gate.
+Charlie team, one sweep of south gate.
+Delta scout, inspect the south gate opening.
+Echo battery, scan south gate for heat.
+Foxtrot patrol, read south gate from there.
+Golf squad, search the south gate perimeter.
+Hotel drone, survey south gate overhead.
+India unit, examine south gate traffic.
+Juliet group, scope the south gate access.
+Alpha wing, give west tower a sensor pass.
+Bravo wing, check what's around west tower.
+Charlie team, one scan at west tower.
+Delta scout, inspect the west tower stairs.
+Echo battery, sweep west tower for movement.
+Foxtrot patrol, read the west tower face.
+Golf squad, search the west tower base.
+Hotel drone, survey west tower from above.
+India unit, examine the west tower entrance.
+Juliet group, scope the west tower platform.
+Alpha wing, run an upper deck sensor pass.
+Bravo wing, check the far upper deck edge.
+Charlie team, one scan across upper deck.
+Delta scout, inspect the upper deck rail.
+Echo battery, sweep upper deck for contacts.
+Foxtrot patrol, read the upper deck surface.
+Golf squad, search the upper deck corner.
+Hotel drone, survey upper deck overhead.
+India unit, examine the upper deck access.
+Juliet group, scope upper deck from here.
+Alpha wing, give lower tunnel a sensor pass.
+Bravo wing, check inside lower tunnel.
+Charlie team, one scan down lower tunnel.
+Delta scout, inspect the lower tunnel bend.
+Echo battery, sweep lower tunnel for contacts.
+Foxtrot patrol, read the lower tunnel floor.
+Golf squad, search lower tunnel from here.
+Hotel drone, survey lower tunnel entrance.
+India unit, examine the lower tunnel exit.
+Juliet group, scope lower tunnel now.
+Alpha wing, run a river crossing sensor pass.
+Bravo wing, check the far river crossing bank.
+Charlie team, one sweep of river crossing.
+Delta scout, inspect the river crossing path.
+Echo battery, scan river crossing for heat.
+Foxtrot patrol, read the river crossing terrain.
+Golf squad, search river crossing for tracks.
+Hotel drone, survey river crossing overhead.
+India unit, examine the river crossing landing.
+Juliet group, scope the river crossing.
+Alpha wing, give supply depot a sensor pass.
+Bravo wing, check inside supply depot.
+Charlie team, one sweep of supply depot.
+Delta scout, inspect supply depot access.
+Echo battery, scan supply depot for contacts.
+Foxtrot patrol, read the supply depot yard.
+Golf squad, search supply depot from outside.
+Hotel drone, survey supply depot overhead.
+India unit, examine supply depot loading area.
+Juliet group, scope the supply depot gate.
+Alpha wing, run a radar mast sensor pass.
+Bravo wing, check around radar mast.
+Charlie team, one scan of radar mast.
+Delta scout, inspect radar mast cables.
+Echo battery, sweep radar mast for contacts.
+Foxtrot patrol, read the radar mast base.
+Golf squad, search radar mast from there.
+Hotel drone, survey radar mast overhead.
+India unit, examine the radar mast dish.
+Juliet group, scope the radar mast area.
+Alpha wing, give landing zone a sensor pass.
+Bravo wing, check the far landing zone edge.
+Charlie team, one sweep of landing zone.
+Delta scout, inspect landing zone markers.
+Echo battery, scan landing zone for contacts.
+Foxtrot patrol, read the landing zone ground.
+Golf squad, search landing zone from here.
+Hotel drone, survey landing zone overhead.
+India unit, examine landing zone access.
+Juliet group, scope the landing zone route.

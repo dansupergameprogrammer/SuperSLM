@@ -1,0 +1,15 @@
+{
+ "list": "T-3103 masked-feature probe: masked connectives, negators and comparison words (plan rev 15 s5.2 item 3)",
+ "rule": "Masked from every probe feature; every n-gram containing a masked word is itself masked, including across punctuation. Matching is case-insensitive on whole words, and multi-word entries mask their whole span.",
+ "connectives": ["when", "whenever", "once", "as soon as", "the moment", "if", "after", "afterward", "afterwards",
+                 "after that", "then", "unless", "until", "till", "til", "before", "no sooner than", "only after",
+                 "not before", "while", "whilst", "as long as", "and", "also", "and also", "or", "either", "both",
+                 "upon", "on"],
+ "negators": ["not", "no", "never", "don't", "dont", "do not", "doesn't", "does not", "isn't", "is not",
+              "aren't", "are not", "won't", "will not", "hold fire", "keep fire off", "cease", "none", "nor",
+              "neither", "without"],
+ "comparison": ["below", "under", "beneath", "less", "fewer", "lower", "above", "over", "more", "greater",
+                "higher", "at least", "at most", "or less", "or more", "or fewer", "reaches", "reach", "hits",
+                "hit", "drops", "drop", "falls below", "rises above", "exceeds", "all", "every", "half",
+                "percent", "per cent", "%"]
+}

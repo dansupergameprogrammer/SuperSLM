@@ -1,0 +1,772 @@
+{
+  "all": {
+    "classifier": {
+      "allowed_maximum_accuracy": 0.6,
+      "allowed_mean_accuracy": [
+        0.35,
+        0.65
+      ],
+      "maximum_accuracy": 1.0,
+      "mean_accuracy": 1.0,
+      "minimum_accuracy": 1.0,
+      "seeds": [
+        3094,
+        3095,
+        3096,
+        3097,
+        3098,
+        3099,
+        3100,
+        3101
+      ],
+      "sklearn_version": "1.9.0",
+      "splits": [
+        {
+          "accuracy": 1.0,
+          "correct": 96,
+          "features": 5316,
+          "seed": 3094,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 96,
+          "features": 5305,
+          "seed": 3095,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 96,
+          "features": 5338,
+          "seed": 3096,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 96,
+          "features": 5408,
+          "seed": 3097,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 96,
+          "features": 5293,
+          "seed": 3098,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 96,
+          "features": 5340,
+          "seed": 3099,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 96,
+          "features": 5308,
+          "seed": 3100,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 96,
+          "features": 5314,
+          "seed": 3101,
+          "test_groups": 12,
+          "test_rows": 96,
+          "train_groups": 28,
+          "train_rows": 224
+        }
+      ]
+    },
+    "passed": false,
+    "purity": {
+      "eligible_ngrams": 541,
+      "maximum_allowed_purity": 0.8,
+      "maximum_observed_purity": 1.0,
+      "minimum_support": 8,
+      "offender_count": 128,
+      "top_offenders": [
+        {
+          "action": 160,
+          "condition": 0,
+          "ngram": "fire until separate",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 160,
+          "condition": 0,
+          "ngram": "fire until separate task",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 160,
+          "condition": 0,
+          "ngram": "is no fire",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 160,
+          "condition": 0,
+          "ngram": "is no fire until",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 0,
+          "condition": 160,
+          "ngram": "is no separate",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 0,
+          "condition": 160,
+          "ngram": "is no separate task",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 160,
+          "condition": 0,
+          "ngram": "no fire until separate",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 0,
+          "condition": 160,
+          "ngram": "no separate",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 0,
+          "condition": 160,
+          "ngram": "no separate task",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 0,
+          "condition": 160,
+          "ngram": "no separate task completion",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 160,
+          "condition": 0,
+          "ngram": "there is no fire",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 0,
+          "condition": 160,
+          "ngram": "there is no separate",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 160,
+          "condition": 0,
+          "ngram": "until separate",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 160,
+          "condition": 0,
+          "ngram": "until separate task",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 160,
+          "condition": 0,
+          "ngram": "until separate task completion",
+          "purity": 1.0,
+          "support": 160
+        },
+        {
+          "action": 0,
+          "condition": 108,
+          "ngram": "completion no",
+          "purity": 1.0,
+          "support": 108
+        },
+        {
+          "action": 0,
+          "condition": 108,
+          "ngram": "completion no fire",
+          "purity": 1.0,
+          "support": 108
+        },
+        {
+          "action": 0,
+          "condition": 108,
+          "ngram": "separate task completion no",
+          "purity": 1.0,
+          "support": 108
+        },
+        {
+          "action": 0,
+          "condition": 108,
+          "ngram": "task completion no",
+          "purity": 1.0,
+          "support": 108
+        },
+        {
+          "action": 0,
+          "condition": 108,
+          "ngram": "task completion no fire",
+          "purity": 1.0,
+          "support": 108
+        }
+      ]
+    },
+    "rows": 320
+  },
+  "cap_boundary": {
+    "classifier": {
+      "allowed_maximum_accuracy": 0.6,
+      "allowed_mean_accuracy": [
+        0.35,
+        0.65
+      ],
+      "maximum_accuracy": 1.0,
+      "mean_accuracy": 1.0,
+      "minimum_accuracy": 1.0,
+      "seeds": [
+        3094,
+        3095,
+        3096,
+        3097,
+        3098,
+        3099,
+        3100,
+        3101
+      ],
+      "sklearn_version": "1.9.0",
+      "splits": [
+        {
+          "accuracy": 1.0,
+          "correct": 24,
+          "features": 1843,
+          "seed": 3094,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 24,
+          "features": 1829,
+          "seed": 3095,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 24,
+          "features": 1853,
+          "seed": 3096,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 24,
+          "features": 1863,
+          "seed": 3097,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 24,
+          "features": 1836,
+          "seed": 3098,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 24,
+          "features": 1859,
+          "seed": 3099,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 24,
+          "features": 1825,
+          "seed": 3100,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 24,
+          "features": 1836,
+          "seed": 3101,
+          "test_groups": 12,
+          "test_rows": 24,
+          "train_groups": 28,
+          "train_rows": 56
+        }
+      ]
+    },
+    "passed": false,
+    "purity": {
+      "eligible_ngrams": 354,
+      "maximum_allowed_purity": 0.8,
+      "maximum_observed_purity": 1.0,
+      "minimum_support": 4,
+      "offender_count": 108,
+      "top_offenders": [
+        {
+          "action": 40,
+          "condition": 0,
+          "ngram": "fire until separate",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 40,
+          "condition": 0,
+          "ngram": "fire until separate task",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 40,
+          "condition": 0,
+          "ngram": "is no fire",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 40,
+          "condition": 0,
+          "ngram": "is no fire until",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 0,
+          "condition": 40,
+          "ngram": "is no separate",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 0,
+          "condition": 40,
+          "ngram": "is no separate task",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 40,
+          "condition": 0,
+          "ngram": "no fire until separate",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 0,
+          "condition": 40,
+          "ngram": "no separate",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 0,
+          "condition": 40,
+          "ngram": "no separate task",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 0,
+          "condition": 40,
+          "ngram": "no separate task completion",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 40,
+          "condition": 0,
+          "ngram": "there is no fire",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 0,
+          "condition": 40,
+          "ngram": "there is no separate",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 40,
+          "condition": 0,
+          "ngram": "until separate",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 40,
+          "condition": 0,
+          "ngram": "until separate task",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 40,
+          "condition": 0,
+          "ngram": "until separate task completion",
+          "purity": 1.0,
+          "support": 40
+        },
+        {
+          "action": 0,
+          "condition": 27,
+          "ngram": "completion no",
+          "purity": 1.0,
+          "support": 27
+        },
+        {
+          "action": 0,
+          "condition": 27,
+          "ngram": "completion no fire",
+          "purity": 1.0,
+          "support": 27
+        },
+        {
+          "action": 27,
+          "condition": 0,
+          "ngram": "do not fire",
+          "purity": 1.0,
+          "support": 27
+        },
+        {
+          "action": 0,
+          "condition": 27,
+          "ngram": "no fire until that",
+          "purity": 1.0,
+          "support": 27
+        },
+        {
+          "action": 27,
+          "condition": 0,
+          "ngram": "not fire",
+          "purity": 1.0,
+          "support": 27
+        }
+      ]
+    },
+    "rows": 80
+  },
+  "corpus_sha256": "e15d45b5b56599dc8142f7f97d62001fbcffb1654d29ac3bb28c1f81d12ce2e1",
+  "passed": false,
+  "pc2": {
+    "classifier": {
+      "allowed_maximum_accuracy": 0.6,
+      "allowed_mean_accuracy": [
+        0.35,
+        0.65
+      ],
+      "maximum_accuracy": 1.0,
+      "mean_accuracy": 1.0,
+      "minimum_accuracy": 1.0,
+      "seeds": [
+        3094,
+        3095,
+        3096,
+        3097,
+        3098,
+        3099,
+        3100,
+        3101
+      ],
+      "sklearn_version": "1.9.0",
+      "splits": [
+        {
+          "accuracy": 1.0,
+          "correct": 72,
+          "features": 4234,
+          "seed": 3094,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 72,
+          "features": 4198,
+          "seed": 3095,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 72,
+          "features": 4215,
+          "seed": 3096,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 72,
+          "features": 4264,
+          "seed": 3097,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 72,
+          "features": 4172,
+          "seed": 3098,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 72,
+          "features": 4217,
+          "seed": 3099,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 72,
+          "features": 4177,
+          "seed": 3100,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        },
+        {
+          "accuracy": 1.0,
+          "correct": 72,
+          "features": 4192,
+          "seed": 3101,
+          "test_groups": 12,
+          "test_rows": 72,
+          "train_groups": 28,
+          "train_rows": 168
+        }
+      ]
+    },
+    "passed": false,
+    "purity": {
+      "eligible_ngrams": 367,
+      "maximum_allowed_purity": 0.8,
+      "maximum_observed_purity": 1.0,
+      "minimum_support": 8,
+      "offender_count": 81,
+      "top_offenders": [
+        {
+          "action": 120,
+          "condition": 0,
+          "ngram": "fire until separate",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 120,
+          "condition": 0,
+          "ngram": "fire until separate task",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 120,
+          "condition": 0,
+          "ngram": "is no fire",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 120,
+          "condition": 0,
+          "ngram": "is no fire until",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 0,
+          "condition": 120,
+          "ngram": "is no separate",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 0,
+          "condition": 120,
+          "ngram": "is no separate task",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 120,
+          "condition": 0,
+          "ngram": "no fire until separate",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 0,
+          "condition": 120,
+          "ngram": "no separate",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 0,
+          "condition": 120,
+          "ngram": "no separate task",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 0,
+          "condition": 120,
+          "ngram": "no separate task completion",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 120,
+          "condition": 0,
+          "ngram": "there is no fire",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 0,
+          "condition": 120,
+          "ngram": "there is no separate",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 120,
+          "condition": 0,
+          "ngram": "until separate",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 120,
+          "condition": 0,
+          "ngram": "until separate task",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 120,
+          "condition": 0,
+          "ngram": "until separate task completion",
+          "purity": 1.0,
+          "support": 120
+        },
+        {
+          "action": 0,
+          "condition": 81,
+          "ngram": "completion no",
+          "purity": 1.0,
+          "support": 81
+        },
+        {
+          "action": 0,
+          "condition": 81,
+          "ngram": "completion no fire",
+          "purity": 1.0,
+          "support": 81
+        },
+        {
+          "action": 0,
+          "condition": 81,
+          "ngram": "separate task completion no",
+          "purity": 1.0,
+          "support": 81
+        },
+        {
+          "action": 0,
+          "condition": 81,
+          "ngram": "task completion no",
+          "purity": 1.0,
+          "support": 81
+        },
+        {
+          "action": 0,
+          "condition": 81,
+          "ngram": "task completion no fire",
+          "purity": 1.0,
+          "support": 81
+        }
+      ]
+    },
+    "rows": 240
+  }
+}

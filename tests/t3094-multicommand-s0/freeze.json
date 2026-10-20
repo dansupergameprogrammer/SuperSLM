@@ -1,0 +1,73 @@
+{
+  "version": "T-3094-S0-v5",
+  "date": "2026-10-03",
+  "decisions": ["D-SLM8047", "D-SLM8048", "D-SLM8062"],
+  "schema": "command.schema.json",
+  "segmentation": "one item per independently executable action; a trigger is metadata; wait is an item only when separately scheduled and tracked with its own completion or cancellation",
+  "route": {
+    "input": "raw user utterance",
+    "outcomes": ["Executable(prompt)", "NoAction(reason)", "Cancelled(reason)"],
+    "query_only_on": "Executable",
+    "rejection": "zero exposed items and zero action attempts for every incomplete, invalid, over-cap, no-action or cancelled batch"
+  },
+  "consumer_cap_for_corpus": 4,
+  "corpus_provenance": "1960 complete utterances are literal source lines in tracked general-*, unique-*, dedicated-*, development.txt and pc2-authored.tsv files; all 320 wait-boundary utterances are complete whole-sentence sources rather than v4 text with appended clauses; synthetic transcript sessions are identified as synthetic and partitioned by session and speaker; assemble_corpus.py only packages them",
+  "prior_annotation_round": "T-3096/T-3097 labels for v2 are void; v3 and v4 were held before annotation; none is v5 gold",
+  "model_visible_input": "only the raw utterance string from model-input.jsonl; the JSONL wrapper, source identifiers, condition, pair arm and game_action_trace are evaluator or annotator data and never enter the candidate prompt",
+  "raw_only_identifiability_gate": "Every PC-2 arm and at-cap/cap-plus-one boundary row must state whether a separate wait/watch order is explicitly opened or explicitly refused; a requested wait must have its own completion condition. raw_identifiability.py classifies utterance text before comparing it with private trace-derived expectations.",
+  "shortcut_gates": {
+    "ngram_lengths": [1, 2, 3, 4],
+    "maximum_ngram_label_purity": 0.8,
+    "minimum_ngram_support": {"all": 8, "pc2": 8, "cap_boundary": 4},
+    "classifier_seeds": [3094, 3095, 3096, 3097, 3098, 3099, 3100, 3101],
+    "classifier_train_group_fraction": 0.7,
+    "classifier_grouping": "same authored phrasing index held together across the three PC-2 conditions and the cap boundary",
+    "classifier": "binary word 1-4gram CountVectorizer, L2 logistic regression C=1, liblinear",
+    "classifier_library": "scikit-learn 1.9.0",
+    "maximum_classifier_accuracy_any_split": 0.6,
+    "minimum_mean_classifier_accuracy": 0.35,
+    "maximum_mean_classifier_accuracy": 0.65
+  },
+  "diversity_gates": {
+    "minimum_distinct_shape_fraction_per_stratum": 0.65,
+    "maximum_single_shape_share": 0.075,
+    "maximum_cross_split_4gram_jaccard": 0.12,
+    "minimum_distinct_pc2_pair_shapes_per_condition": 32,
+    "minimum_pc2_pair_token_jaccard": 0.55,
+    "maximum_pc2_lexical_baseline_accuracy": 0.65
+  },
+  "population": {
+    "general_held_out": 1000,
+    "unique_compositional": {"correction": 40, "shared_argument": 40, "pronoun": 40, "nested_condition": 40, "parallel": 40, "at_cap": 40, "cap_plus_one": 40},
+    "pc2_pairs_per_condition": 40,
+    "pc2_conditions": ["simple_trigger", "dependency", "ordering"],
+    "cancellation": 100,
+    "zero_action": 100,
+    "ambiguous_executable": 40
+  },
+  "bars": {
+    "exact_count": 0.95,
+    "exact_ordered_action": 0.95,
+    "each_field": 0.95,
+    "whole_document": 0.85,
+    "each_stratum_whole_document": 0.80,
+    "pc2_whole_pairs_each_condition": "38/40",
+    "pc2_each_arm_each_condition": "38/40",
+    "cancellation_status_and_zero_query_action": "100/100",
+    "zero_action_status_and_zero_query_action": "100/100",
+    "ambiguous_executable_route": "40/40",
+    "structural_invalidity_or_partial_execution": 0,
+    "completed_over_cap_rejected": "all",
+    "budget_or_nonaccepting_executes_zero": "all"
+  },
+  "provisional_limits": {
+    "minItems": 8,
+    "recursion_depth": 8,
+    "nfa_states": 4096,
+    "dfa_states": 4096,
+    "token_transitions": 65536,
+    "serialized_mask_bytes": 1048576,
+    "tracked_temporary_bytes": 16777216
+  },
+  "limit_note": "Provisional admission values for S0. S1 measures and finalizes them before a green claim; each injected lower test limit uses the production guard. RSS is reported separately."
+}
