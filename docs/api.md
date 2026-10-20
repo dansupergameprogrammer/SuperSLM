@@ -1132,8 +1132,12 @@ chain is that token, then the chain of the state it leads to. The table costs
     as they were. Pass the same parameters to the verb and to
     `sslm_decode_step_v2`, and the history is the output stream, as it is
     without jump-forward. A failed create returns `SSLM_ALLOCATION_FAILED`
-    before any token is admitted, with the existing state intact (the same
-    holds for `sslm_decode_step_v2`'s own create).
+    before any token is admitted, with the existing anti-LM state intact
+    (the same holds for `sslm_decode_step_v2`'s own create). Once tokens are
+    admitted, the verb can still return `SSLM_ALLOCATION_FAILED`, with
+    `*out_forced_count` > 0, when the anti-LM history update fails: those
+    tokens stay admitted, the history holds every forced token fed before the
+    failing one, and the state is valid for the next damped decode.
   - **Concurrency.** The verb takes decode's posture on the sequence (it
     consumes the token a concurrent `decode_step` would): a concurrent
     `sslm_seq_release` or `decode_step` of the same sequence waits for it.

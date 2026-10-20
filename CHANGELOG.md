@@ -30,6 +30,12 @@ format changes, and no artifact needs reconversion.
   before the old state is freed; a failed create returns `SSLM_ALLOCATION_FAILED` with the existing
   state intact. The jump-forward verb shares this block, and installs a re-keyed state only after it
   has admitted a forced token, so a failed call leaves the history and its order unchanged.
+- **Fix (damped greedy, anti-LM history):** an allocation failure inside the history update could leave
+  a context entry with no observations, and the next damped finish then divided by zero (SIGFPE). The
+  decode step on 1.13.1 has the same latent crash. The update now allocates everything it needs before it
+  publishes anything, so a failure leaves the state exactly as it was before that token, and the
+  penalty skips any context with no observations. The two internal hash tables' growth is now
+  exception-safe as well (a failed growth no longer empties the table).
 - **Tools:** `sslm_schema_fast_decode_bench` (`tools/schema_fast_decode_bench.cpp`), the box steps'
   bench: extraction off against on, span sizes, the batched pass for M tokens and the finish.
 - **Tests:** the M1/J1 suite (`tests/test_schema_fast_decode.cpp`) runs against the real symbols; the
