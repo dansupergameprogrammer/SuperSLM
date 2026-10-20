@@ -1,0 +1,86 @@
+{
+    "rounds":  15,
+    "reference":  "79e5b92",
+    "orders":  [
+                   "b75b5a6,d7ec81b,79e5b92",
+                   "d7ec81b,79e5b92,b75b5a6",
+                   "79e5b92,b75b5a6,d7ec81b",
+                   "b75b5a6,d7ec81b,79e5b92",
+                   "d7ec81b,79e5b92,b75b5a6",
+                   "79e5b92,b75b5a6,d7ec81b",
+                   "b75b5a6,d7ec81b,79e5b92",
+                   "d7ec81b,79e5b92,b75b5a6",
+                   "79e5b92,b75b5a6,d7ec81b",
+                   "b75b5a6,d7ec81b,79e5b92",
+                   "d7ec81b,79e5b92,b75b5a6",
+                   "79e5b92,b75b5a6,d7ec81b",
+                   "b75b5a6,d7ec81b,79e5b92",
+                   "d7ec81b,79e5b92,b75b5a6",
+                   "79e5b92,b75b5a6,d7ec81b"
+               ],
+    "arms":  [
+                 {
+                     "label":  "79e5b92",
+                     "commit":  "given",
+                     "build":  "existing",
+                     "bench_sha256":  "4fcf3c7671072e12210aef9dd3ce786afdfbc8b18bf862eb28c78b32325ca9a9",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  452.5312,
+                                    "sign_lo":  451.7092,
+                                    "sign_hi":  453.9256
+                                },
+                     "ratio_ref_over_arm":  {
+                                                "n":  15,
+                                                "median":  1,
+                                                "sign_lo":  1,
+                                                "sign_hi":  1
+                                            },
+                     "digests":  [
+                                     "8ad5ea7961656cef"
+                                 ]
+                 },
+                 {
+                     "label":  "b75b5a6",
+                     "commit":  "b75b5a65c241afa138ef2510e67f20328517fe54",
+                     "build":  "fresh",
+                     "bench_sha256":  "b3da4adccb28d696a5433c0a1ae6e2cc20dd97470eb59cdfacd361159d97720b",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  452.5148,
+                                    "sign_lo":  451.7602,
+                                    "sign_hi":  453.9154
+                                },
+                     "ratio_ref_over_arm":  {
+                                                "n":  15,
+                                                "median":  1.0008,
+                                                "sign_lo":  0.9984,
+                                                "sign_hi":  1.0022
+                                            },
+                     "digests":  [
+                                     "8ad5ea7961656cef"
+                                 ]
+                 },
+                 {
+                     "label":  "d7ec81b",
+                     "commit":  "d7ec81b4cdd6f1164cd3fa7bb1c6c4aaaab13845",
+                     "build":  "fresh",
+                     "bench_sha256":  "ce1e3ff6344b494312d1edc91b5fc760a00e5ced4896ca9840984a16631d5b37",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  545.0562,
+                                    "sign_lo":  543.9139,
+                                    "sign_hi":  546.4766
+                                },
+                     "ratio_ref_over_arm":  {
+                                                "n":  15,
+                                                "median":  0.8305,
+                                                "sign_lo":  0.83,
+                                                "sign_hi":  0.8313
+                                            },
+                     "digests":  [
+                                     "8ad5ea7961656cef"
+                                 ]
+                 }
+             ]
+}

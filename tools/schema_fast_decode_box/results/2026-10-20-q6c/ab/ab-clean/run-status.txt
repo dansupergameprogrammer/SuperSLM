@@ -1,0 +1,15 @@
+[2026-10-20T11:51:58.0357554-07:00] start pid 6820 arms '79e5b92=D:\SuperSLM\.worktrees\sfd-ab-79e5b92\build-box\sslm_schema_fast_decode_bench.exe;36fe4b3-clean=36fe4b37d6d6cd715182884d6b22d43a68682cdb'
+[2026-10-20T11:51:59.6178793-07:00] end FAIL You cannot call a method on a null-valued expression.
+[2026-10-20T11:52:37.0195038-07:00] start pid 27536 arms '79e5b92=D:\SuperSLM\.worktrees\sfd-ab-79e5b92\build-box\sslm_schema_fast_decode_bench.exe;36fe4b3-clean=36fe4b37d6d6cd715182884d6b22d43a68682cdb'
+[2026-10-20T11:52:38.6036879-07:00] end FAIL You cannot call a method on a null-valued expression. (line 33: $commit = (git -C $repo rev-parse --verify "$what^{commit}").Trim())
+[2026-10-20T11:53:09.5750351-07:00] start pid 5656 arms '79e5b92=D:\SuperSLM\.worktrees\sfd-ab-79e5b92\build-box\sslm_schema_fast_decode_bench.exe;36fe4b3-clean=36fe4b37d6d6cd715182884d6b22d43a68682cdb'
+[2026-10-20T11:53:11.1572570-07:00] end FAIL You cannot call a method on a null-valued expression. (line 33: $commit = (git -C $SlmRepo rev-parse --verify "$what^{commit}").Trim())
+[2026-10-20T11:53:50.7481190-07:00] start pid 5712 arms '79e5b92=D:\SuperSLM\.worktrees\sfd-ab-79e5b92\build-box\sslm_schema_fast_decode_bench.exe;36fe4b3-clean=36fe4b37d6d6cd715182884d6b22d43a68682cdb'
+[2026-10-20T11:53:52.3287215-07:00] end FAIL You cannot call a method on a null-valued expression. (line 33: $commit = (git -C $SlmRepo rev-parse --verify "$what^{commit}").Trim())
+[2026-10-20T11:54:38.9714738-07:00] start pid 26416 arms '79e5b92=D:\SuperSLM\.worktrees\sfd-ab-79e5b92\build-box\sslm_schema_fast_decode_bench.exe;36fe4b3-clean=36fe4b37d6d6cd715182884d6b22d43a68682cdb'
+[2026-10-20T11:54:47.7850136-07:00] arm 79e5b92: given (existing) bench 4fcf3c7671072e12210aef9dd3ce786afdfbc8b18bf862eb28c78b32325ca9a9
+[2026-10-20T11:54:47.8230141-07:00] arm 36fe4b3-clean: 36fe4b37d6d6cd715182884d6b22d43a68682cdb (fresh) bench 57949688d6fac584006b49c354adceafa8546c7f940dea5c92ad9424873599d9
+[2026-10-20T11:54:48.4005617-07:00] model sha256 9ccf7e378bbe47aa0ffd3810aa82875926cbe51af1bdfa08393c3fae657463da
+[2026-10-20T11:56:24.3488060-07:00] 79e5b92: gen 455.9418 [451.5041, 456.9674] ratio 79e5b92/79e5b92 1 [1, 1] digests 8ad5ea7961656cef
+[2026-10-20T11:56:24.3518067-07:00] 36fe4b3-clean: gen 548.8719 [545.9525, 549.8684] ratio 79e5b92/36fe4b3-clean 0.8308 [0.8237, 0.8356] digests 8ad5ea7961656cef
+[2026-10-20T11:56:24.3753266-07:00] end PASS

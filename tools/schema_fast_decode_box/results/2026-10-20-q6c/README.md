@@ -87,3 +87,28 @@ no hook (`tasks < 2`), so `MatvecThreading` returns no row splitter, `pass_rows`
 yet excluded: the 36fe4b3 bench is an incremental build over the 79e5b92 tree's `build-box`, the 79e5b92 bench a fresh
 build. A clean rebuild of 36fe4b3, measured against the same 79e5b92 bench, would separate a build artefact from a code
 effect.
+
+### Clean rebuild and bisect (`ab/ab-clean/`, `ab/ab-bisect/`)
+
+Same measurement, run by `ab/run-abn.ps1`: each arm a commit with its own worktree and a fresh build folder (an existing
+folder is refused), except the 79e5b92 bench above, which was itself a fresh build. One process per arm per round, the
+arm order rotated per round, 15 rounds after one discarded warm-up. Every process was passed the same model explicitly
+and logged it: `D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-cap4096-aex-pr.sslm`, sha256
+`9ccf7e378bbe47aa0ffd3810aa82875926cbe51af1bdfa08393c3fae657463da`, 24 layers, tasks 0 (32 runs in each two-arm A/B,
+48 in the bisect).
+
+| Arm | Build | Bench sha256 | on, generation ms [interval] | 79e5b92 / arm [interval] | Digest |
+|---|---|---|---|---|---|
+| 79e5b92 | fresh | `4fcf3c76…` | 455.9 [451.5, 457.0] (clean A/B); 452.5 [451.7, 453.9] (bisect) | 1 | `8ad5ea7961656cef` |
+| 36fe4b3 | fresh | `57949688…` | 548.9 [546.0, 549.9] | 0.831 [0.824, 0.836] | `8ad5ea7961656cef` |
+| b75b5a6 (red cells only) | fresh | `b3da4adc…` | 452.5 [451.8, 453.9] | 1.001 [0.998, 1.002] | `8ad5ea7961656cef` |
+| d7ec81b (the split) | fresh | `ce1e3ff6…` | 545.1 [543.9, 546.5] | 0.831 [0.830, 0.831] | `8ad5ea7961656cef` |
+
+The slowdown is not a build artefact (a fresh 36fe4b3 is as slow as the incremental one) and not the model (one file,
+logged by every run). It enters at d7ec81b, the commit that adds the split to `PrefillWholeTokensImpl`; b75b5a6, its
+test-only parent, is as fast as 79e5b92, and 36fe4b3 keeps it. At one thread the bench installs no hook, so by the source
+both d7ec81b's condition (`threading.row != nullptr`) and 36fe4b3's keep `pass_rows = admit_count` and make one batched
+call, as before; the off arm and the prompt prefill, which also run `PrefillWholeTokensImpl`, are unchanged. So on this box
+the jump-forward-on arm costs about 93 ms more from d7ec81b on, with the same tokens, by a cause the source reading does not
+show. Not yet examined: whether a span really takes the one-row passes at one thread (the `SfdLogLayerRows` record would
+show the rows per pass), and the generated code of `PrefillWholeTokensImpl` before and after.
