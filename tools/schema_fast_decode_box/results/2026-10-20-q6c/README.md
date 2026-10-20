@@ -66,3 +66,24 @@ returns no row splitter and the split cannot engage; the code path is the one 79
 sessions, before and after a reboot, not one interleaved comparison, and the box moved between them on code that did
 not change: the prefill path's D at 4 tasks for M = 2..7 was +5.4 to +8.6 ms in `../2026-10-20/B3.json` and is
 +12.8 to +27.5 ms here. A same-session A/B of the two commits' benches would settle it.
+
+## The same-session A/B of the on arm at 1 thread (`ab/`)
+
+The open item above, settled in one session: B2's jump-forward-on extraction at 1 thread, the bench built at 79e5b92
+(fresh build, `sfd-ab-79e5b92/build-box`, sha256 `4fcf3c76…`) against the bench built at 36fe4b3 (sha256 `8c9c69fc…`),
+one process per arm per pair after one discarded warm-up pair, the first arm alternating, 15 measured pairs, pooled by
+the bench's own `pool` mode (`ab/ab-on-t1.json`, `ab/run-ab.ps1`).
+
+| | 79e5b92 | 36fe4b3 |
+|---|---|---|
+| on, generation ms, median [interval] | 453.4 [453.0, 453.9] | 548.1 [547.2, 550.6] |
+| prefill ms, median | 518.2 | 524.8 |
+| digest | `8ad5ea7961656cef` | `8ad5ea7961656cef` (all runs equal) |
+
+Ratio 79e5b92 / 36fe4b3 = 0.827 [0.823, 0.829]: the on arm at 1 thread is about 21 % slower at 36fe4b3, with the same
+tokens. This is a regression, not drift between sessions. The source does not explain it: at 1 thread the bench installs
+no hook (`tasks < 2`), so `MatvecThreading` returns no row splitter, `pass_rows` equals `admit_count`, and
+`PrefillWholeTokensImpl` makes the same single batched call 79e5b92 made. One difference between the two binaries is not
+yet excluded: the 36fe4b3 bench is an incremental build over the 79e5b92 tree's `build-box`, the 79e5b92 bench a fresh
+build. A clean rebuild of 36fe4b3, measured against the same 79e5b92 bench, would separate a build artefact from a code
+effect.
