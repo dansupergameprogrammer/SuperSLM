@@ -86,6 +86,7 @@
 #include <string>
 #include <unordered_set>
 #include "detail/int_hash.h"
+#include "detail/anti_lm_update.h"  // schema fast-decode §4.5 (TF): AntiLmReserveUpdate/AntiLmApplyUpdate
 #include <vector>
 #if (defined(_M_X64) && !defined(_M_ARM64EC)) || defined(__x86_64__)
 #include <emmintrin.h>  // GatherFlatBlock's streaming stores (SSE2, baseline on x64; not ARM64EC)
@@ -495,6 +496,11 @@ int32_t g_choice = -1;
 constexpr size_t kDefaultHiddenBound = 131071;
 size_t g_hidden_bound = kDefaultHiddenBound;
 uint64_t g_walk = 0;
+// S-FINISHEXIT and the TF guard switch (plan rev 1.3.3 §4.5, slice TF; sfd_api.h group 4).
+int32_t g_exit = 0;  // a FinishExit value; 0: disarmed
+int32_t g_exit_skip = 0;
+uint64_t g_exit_fired = 0;
+bool g_guard_off = false;
 }  // namespace sfd_seam
 
 void SfdLogRows(uint64_t rows) noexcept {
@@ -518,13 +524,36 @@ void SfdCaptureRow(const int32_t* row, size_t v) noexcept {
 	sfd_seam::g_row_v = v;
 }
 
-// S-CHOICE: single-shot; true (and *produced replaced) iff armed.
-bool SfdTakeChoice(int32_t* produced) noexcept {
+// S-CHOICE: single-shot. Plan rev 1.3.3 §4.5: the finish reads it while it prepares (true, and
+// *produced replaced, iff armed) and consumes it at its commit, so a finish that fails leaves the pin
+// armed for its retry.
+bool SfdPeekChoice(int32_t* produced) noexcept {
 	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
 	if (!sfd_seam::g_choice_armed) return false;
-	sfd_seam::g_choice_armed = false;
 	*produced = sfd_seam::g_choice;
 	return true;
+}
+void SfdConsumeChoice() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_choice_armed = false;
+}
+
+// S-FINISHEXIT: true iff the finish now at exit `site` (a FinishExit value) must fail there.
+bool SfdFinishExitFails(int32_t site) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	if (sfd_seam::g_exit == 0 || sfd_seam::g_exit != site) return false;
+	if (sfd_seam::g_exit_skip > 0) {
+		--sfd_seam::g_exit_skip;
+		return false;
+	}
+	++sfd_seam::g_exit_fired;
+	return true;
+}
+
+// S-GUARDOFF: while set, a failed finish is not rested at its entry.
+bool SfdFinishGuardDisabled() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	return sfd_seam::g_guard_off;
 }
 
 size_t SfdHiddenBound() noexcept {
@@ -650,6 +679,26 @@ sslm_status CorruptForcedTableEntry(sslm_model model, int32_t schema_index, uint
 	return SSLM_OK;
 }
 
+void ArmFinishExit(FinishExit exit, int32_t skip) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_exit = static_cast<int32_t>(exit);
+	sfd_seam::g_exit_skip = skip > 0 ? skip : 0;
+	sfd_seam::g_exit_fired = 0;
+}
+void DisarmFinishExit() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_exit = 0;
+	sfd_seam::g_exit_skip = 0;
+}
+uint64_t FinishExitFired() noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	return sfd_seam::g_exit_fired;
+}
+void SetFinishGuardDisabled(bool disabled) noexcept {
+	std::lock_guard<std::mutex> lock(sfd_seam::g_mu);
+	sfd_seam::g_guard_off = disabled;
+}
+
 }  // namespace sfd
 }  // namespace test
 }  // namespace superslm
@@ -658,7 +707,10 @@ namespace {
 inline void SfdLogRows(uint64_t) noexcept {}
 inline void SfdLogLayerRows(int32_t, uint64_t) noexcept {}
 inline void SfdCaptureRow(const int32_t*, size_t) noexcept {}
-inline bool SfdTakeChoice(int32_t*) noexcept { return false; }
+inline bool SfdPeekChoice(int32_t*) noexcept { return false; }
+inline void SfdConsumeChoice() noexcept {}
+inline bool SfdFinishExitFails(int32_t) noexcept { return false; }
+inline bool SfdFinishGuardDisabled() noexcept { return false; }
 inline size_t SfdHiddenBound() noexcept { return SIZE_MAX; }
 inline void SfdCountWalk() noexcept {}
 }  // namespace
@@ -2545,8 +2597,9 @@ sslm_status ValidateDecodeParams(const sslm_model_s* model, const sslm_decode_pa
 // - InstallAntiLm destroys the old state and installs the replacement; it cannot fail.
 // Before this split the block destroyed the old state and then called the throwing create, so a
 // bad_alloc left `damped_greedy_antilm` dangling (a later save read freed memory, and a later re-key
-// or release freed it twice). The decode step on main carried that block verbatim; EnsureAntiLm
-// (both halves at once) is what the decode step now calls, so the fix covers it too.
+// or release freed it twice). The decode step on main carried that block verbatim. The decode step
+// now prepares while its finish prepares and installs at its commit (plan rev 1.3.3 §4.5), so a
+// finish that fails after the prepare leaves the old state in place too.
 using AntiLmPtr = std::unique_ptr<superslm::AntiLmState, void (*)(superslm::AntiLmState*)>;
 
 AntiLmPtr NoAntiLm() { return AntiLmPtr(nullptr, &superslm::AntiLmDestroy); }
@@ -2566,14 +2619,6 @@ void InstallAntiLm(sslm_seq_s* seq, AntiLmPtr fresh, int32_t order) noexcept {
 	superslm::AntiLmDestroy(seq->damped_greedy_antilm);
 	seq->damped_greedy_antilm = fresh.release();
 	seq->damped_greedy_antilm_order = order;
-}
-
-sslm_status EnsureAntiLm(sslm_seq_s* seq, int32_t order, bool from_verb) {
-	AntiLmPtr fresh = NoAntiLm();
-	const sslm_status st = PrepareAntiLm(seq, order, from_verb, &fresh);
-	if (st != SSLM_OK) return st;
-	InstallAntiLm(seq, std::move(fresh), order);
-	return SSLM_OK;
 }
 
 // Schema fast-decode plan §5.3/§5.8: called by PrefillWholeTokensImpl once its admission pre-scan has
@@ -3629,20 +3674,49 @@ namespace {
 bool g_cpu_g5_finish_row_fault_armed = false;
 }  // namespace
 
-inline void MaybeInjectCpuFinishDegenerateLogitRow(int32_t* logit_row, int32_t vocab_size) {
-	if (g_cpu_g5_finish_row_fault_armed) {
-		// Single-shot: cleared before presenting the degenerate row, matching every other seam in
-		// this codebase's own idiom -- a re-armed-forever flag would fire on every later, unrelated
-		// call in the same process.
-		g_cpu_g5_finish_row_fault_armed = false;
-		std::fill(logit_row, logit_row + vocab_size, INT32_MIN);
-	}
+// Schema fast-decode plan rev 1.3.3 §4.5 (slice TF): still single-shot, but the shot is spent at the
+// finish's commit (ConsumeCpuFinishDegenerateLogitRow), not when the row is presented, so a finish
+// that fails after presenting it leaves the seam armed for the retry -- the same peek-then-consume
+// shape as S-CHOICE. Returns whether it presented the row.
+inline bool MaybeInjectCpuFinishDegenerateLogitRow(int32_t* logit_row, int32_t vocab_size) {
+	if (!g_cpu_g5_finish_row_fault_armed) return false;
+	std::fill(logit_row, logit_row + vocab_size, INT32_MIN);
+	return true;
 }
+
+inline void ConsumeCpuFinishDegenerateLogitRow() noexcept { g_cpu_g5_finish_row_fault_armed = false; }
 
 extern "C" void ArmCpuFinishDegenerateLogitRowInjection() { g_cpu_g5_finish_row_fault_armed = true; }
 #else
-inline void MaybeInjectCpuFinishDegenerateLogitRow(int32_t*, int32_t) {}
+inline bool MaybeInjectCpuFinishDegenerateLogitRow(int32_t*, int32_t) { return false; }
+inline void ConsumeCpuFinishDegenerateLogitRow() noexcept {}
 #endif  // SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION
+
+// Schema fast-decode plan rev 1.3.3 §4.5 (slice TF, C16): the decode step's finish is a transaction.
+// Its fallible half (final norm, logits, mask, the anti-LM prepare, the scorer, the choice peek, the
+// next walk state, the anti-LM reserve) changes nothing a caller can see; its commit (install the
+// anti-LM state, apply its update, advance the walk, spend the seams, set current_token, emit, rest at
+// layer 0) cannot fail. This guard covers the fallible half: any exit from it -- a status return or a
+// thrown std::bad_alloc -- rests the sequence at {layer_index 0, ready_for_logits 1} with its final
+// hidden state kept, so a retry recomputes the same finish with nothing lost. From the ready branch
+// that is exactly the state the call found; from the layer branch the layer pass is kept. The test
+// seam S-GUARDOFF (SetFinishGuardDisabled) switches the rest off so TF.7 can show what it changes.
+class FinishGuard {
+public:
+	explicit FinishGuard(sslm_seq_s* seq) noexcept : seq_(seq) {}
+	FinishGuard(const FinishGuard&) = delete;
+	FinishGuard& operator=(const FinishGuard&) = delete;
+	~FinishGuard() {
+		if (seq_ && !SfdFinishGuardDisabled()) {
+			seq_->state.layer_index = 0;
+			seq_->ready_for_logits = true;
+		}
+	}
+	void Commit() noexcept { seq_ = nullptr; }
+
+private:
+	sslm_seq_s* seq_;
+};
 
 // P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): renamed
 // to *Impl and wrapped (same rename-and-wrap convention as PrefillWholeTokens/*Impl, above) --
@@ -3940,6 +4014,11 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		// This call's own layer_budget completed the token (or the state was already complete,
 		// ready_for_logits) -- finish it: final_norm, logits,
 		// argmax, exactly RunGreedyDecodeLoop's own generation-loop body (forward_sites.cpp).
+		//
+		// Plan rev 1.3.3 §4.5: from here to `guard.Commit()` is the finish's fallible half (see
+		// FinishGuard). Nothing below writes the sequence until the commit, except the explicit
+		// ParallelForIncomplete rest, which the guard repeats.
+		FinishGuard guard(seq);
 		superslm::CarriedScale final_scale{};
 		// T-2139 closing round: rms_wide (carved from the workspace when supplied, nullptr
 		// otherwise -- see this function's own carving block above) eliminates the ready_for_logits
@@ -3951,6 +4030,9 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		                           model->engine.final_norm_site_constant, final_codes,
 		                           &final_scale, "final_norm", /*token_index=*/0,
 		                           /*trace_hook_state=*/nullptr, rms_wide);
+		if (fst == superslm::SslmForwardStatus::Ok && SfdFinishExitFails(/*kFinalNorm=*/1)) {
+			fst = superslm::SslmForwardStatus::CarriedScaleMantissaOutOfDomain;  // S-FINISHEXIT
+		}
 		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
 
 		// T-2851: the logits rows go through the workspace's parallel-for hook when one is
@@ -3983,6 +4065,9 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			                                    logit_row, ws ? &ws->parallel_for : nullptr);
 		}
 		if (fst == superslm::SslmForwardStatus::Ok) SfdLogRows(finish_rows);
+		if (fst == superslm::SslmForwardStatus::Ok && SfdFinishExitFails(/*kLogitsReject=*/2)) {
+			fst = superslm::SslmForwardStatus::LogitNarrowingOverflow;  // S-FINISHEXIT
+		}
 		if (fst == superslm::SslmForwardStatus::ParallelForIncomplete) {
 			// The host's run omitted, repeated or invented a task index; no token was produced.
 			// Rest the sequence exactly as the dead end does -- final hidden state kept,
@@ -4036,22 +4121,27 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 				}
 			}
 			SfdCaptureRow(logit_row, c.vocab_size);
-			// Schema fast-decode plan §5.8: the create-or-re-key block, shared with the J1 verb.
+			// Schema fast-decode plan §5.8: the create-or-re-key block, shared with the J1 verb. Plan
+			// rev 1.3.3 §4.5: prepared here, installed at the commit, so a finish that fails below
+			// leaves the live state (and its order) as this call found it. The scorer reads the state
+			// the commit will install.
+			AntiLmPtr fresh = NoAntiLm();
 			{
-				const sslm_status ast = EnsureAntiLm(seq, params->anti_lm_max_order, /*from_verb=*/false);
+				const sslm_status ast = PrepareAntiLm(seq, params->anti_lm_max_order, /*from_verb=*/false, &fresh);
 				if (ast != SSLM_OK) return ast;
 			}
+			superslm::AntiLmState* const antilm = fresh ? fresh.get() : seq->damped_greedy_antilm;
 			int32_t produced_dg = -1;
 			bool refused = false;
 			const bool ok = ws_usable
 			                    ? superslm::DampedGreedyScoreAndArgmaxWithScratch(
 			                          logit_row, mask_bits, static_cast<int32_t>(c.vocab_size),
-			                          params->top_k, seq->damped_greedy_antilm, params->alpha_q15,
+			                          params->top_k, antilm, params->alpha_q15,
 			                          params->q_ln2, params->q_b, params->q_c, damped_indices,
 			                          wide_logits, &produced_dg, &refused)
 			                    : superslm::DampedGreedyScoreAndArgmax(
 			                          logit_row, mask_bits, static_cast<int32_t>(c.vocab_size),
-			                          params->top_k, seq->damped_greedy_antilm, params->alpha_q15,
+			                          params->top_k, antilm, params->alpha_q15,
 			                          params->q_ln2, params->q_b, params->q_c, &produced_dg,
 			                          &refused);
 			// T-2199 Phase D review fix M4 (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): this
@@ -4064,43 +4154,57 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			// above) already breaks it identically -- this is that SAME pre-existing pattern, not a
 			// new one Phase D introduced. Named per the review because the surrounding comments
 			// assert the contract more broadly than this function has ever actually delivered it.
-			if (!ok) return SSLM_INVALID_ARGUMENT;  // domain rejection (k/vocab_size), plan Sec8 D1
-			if (refused) {
+			const bool exit_not_ok = SfdFinishExitFails(/*kDampedNotOk=*/3);     // S-FINISHEXIT
+			const bool exit_refused = SfdFinishExitFails(/*kDampedRefused=*/4);  // S-FINISHEXIT
+			if (!ok || exit_not_ok) return SSLM_INVALID_ARGUMENT;  // domain rejection (k/vocab_size), plan Sec8 D1
+			if (refused || exit_refused) {
 				// Plan Sec7.5's own adopted refusal policy: abort this sequence's generation for
 				// this call rather than fall back to plain argmax, matching the shipped attention
 				// call site's SoftmaxKernelRefusedAfterGateAccepted precedent.
 				return MapForwardStatus(superslm::SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted);
 			}
-			if (seq->bound_schema) (void)SfdTakeChoice(&produced_dg);  // S-CHOICE (test seam)
+			// S-CHOICE (test seam): peeked here, spent at the commit, so a failure below keeps it armed.
+			const bool pinned_dg = seq->bound_schema && SfdPeekChoice(&produced_dg);
+			bool dead_end_dg = false;
+			uint32_t next_state_dg = seq->dfa_walk_state;
 			if (seq->bound_schema) {
 				const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
-				uint32_t next_state = seq->dfa_walk_state;
-				const bool has_transition = model->schemas.Transition(
-				    *entry, seq->dfa_walk_state, static_cast<uint32_t>(produced_dg), &next_state);
-				if (!has_transition) {
-					// T-2866/T-2894 (D-SLM3476's CPU retry guarantee, D-SLM7483's own principal
-					// ruling; damped-greedy's own copy of the greedy site's identical fix, below):
-					// re-arm ready_for_logits AND reset layer_index to 0 so a miss reached via this
-					// branch rests identically to the ready-branch miss and to an ordinary
-					// post-prefill sequence -- resettable and adapter-swappable via sslm_seq_reset/
-					// sslm_seq_set_adapter (both refuse outright whenever layer_index != 0), not only
-					// re-decodable. The next sslm_decode_step call takes the ready_for_logits branch
-					// unconditionally (that branch's own dispatch never reads layer_index), so this
-					// reset changes nothing about the retry guarantee itself -- it is a no-op on the
-					// dispatch the retry depends on, and it converges this miss's own resting shape
-					// onto the one an ordinary post-prefill sequence already leaves.
-					out_tokens[i] = -2;
-					seq->state.layer_index = 0;
-					seq->ready_for_logits = true;
-					continue;
-				}
-				seq->dfa_walk_state = next_state;
+				dead_end_dg = !model->schemas.Transition(
+				    *entry, seq->dfa_walk_state, static_cast<uint32_t>(produced_dg), &next_state_dg);
 			}
-			// Sec7.7 Feedback: the anti-LM's update runs once per emitted token, after selection.
-			superslm::AntiLmUpdate(seq->damped_greedy_antilm, produced_dg);
+			// Sec7.7 Feedback: the anti-LM's update runs once per emitted token, after selection --
+			// reserved here (it may throw std::bad_alloc), applied at the commit. A dead end emits
+			// nothing, so it reserves nothing.
+			superslm::AntiLmPendingUpdate update;
+			if (!dead_end_dg) superslm::AntiLmReserveUpdate(antilm, produced_dg, &update);
+
+			// Commit (no-throw). A dead end is a commit too: its re-key is installed, its seams spent.
+			InstallAntiLm(seq, std::move(fresh), params->anti_lm_max_order);
+			if (pinned_dg) SfdConsumeChoice();
+			if (dead_end_dg) {
+				// T-2866/T-2894 (D-SLM3476's CPU retry guarantee, D-SLM7483's own principal
+				// ruling; damped-greedy's own copy of the greedy site's identical fix, below):
+				// re-arm ready_for_logits AND reset layer_index to 0 so a miss reached via this
+				// branch rests identically to the ready-branch miss and to an ordinary
+				// post-prefill sequence -- resettable and adapter-swappable via sslm_seq_reset/
+				// sslm_seq_set_adapter (both refuse outright whenever layer_index != 0), not only
+				// re-decodable. The next sslm_decode_step call takes the ready_for_logits branch
+				// unconditionally (that branch's own dispatch never reads layer_index), so this
+				// reset changes nothing about the retry guarantee itself -- it is a no-op on the
+				// dispatch the retry depends on, and it converges this miss's own resting shape
+				// onto the one an ordinary post-prefill sequence already leaves.
+				out_tokens[i] = -2;
+				seq->state.layer_index = 0;
+				seq->ready_for_logits = true;
+				guard.Commit();
+				continue;
+			}
+			superslm::AntiLmApplyUpdate(antilm, &update);
+			seq->dfa_walk_state = next_state_dg;
 			out_tokens[i] = produced_dg;
 			seq->current_token = produced_dg;
 			seq->state.layer_index = 0;
+			guard.Commit();
 			continue;
 		}
 
@@ -4113,10 +4217,11 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
 			const uint8_t* page = entry->mask_pages +
 			                       static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
-			MaybeInjectCpuFinishDegenerateLogitRow(logit_row, static_cast<int32_t>(c.vocab_size));
+			const bool degenerate =
+			    MaybeInjectCpuFinishDegenerateLogitRow(logit_row, static_cast<int32_t>(c.vocab_size));
 			superslm::ApplyMaskAndArgmax(logit_row, page, static_cast<int32_t>(c.vocab_size), &produced);
 			SfdCaptureRow(logit_row, c.vocab_size);
-			(void)SfdTakeChoice(&produced);  // S-CHOICE (test seam)
+			const bool pinned = SfdPeekChoice(&produced);  // S-CHOICE (test seam), spent at the commit
 			// S2/D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): the walk
 			// advances to whatever state `produced` reaches ONLY when a matching CSR transition
 			// entry actually exists. It is NOT guaranteed to: Sec13.2 permits an accepting state's
@@ -4154,10 +4259,15 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			uint32_t next_state = seq->dfa_walk_state;
 			const bool has_transition = model->schemas.Transition(
 			    *entry, seq->dfa_walk_state, static_cast<uint32_t>(produced), &next_state);
+			// Commit (no-throw), plan rev 1.3.3 §4.5: the seams are spent, then the dead end or the
+			// walk's advance.
+			if (degenerate) ConsumeCpuFinishDegenerateLogitRow();
+			if (pinned) SfdConsumeChoice();
 			if (!has_transition) {
 				out_tokens[i] = -2;
 				seq->state.layer_index = 0;
 				seq->ready_for_logits = true;
+				guard.Commit();
 				continue;
 			}
 			seq->dfa_walk_state = next_state;
@@ -4170,6 +4280,7 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
 		// 0" -- reset to the resting convention now that this token is complete.
 		seq->state.layer_index = 0;
+		guard.Commit();
 	}
 	return SSLM_OK;
 }

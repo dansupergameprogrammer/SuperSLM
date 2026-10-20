@@ -36,6 +36,19 @@ format changes, and no artifact needs reconversion.
   publishes anything, so a failure leaves the state exactly as it was before that token, and the
   penalty skips any context with no observations. The two internal hash tables' growth is now
   exception-safe as well (a failed growth no longer empties the table).
+- **Fix (decode step, a failed finish; plan rev 1.3.3 §4.5):** when the token finish failed after the
+  sequence's layers had run (a final-norm or logits rejection, a damped-greedy domain rejection or
+  refusal, or an allocation failure), the sequence was left half-moved. After a call that ran layers it
+  rested at the last layer without its finish, and every later `sslm_decode_step` on it was refused with
+  `SSLM_ARTIFACT_REJECTED`; after the first token following a prompt or a jump-forward it rested as if
+  awaiting an embed, so the retry embedded the last token a second time; and an anti-LM history
+  allocation failure had already advanced the schema walk, so the retry emitted a different token. The
+  finish is now a transaction: everything that can fail runs before anything is published, and any
+  failure rests the sequence at the finish's entry, with its final hidden state kept and its walk,
+  `current_token` and anti-LM state as they were, the shape a broken parallel-for `run` already left. A
+  retry recomputes the finish only and equals a run that never failed; a deterministic refusal returns
+  the same status on every retry and changes nothing. In a batch, earlier sequences keep their advance,
+  as before. Success paths, tokens and save blobs are unchanged. There is no option to keep the old rest.
 - **Tools:** `sslm_schema_fast_decode_bench` (`tools/schema_fast_decode_bench.cpp`), the box steps'
   bench: extraction arms in interleaved pairs (off, on, the AA/2X/CB1 controls), cross-process pooling for
   `main` against M1, span sizes, the batched pass for M tokens, the finish at chosen legal-row counts, and

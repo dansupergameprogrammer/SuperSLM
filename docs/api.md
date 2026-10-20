@@ -672,6 +672,19 @@ silently accepted.
   defect) returns `SSLM_NUMERIC_STEP_REFUSED` rather than rejecting the
   model — safe to retry once the caller adjusts the parameters that
   triggered it.
+- A decode call that fails while finishing a sequence's token (any non-OK
+  status from the final norm, the logits, or damped greedy's scoring, and
+  `SSLM_ALLOCATION_FAILED`) leaves that sequence at the start of its finish:
+  its final hidden state is kept, its schema walk, `current_token` and
+  anti-LM history are as they were, and the next call runs the finish only.
+  A retry that succeeds produces what a call that never failed would have;
+  a deterministic refusal returns the same status every time and changes
+  nothing. When the call ran no layers for that sequence (the first token
+  after `sslm_prefill` or `sslm_seq_jump_forward`), the sequence is exactly
+  as it was before the call. In a batch, the sequences before the failing
+  one keep their advance and the ones after it are not touched. Before
+  1.15.0 such a failure could leave the sequence refused for good or
+  re-embedding its last token.
 - `sslm_workspace_set_parallel_for` (1.7.0) installs a host parallel-for hook
   on a workspace, or clears it with `NULL`. `sslm_decode_step` and
   `sslm_decode_step_v2` then split the token finish's logits rows across the
