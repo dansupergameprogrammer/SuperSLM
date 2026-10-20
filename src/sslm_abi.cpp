@@ -2528,17 +2528,45 @@ sslm_status ValidateDecodeParams(const sslm_model_s* model, const sslm_decode_pa
 
 // Schema fast-decode plan §5.8: the damped decode step's create-or-re-key block, factored so the
 // decode step and sslm_seq_jump_forward share one implementation. The state is created lazily at
-// `order`, and destroyed and re-created when a call names a different order than the live one (a
-// defined, if unusual, caller behaviour). A failed create returns SSLM_ALLOCATION_FAILED. The verb's
-// call (from_verb) consults the anti-LM create bad-alloc slot first, before anything is destroyed.
+// `order`, and replaced when a call names a different order than the live one (a defined, if
+// unusual, caller behaviour). It runs in two halves so that nothing is destroyed before its
+// replacement exists (code review round 1, finding 2):
+// - PrepareAntiLm creates the replacement into `*fresh` and touches nothing on the sequence. It
+//   returns OK with `*fresh` empty when the live state already has this order. A create that throws
+//   (std::bad_alloc) leaves the sequence exactly as it was; the caller's CatchAllocationFailure maps
+//   it to SSLM_ALLOCATION_FAILED. The verb's call (from_verb) consults the anti-LM create bad-alloc
+//   slot first.
+// - InstallAntiLm destroys the old state and installs the replacement; it cannot fail.
+// Before this split the block destroyed the old state and then called the throwing create, so a
+// bad_alloc left `damped_greedy_antilm` dangling (a later save read freed memory, and a later re-key
+// or release freed it twice). The decode step on main carried that block verbatim; EnsureAntiLm
+// (both halves at once) is what the decode step now calls, so the fix covers it too.
+using AntiLmPtr = std::unique_ptr<superslm::AntiLmState, void (*)(superslm::AntiLmState*)>;
+
+AntiLmPtr NoAntiLm() { return AntiLmPtr(nullptr, &superslm::AntiLmDestroy); }
+
+sslm_status PrepareAntiLm(const sslm_seq_s* seq, int32_t order, bool from_verb, AntiLmPtr* fresh) {
+	fresh->reset();
+	if (seq->damped_greedy_antilm && seq->damped_greedy_antilm_order == order) return SSLM_OK;
+	if (from_verb) superslm::internal::MaybeThrowInjectedAntiLmCreateAllocFault();
+	fresh->reset(superslm::AntiLmCreate(order));
+	// Null only for order < 1, which ValidateDecodeParams already refused; kept as the decode
+	// step's historical status.
+	return *fresh ? SSLM_OK : SSLM_ALLOCATION_FAILED;
+}
+
+void InstallAntiLm(sslm_seq_s* seq, AntiLmPtr fresh, int32_t order) noexcept {
+	if (!fresh) return;
+	superslm::AntiLmDestroy(seq->damped_greedy_antilm);
+	seq->damped_greedy_antilm = fresh.release();
+	seq->damped_greedy_antilm_order = order;
+}
+
 sslm_status EnsureAntiLm(sslm_seq_s* seq, int32_t order, bool from_verb) {
-	if (!seq->damped_greedy_antilm || seq->damped_greedy_antilm_order != order) {
-		if (from_verb) superslm::internal::MaybeThrowInjectedAntiLmCreateAllocFault();
-		if (seq->damped_greedy_antilm) superslm::AntiLmDestroy(seq->damped_greedy_antilm);
-		seq->damped_greedy_antilm = superslm::AntiLmCreate(order);
-		seq->damped_greedy_antilm_order = order;
-		if (!seq->damped_greedy_antilm) return SSLM_ALLOCATION_FAILED;
-	}
+	AntiLmPtr fresh = NoAntiLm();
+	const sslm_status st = PrepareAntiLm(seq, order, from_verb, &fresh);
+	if (st != SSLM_OK) return st;
+	InstallAntiLm(seq, std::move(fresh), order);
 	return SSLM_OK;
 }
 
@@ -4342,23 +4370,34 @@ bool LockLiveSeq(sslm_seq_s* seq, std::unique_lock<std::mutex>* out) {
 }
 
 struct JumpPrePassCtx {
-	sslm_seq_s* seq;
+	const sslm_seq_s* seq;
 	const sslm_decode_params* params;  // null: greedy
 	int32_t prewalked;
+	// The replacement anti-LM state PrepareAntiLm built, not yet installed. Freed on every exit that
+	// does not install it, a thrown std::bad_alloc included.
+	AntiLmPtr fresh = NoAntiLm();
+	bool damped = false;  // §5.8's rule applies: damped params and >= 1 forced token to admit
 };
 
 // Runs inside PrefillWholeTokensImpl after its admission pre-scan (every refusal check passed and
-// admit_count >= 1 tokens will be admitted) and before the batched pass writes any row: the pass's
-// bad-alloc slot (cell 5.2), then §5.8's anti-LM rule -- under damped params and only when at least
-// one forced token will be admitted, the decode step's create-or-re-key block. A pending-only
-// admission, an h = 0 call, a refusal and a no-op therefore never create, re-key or destroy the state.
+// admit_count >= 1 tokens will be admitted) and before the batched pass writes any row. Under damped
+// params, and only when at least one forced token will be admitted, it runs the first half of §5.8's
+// create-or-re-key block: a replacement state is built if the order differs, but the sequence keeps
+// its live state. The verb installs the replacement only after the pass has admitted a forced token,
+// so a call that fails anywhere -- here, in the page map, or in the pass -- leaves the anti-LM
+// history and order exactly as they were (§5.8, cell 5.2; code review round 1, finding 1). A
+// pending-only admission, an h = 0 call, a refusal and a no-op never get here with forced >= 1.
+// The pass's bad-alloc slot (cell 5.2) is consulted last, after the replacement exists, so it
+// stands for a failure that happens after the re-key has been prepared (finding 3).
 sslm_status JumpPrePass(void* ctx, int32_t admit_count) {
-	const JumpPrePassCtx& c = *static_cast<const JumpPrePassCtx*>(ctx);
-	superslm::internal::MaybeThrowInjectedJumpForwardPassAllocFault();
+	JumpPrePassCtx& c = *static_cast<JumpPrePassCtx*>(ctx);
 	const int32_t forced = admit_count - std::min(c.prewalked, admit_count);
 	if (forced >= 1 && c.params && c.params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
-		return EnsureAntiLm(c.seq, c.params->anti_lm_max_order, /*from_verb=*/true);
+		c.damped = true;
+		const sslm_status st = PrepareAntiLm(c.seq, c.params->anti_lm_max_order, /*from_verb=*/true, &c.fresh);
+		if (st != SSLM_OK) return st;
 	}
+	superslm::internal::MaybeThrowInjectedJumpForwardPassAllocFault();
 	return SSLM_OK;
 }
 
@@ -4411,9 +4450,11 @@ sslm_status SeqJumpForwardImpl(sslm_model model, sslm_seq seq, int32_t chunk_bud
 	for (int32_t i = 0; i < forced; ++i) out_forced[i] = tokens[static_cast<size_t>(pending + i)];
 	*out_forced_count = forced;
 	// §5.8: under damped params, every admitted forced token enters the anti-LM history in order (the
-	// pending token entered it when the decode step produced it). JumpPrePass created or re-keyed the
-	// state before the pass.
-	if (forced > 0 && params && params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY && seq->damped_greedy_antilm) {
+	// pending token entered it when the decode step produced it). The replacement JumpPrePass prepared
+	// is installed only now that a forced token was admitted (a limit status with a partial admission
+	// included); when nothing forced was admitted, ctx.fresh is freed unused and the live state stands.
+	if (forced > 0 && ctx.damped) {
+		InstallAntiLm(seq, std::move(ctx.fresh), params->anti_lm_max_order);
 		for (int32_t i = 0; i < forced; ++i) superslm::AntiLmUpdate(seq->damped_greedy_antilm, out_forced[i]);
 	}
 	return st;
