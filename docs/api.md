@@ -1048,6 +1048,100 @@ already has for an unconstrained span. The determinism guarantee is
 unchanged by any of this — a schema-constrained decode is exactly as
 reproducible, on the same certified platform, as an unconstrained one.
 
+#### The masked finish (1.15.0)
+
+When a schema is bound and the model's hidden size is at most 131,071, the
+token finish computes only the head rows of the tokens the schema allows at
+the sequence's current state, not all V rows. At that size no row's int8 dot
+product can leave int32, so no row could have been rejected and no allowed
+logit equals `INT32_MIN`; every other position is masked to `INT32_MIN`
+before argmax or damped-greedy scoring reads it, as before. Tokens, the
+damped-greedy anti-LM state and save blobs are identical to the full finish.
+The flag is computed once at `sslm_model_map`; a model above the bound keeps
+the full finish. Unbound and unconstrained decode are unchanged. With a
+parallel-for hook installed, the finish splits the allowed rows (n of them)
+rather than the vocabulary: `run` is called iff `max_tasks >= 2` and n >= 1,
+with the same alignment-64 rule over n (`parallel_for.h`). A hook that breaks
+exactly-once still fails the call with `SSLM_INVALID_ARGUMENT` and leaves the
+sequence ready to retry.
+
+#### Jump-forward (1.15.0)
+
+A state is *forced* when the schema admits exactly one byte string from it
+before its next real choice: the state is not accepting, every token it allows
+has bytes and none is a special token, they all start with one byte, and that
+byte's single-byte token is allowed. The forced text F of a state is that byte
+followed by the forced text of the state the byte leads to. A state on a cycle
+of forced states is treated as unforced. At `sslm_model_map`, for an artifact
+that carries both a schema section and a tokenizer, the engine builds a table
+holding, per schema and state, the first token of the forced chain: the first
+token of `Encode(F)` when that token is allowed and is a byte prefix of F,
+otherwise the longest allowed token that is a byte prefix of F. The forced
+chain is that token, then the chain of the state it leads to. The table costs
+8 bytes per state; an allocation failure while building it fails the map with
+`SSLM_ALLOCATION_FAILED`. Two verbs read it:
+
+- `sslm_seq_forced_tokens(model, seq, out_ids, cap, &count, &accepting)` is
+  read-only. It writes up to `cap` ids of the chain from the sequence's walk
+  state (`out_ids` may be NULL when `cap` is 0) and sets `count` to the full
+  chain length, which may exceed `cap`; 0 when no schema is bound or the state
+  is unforced. `accepting` is 1 iff the walk state is accepting. It changes
+  nothing, bind eligibility included. A null `out_count` or `out_accepting`, a
+  negative `cap`, or NULL ids with `cap > 0` is `SSLM_INVALID_ARGUMENT`.
+- `sslm_seq_jump_forward(model, seq, chunk_budget, params, ws, out_forced,
+  cap, &forced_count)` admits the *pending* choice token, if there is one,
+  then chain tokens, up to `chunk_budget` tokens in all, in one batched layer
+  pass through the prefill path, and writes the admitted chain ids (never the
+  pending token) to `out_forced`. A token is pending when the last
+  `decode_step` produced it and nothing has embedded it yet (`layer_index`
+  0, not ready for logits, a token on record); after a prompt prefill, a
+  dead end or a hook failure the last token is already embedded and is not
+  pending. The pending token is not walked again (the decode step walked it).
+  `ws` may be NULL and supplies the parallel-for hook as for `sslm_prefill`,
+  so a one-token admission threads under `SSLM_PARALLEL_FOR_MATVEC` exactly as
+  a one-token prefill does. After any admission the sequence is ready for
+  logits, and `forced_token_count` rises by the chain tokens admitted only.
+  - **Refusals** change nothing: `SSLM_INVALID_ARGUMENT` for `chunk_budget <
+    1`, `cap < chunk_budget`, a null `out_forced_count` or `out_forced`, or a
+    sequence mid-token (`layer_index != 0`); `SSLM_ARTIFACT_REJECTED` when the
+    model has no table. A non-NULL `params` is validated exactly as
+    `sslm_decode_step_v2` validates it, returning the status decode returns.
+  - **No-op**: `SSLM_OK` with count 0 when no schema is bound or the state is
+    unforced; a pending token stays pending for `decode_step`. Every call that
+    passes validation, a no-op included, clears bind eligibility.
+  - **Limits** follow `sslm_prefill`. With headroom h left by the context cap
+    or the KV budget and k the tokens the call would admit: at h = 0 nothing
+    is admitted and the call returns the limit status (the next `decode_step`
+    returns the same); at 1 <= h < k the pending token (if any) and the next
+    chain tokens up to h are admitted and the call returns the limit status;
+    at h >= k all k are admitted with `SSLM_OK`. In every partial case the
+    next `decode_step` runs the finish only.
+  - **Decode parameters.** NULL means greedy. Greedy parameters leave the
+    damped-greedy anti-LM state untouched. Damped parameters create or re-key
+    the state exactly as `sslm_decode_step_v2` would with the same parameters,
+    then feed it every chain token admitted, in order; this happens only once
+    every refusal check has passed and at least one chain token will be
+    admitted, so a refused, limit-only, no-op or pending-only call never
+    touches the history. Pass the same parameters to the verb and to
+    `sslm_decode_step_v2`, and the history is the output stream, as it is
+    without jump-forward. A failed create returns `SSLM_ALLOCATION_FAILED`
+    before any token is admitted.
+  - **Concurrency.** The verb takes decode's posture on the sequence (it
+    consumes the token a concurrent `decode_step` would): a concurrent
+    `sslm_seq_release` or `decode_step` of the same sequence waits for it.
+
+**The host loop.** On a sequence that uses jump-forward, call
+`sslm_seq_jump_forward` until `sslm_seq_forced_tokens` reports a count of 0
+(or a call returns a non-OK status), and only then call `decode_step`. Under
+this loop the tokens produced do not depend on `chunk_budget`: the chain is a
+function of the walk state alone, and the batched pass gives the same K/V as
+one token at a time. A `decode_step` at a forced state after a partial span
+lets the model choose among that state's allowed tokens instead: still
+schema-valid and deterministic, but a different stream. The engine states this
+loop and does not enforce it. The jump-forward verbs change no save format:
+the walk state, ready-for-logits and pending token are already in the blob,
+and the table is derived from the model.
+
 ### Status causes
 
 `sslm_status` carries one success value (`SSLM_OK`) plus 29 distinct

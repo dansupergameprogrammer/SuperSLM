@@ -42,6 +42,12 @@
  * integer sum computed on one thread, so the tokens produced are identical with any hook, any
  * `max_tasks`, any `reserved` bits, and no hook.
  *
+ * The finish of a schema-bound sequence (1.15.0, CPU backend): when the model's hidden size is at
+ * most 131,071, the logits step computes only the head rows of the tokens the schema allows at the
+ * sequence's state, and the blocks split that list of rows, not the vocabulary: the same rule at
+ * alignment 64 over its length n. `run` is called iff max_tasks >= 2 and n >= 1, so a state that
+ * allows no token calls no `run`. Unbound and unconstrained decode split the vocabulary as before.
+ *
  * docs/api.md carries a reference `run` over std::thread for hosts with no job system. */
 
 #include <stdint.h>

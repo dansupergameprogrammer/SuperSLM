@@ -4,6 +4,31 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+Version 1.15.0 in progress (schema fast-decode plan rev 1.2.1, slices M1 and J1; CPU backend only). Two C
+verbs are appended (53 C verbs in all); no existing declaration, struct layout, status ordinal or save
+format changes, and no artifact needs reconversion.
+
+- **Masked finish.** Under a bound schema, when the model's hidden size is at most 131,071 (computed once
+  at `sslm_model_map`), the token finish computes only the head rows of the tokens the schema allows at
+  the sequence's state, greedy and damped greedy. At that size no row's dot can leave int32, so tokens,
+  the anti-LM state and save blobs equal the full finish's. Unbound and unconstrained decode are
+  unchanged.
+- **The parallel-for hook under a bound schema** splits that list of allowed rows, not the vocabulary:
+  `run` is called iff `max_tasks >= 2` and the state allows at least one token (`parallel_for.h`). This
+  changes the documented partition, and the task count a host sees, for bound decode only.
+- **Jump-forward.** `sslm_model_map` builds a forced-next table from the schema section and the tokenizer
+  (8 bytes per state; an allocation failure fails the map with `SSLM_ALLOCATION_FAILED`). New verbs:
+  `sslm_seq_forced_tokens` (read-only: the forced chain at the sequence's walk state, and whether that
+  state is accepting) and `sslm_seq_jump_forward` (admits the pending choice token and forced-chain
+  tokens, up to a chunk budget, in one batched pass through the prefill path; partial admission follows
+  `sslm_prefill`; damped-greedy parameters feed the forced tokens to the anti-LM history). Both return
+  `SSLM_ARTIFACT_REJECTED` on an artifact without a table. `docs/api.md` states the host loop under
+  which the output does not depend on the chunk budget.
+- **Tools:** `sslm_schema_fast_decode_bench` (`tools/schema_fast_decode_bench.cpp`), the box steps'
+  bench: extraction off against on, span sizes, the batched pass for M tokens and the finish.
+- **Tests:** the M1/J1 suite (`tests/test_schema_fast_decode.cpp`) runs against the real symbols; the
+  red round's stubs and the `SUPERSLM_SFD_RED_STUBS` option are removed.
+
 ## [1.13.1] - 2026-10-19
 
 A GPU fix release. No token, save format, existing status or existing verb changes; one GPU verb is added.
