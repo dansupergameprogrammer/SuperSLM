@@ -95,7 +95,9 @@ def _with_enum(schema, location, n, width=40):
 
 PINNED_OVER = {
     "serialized_mask_bytes": lambda: _with_enum(F.fresh(), "watch", 33),
-    "tracked_temporary_bytes": lambda: _with_enum(_extra_strings("intent", 10), "watch", 15),
+    # Re-derived after S1 charged the trie (79.4 MB at the pinned vocabulary, in both sides): 12 intent strings
+    # and 28 extra `watch` values give over/under 1.99 with transitions, section and states admitted.
+    "tracked_temporary_bytes": lambda: _with_enum(_extra_strings("intent", 12), "watch", 28),
 }
 _PINNED_COUNTS = {}
 
@@ -105,7 +107,7 @@ def counts_pinned(schema, pieces):
     key = json.dumps(schema)
     if key not in _PINNED_COUNTS:
         c = cm.count(schema, "intents", pieces, F.REAL_VOCAB_SIZE)
-        out = F.model_counts_to_contract(c)
+        out = F.model_counts_to_contract(c, "pinned")
         out["minItems"] = max(c["minItems"].values(), default=0)
         _PINNED_COUNTS[key] = out
     return _PINNED_COUNTS[key]

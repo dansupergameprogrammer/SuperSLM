@@ -8,6 +8,7 @@ Nothing here imports converter code. The product contract the cells assume, stat
   limit's DIAGNOSTICS string (the T-3094 strings, kept so one converter serves both suites).
 - name: `compile_schema_to_mask_pages(..., name=NAME)` gives the section name, which the section-byte count
   includes (S0a fold 4); the cells that reconcile section bytes pass it.
+- release limits bind only a schema that contains an array; `limits=` keys bind every schema (S1 ruling R1).
 - counts: the returned `MaskPages` carries `resource_counts`, a mapping with every LIMIT_KEYS key; its
   `minItems` value maps each array's location to its minimum (§4.1 must-admit: "its actual minItems at
   each array, depth, NFA states, DFA states, transitions, section bytes and tracked bytes are recorded").
@@ -51,7 +52,22 @@ DIAGNOSTICS = {
     "serialized_mask_bytes": "serialized mask byte limit",
     "tracked_temporary_bytes": "tracked temporary memory limit",
 }
-RELEASE = {key: LIMITS_FREEZE["limits"][FREEZE_KEY[key]] for key in LIMIT_KEYS}
+RELEASE_S0 = {key: LIMITS_FREEZE["limits"][FREEZE_KEY[key]] for key in LIMIT_KEYS}
+# S1 finalized the tracked-bytes limit from measured counts by the D-SLM8087 rule (plan §4.1; conductor ruling,
+# brief-s1-fix-round1-rulings.md item 3): the converter now charges the vocabulary trie it builds, IntentDoc v2
+# measures 165,514,483 B at the pinned vocabulary, and the next power of two at or above twice that is
+# 536,870,912. limits-freeze.json stays the frozen S0 record; every other limit is unchanged.
+RELEASE = dict(RELEASE_S0, tracked_temporary_bytes=536_870_912)
+
+# The trie charge the S1 converter adds to tracked bytes, which count model v2 does not model. Measured by the
+# builder (brunel-s1-build.md, fix round 1: 79,396,816 B summed, 79,394,320 B by tracemalloc at the pinned
+# vocabulary) and as the converter's tracked count minus count model v2's for IntentDoc v2 and G1 (79,419,072 and
+# 79,407,744 B pinned; 60,280 and 48,952 B at the byte vocabulary). The tracked pairs keep a margin well above
+# the spread between schemas.
+TRIE_CHARGE = {"byte": 55_000, "pinned": 79_410_000}
+
+# Release limits bind only schemas that contain an array; injected limits bind every schema (conductor ruling,
+# brief-s1-fix-round1-rulings.md item 1).
 PAIR_TARGET = {"R_MIN_ROOT": "minItems", "R_MIN_INNER": "minItems", "R_DEPTH": "recursion_depth",
                "R_NFA": "nfa_states", "R_DFA": "dfa_states", "R_TRANS": "token_transitions",
                "R_SECTION": "serialized_mask_bytes", "R_MEM": "tracked_temporary_bytes"}
@@ -227,9 +243,12 @@ def stored_order_defects():
     return found
 
 
-def model_counts_to_contract(counts):
-    """count_model_v2's keys to the contract's LIMIT_KEYS."""
-    return {key: counts[FREEZE_KEY[key]] for key in LIMIT_KEYS}
+def model_counts_to_contract(counts, vocab="byte"):
+    """count_model_v2's keys to the contract's LIMIT_KEYS, with the trie charge added to tracked bytes for the
+    vocabulary counted ("byte" or "pinned"; see TRIE_CHARGE)."""
+    out = {key: counts[FREEZE_KEY[key]] for key in LIMIT_KEYS}
+    out["tracked_temporary_bytes"] += TRIE_CHARGE[vocab]
+    return out
 
 
 def diagnostic_regex(key):

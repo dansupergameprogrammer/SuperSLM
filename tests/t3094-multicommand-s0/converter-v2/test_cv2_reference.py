@@ -311,7 +311,9 @@ def test_injection_pair_isolates_its_target_at_pinned_vocabulary(name, real_voca
     cu, co = I.counts_pinned(under, pieces), I.counts_pinned(over, pieces)
     assert not I.crossing(cu, lim), I.crossing(cu, lim)
     assert I.crossing(co, lim) == [key], I.crossing(co, lim)
-    assert limit >= 1.5 * cu[key] and co[key] >= 1.5 * limit, (cu[key], limit, co[key])
+    # Tracked bytes carry the 79.4 MB trie charge on both sides, so the widest isolated pair reaches 1.41.
+    factor = 1.4 if key == "tracked_temporary_bytes" else 1.5
+    assert limit >= factor * cu[key] and co[key] >= factor * limit, (cu[key], limit, co[key])
 
 
 def test_spelled_special_pieces_are_valid_string_content(real_vocab):
@@ -323,3 +325,29 @@ def test_spelled_special_pieces_are_valid_string_content(real_vocab):
     for i in vocab.special:
         raw = C.ONE.replace(b'"alpha wing"', b'"' + pieces[i] + b'"')
         assert B.accepts(F.INTENTDOC, raw), pieces[i]
+
+
+@pytest.mark.parametrize("name", ("R_DEPTH", "R_NFA", "R_TRANS", "R_SECTION"))
+def test_array_release_pair_isolates_its_target_at_pinned_vocabulary(name, real_vocab):
+    """The array variants of the four array-free S0 pairs (cv2_array_pairs, S1 ruling R1): each contains an
+    array; under count model v2 at the pinned vocabulary with the S1 release limits and the trie charge, under
+    crosses nothing and over crosses only its target."""
+    import cv2_array_pairs as AP
+    import cv2_injection as I
+
+    def has_array(n):
+        return isinstance(n, dict) and (n.get("type") == "array" or any(has_array(v) for v in n.values())) or \
+            isinstance(n, list) and any(has_array(v) for v in n)
+    make_under, make_over, key = AP.PAIRS[name]
+    under, over = make_under(), make_over()
+    assert has_array(under) and has_array(over)
+    pieces = real_vocab[1]
+    assert I.crossing(AP.counts(under, pieces), dict(F.RELEASE)) == []
+    assert I.crossing(AP.counts(over, pieces), dict(F.RELEASE)) == [key]
+
+
+def test_release_limits_are_the_s1_finalized_values():
+    """F.RELEASE is the frozen S0 table with the tracked-bytes limit finalized at S1 (D-SLM8087 rule: next power
+    of two at or above twice IntentDoc v2's measured 165,514,483 B)."""
+    assert F.RELEASE == dict(F.RELEASE_S0, tracked_temporary_bytes=536_870_912)
+    assert 2 * 165_514_483 <= 536_870_912 < 4 * 165_514_483

@@ -14,6 +14,8 @@ A refusal is credited only when it names its own guard and no other guard's diag
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import signal
 import time
 import tracemalloc
@@ -21,10 +23,12 @@ import tracemalloc
 import pytest
 
 import count_model_v2 as cm
+import cv2_array_pairs as A
 import cv2_fixtures as F
 import cv2_injection as I
 import cv2_oracle as B
 import cv2_product as P
+import resource_pairs_v2 as RP
 
 RED_COUNTS = "red-unimplemented: the compiled artifact reports no resource_counts"
 RED_LIMITS = "red-unimplemented: the converter takes no limits argument"
@@ -58,7 +62,7 @@ def test_must_admit_at_release_limits_on_pinned_vocabulary(name, schema, section
     mp = P.compile_named(schema, vocab.pieces, vocab.special, section)
     counts = _counts(mp)
     model = cm.count(schema, section, pieces, F.REAL_VOCAB_SIZE)
-    expected = F.model_counts_to_contract(model)
+    expected = F.model_counts_to_contract(model, "pinned")
     mins = counts["minItems"]
     assert isinstance(mins, dict) and sorted(mins.values()) == sorted(model["minItems"].values()), mins
     for key in EXACT[1:]:
@@ -81,6 +85,13 @@ def test_must_admit_counts_at_byte_vocabulary():
 RELEASE_PAIRS = ("R_MIN_ROOT", "R_MIN_INNER", "R_DEPTH", "R_NFA", "R_TRANS", "R_SECTION")
 
 
+def _release_pair(name, pieces):
+    """R_MIN_ROOT and R_MIN_INNER are the frozen S0 pairs (they contain an array). The other four are the array
+    variants (cv2_array_pairs): release limits bind only array schemas (S1 ruling R1), so the frozen array-free
+    R_DEPTH, R_NFA, R_TRANS and R_SECTION over schemas are admitted by design."""
+    return F.pair(name) if name.startswith("R_MIN") else A.pair(name, pieces)
+
+
 def _example(schema):
     def ex(node):
         if "enum" in node:
@@ -100,8 +111,8 @@ def _example(schema):
 def test_release_pair_on_pinned_vocabulary(name, real_vocab):
     """Under: compiles at the release limits and accepts its exact required content (for minItems pairs,
     exactly 8 items accepted and 7 refused). Over: that limit's named refusal, with no artifact."""
-    vocab, _ = real_vocab
-    p = F.pair(name)
+    vocab, pieces = real_vocab
+    p = _release_pair(name, pieces)
     key = F.PAIR_TARGET[name]
     mp = P.healthy_real(p["under_schema"], vocab)
     raw = B.serialize(p["under_schema"], _example(p["under_schema"]))
@@ -180,11 +191,11 @@ def test_under_side_table_reconciled_at_byte_vocabulary(label):
 
 @pytest.mark.parametrize("name", RELEASE_PAIRS)
 def test_under_side_table_reconciled_on_pinned_vocabulary(name, real_vocab):
-    """Every release pair's under schema at the release limits on the pinned vocabulary, reconciled with the
-    frozen count model v2 counts (resource-pairs-v2.json, section name `pair`)."""
-    vocab, _ = real_vocab
+    """Every release pair's under schema at the release limits on the pinned vocabulary, reconciled with count
+    model v2's counts (frozen in resource-pairs-v2.json for R_MIN_*, counted for the array pairs; section `pair`)."""
+    vocab, pieces = real_vocab
     P.healthy_bytes(F.INTENTDOC)
-    p = F.pair(name)
+    p = _release_pair(name, pieces)
     mp = P.compile_named(p["under_schema"], vocab.pieces, vocab.special, "pair")
     _reconcile(mp, p["under"], name)
     raw = B.serialize(p["under_schema"], _example(p["under_schema"]))
@@ -254,7 +265,7 @@ def test_refusal_peak_shrinks_with_the_injected_limit(key, real_vocab):
     base, base_peak, _ = _traced(lambda: P.compile_schema_to_mask_pages(TRIVIAL, vocab.pieces,
                                                                        special_ids=vocab.special))
     assert not isinstance(base, Exception), f"trivial control refused: {base}"
-    model = F.model_counts_to_contract(cm.count(F.INTENTDOC, "intents", pieces, F.REAL_VOCAB_SIZE))
+    model = F.model_counts_to_contract(cm.count(F.INTENTDOC, "intents", pieces, F.REAL_VOCAB_SIZE), "pinned")
     limit = model[key] * 2 // 3
     peaks = {}
     for divisor in (1, 100):
@@ -330,3 +341,38 @@ def test_injected_limit_does_not_persist():
     _refused_by("minItems", lambda: P.compile_bytes_limited(schema, {"minItems": 1}))
     mp = P.compile_bytes(schema)
     assert P.accepts_raw_bytes(mp, B.serialize(schema, F.doc(*F.intents(1, 2))))
+
+
+# ------------------------------------------------------------------ R1: release limits bind array schemas only
+
+ENUM_200 = {"type": "object", "properties": {"a": {"enum": ["x" * 20 + f"{i:03d}" for i in range(200)]}},
+            "required": ["a"], "additionalProperties": False}  # the code reviewer's case: 200 values of 23 bytes
+CHAIN_9 = RP.nest(9)  # 8 objects around an enum leaf: depth 9
+# origin/main (2e12a6e9, converter v1.13.1) at the byte vocabulary: (sha256 of [start, accepting, rows], states,
+# transitions), computed 2026-10-20 by importing `git show origin/main:tools/sslm_convert_schema.py`.
+ARRAY_FREE_ABOVE_LIMIT = {
+    "enum_200_values": (ENUM_200, "nfa_states", 4096,
+                        ("aacfa4813ed7b7e7f0512496cf6b8c8e5eeb2893d8065c03618c8959ba5f1f90", 251, 449)),
+    "object_chain_9_deep": (CHAIN_9, "recursion_depth", 8,
+                            ("90c30abd90922c6aaf3f8bf5da6faaeb41281c1ba363e278b15090d6acf10cbf", 52, 51)),
+}
+
+
+def _digest(mp):
+    rows = [[s, sorted(r.items())] for s, r in sorted(mp.transitions.items())]
+    return (hashlib.sha256(json.dumps([mp.start, sorted(mp.accepting), rows]).encode()).hexdigest(),
+            len(mp.transitions), sum(map(len, mp.transitions.values())))
+
+
+@pytest.mark.parametrize("label", tuple(ARRAY_FREE_ABOVE_LIMIT))
+def test_array_free_schema_above_a_release_limit_compiles_unchanged(label):
+    """S1 ruling R1: release limits bind only schemas that contain an array, so an array-free schema above a
+    release limit compiles exactly as on origin/main; the same limit injected through `limits=` still refuses it."""
+    P.healthy_bytes(F.INTENTDOC)
+    schema, key, limit, expected = ARRAY_FREE_ABOVE_LIMIT[label]
+    try:
+        mp = P.compile_bytes(schema)
+    except P.SchemaCompileError as error:
+        raise AssertionError(f"{label}: an array-free schema was refused at the release limits: {error}") from error
+    assert _digest(mp) == expected, f"{label}: table differs from origin/main's: {_digest(mp)[1:]} vs {expected[1:]}"
+    _refused_by(key, lambda: P.compile_bytes_limited(schema, {key: limit}))
