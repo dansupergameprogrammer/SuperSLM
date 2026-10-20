@@ -28,6 +28,7 @@
 // Allocation indices are the global operator new's (throwing and nothrow, scalar and array); the
 // aligned forms are not replaced and not counted. Reads F-SFD from SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR;
 // a missing fixture fails. Exit status 0 iff every trial passed.
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -46,6 +47,11 @@
 
 #include "superslm/sslm_abi.h"
 #include "schema_fast_decode/sfd_api.h"
+
+// The paged-KV test seams (the library this binary links defines SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS).
+extern "C" sslm_status KvPagesTestPinPagePositions(sslm_model model, int64_t page_positions);
+extern "C" sslm_status sslm_pkv_test_only_seq_table_entry(sslm_seq seq, uint32_t i, uint32_t* out_page,
+                                                         uint32_t* out_mapped);
 
 namespace {
 std::atomic<bool> g_armed{false};
@@ -164,7 +170,8 @@ struct Engine {
 	std::vector<int32_t> prompt;
 	bool ok = false;
 
-	Engine() {
+	// `page` > 0 pins the paged-KV page size (KvPagesTestPinPagePositions) before the pool is made.
+	explicit Engine(int64_t page = 0) {
 		const char* dir = std::getenv("SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR");
 		CHECK_MSG(dir != nullptr, "SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR is not set");
 		if (!dir) return;
@@ -177,6 +184,12 @@ struct Engine {
 		const sslm_status ms = sslm_model_map(bytes->p, file.size(), &m);
 		CHECK_MSG(ms == SSLM_OK, "sslm_model_map == %d", static_cast<int>(ms));
 		if (ms != SSLM_OK) return;
+		if (page > 0) {
+			const sslm_status ps = KvPagesTestPinPagePositions(m, page);
+			CHECK_MSG(ps == SSLM_OK, "KvPagesTestPinPagePositions(%lld) == %d", static_cast<long long>(page),
+			          static_cast<int>(ps));
+			if (ps != SSLM_OK) return;
+		}
 		const uint32_t blocks = 8;
 		const size_t size = blocks * sslm_kv_block_size(m) + sslm_kv_pool_overhead_size(m, blocks);
 		pool_buf = new Aligned(size);
@@ -503,6 +516,7 @@ struct TfCtx {
 	int n = -1;
 	int32_t pin = -1;    // legal at the state after t_{N-1}, != t_N
 	int32_t pin_b = -1;  // legal at the start state, != t_0 (-1: none)
+	int32_t pin_c = -1;  // legal at arm (c)'s target state, != the model's token there (-1: none)
 };
 
 sslm_decode_params TfParams(const Engine& e, const TfCfg& c, int32_t order) {
@@ -546,9 +560,9 @@ int32_t TfChainHead(const Engine& e, sslm_seq s, int32_t* count) {
 	return *count > 0 ? id : -1;
 }
 
-sslm_seq TfNewBound(const Engine& e, const TfCfg& c) {
+sslm_seq TfNewBound(const Engine& e, const TfCfg& c, sslm_kv_pool* pool = nullptr) {
 	sslm_seq s = nullptr;
-	if (sslm_seq_create(e.m, const_cast<sslm_kv_pool*>(&e.pool), &s) != SSLM_OK || !s) return nullptr;
+	if (sslm_seq_create(e.m, pool ? pool : const_cast<sslm_kv_pool*>(&e.pool), &s) != SSLM_OK || !s) return nullptr;
 	sslm_schema h = nullptr;
 	int32_t consumed = 0;
 	if (sslm_schema_lookup(e.m, kPotion, &h) != SSLM_OK || sslm_seq_set_schema(s, h) != SSLM_OK ||
@@ -570,8 +584,8 @@ bool TfDrain(const Engine& e, const TfCfg& c, sslm_seq s) {
 	return false;
 }
 // The arm's sequence, resting at the target decode's entry. Null on a setup failure.
-sslm_seq TfBuild(const Engine& e, const TfCtx& x, TfArm arm) {
-	sslm_seq s = TfNewBound(e, x.cfg);
+sslm_seq TfBuild(const Engine& e, const TfCtx& x, TfArm arm, sslm_kv_pool* pool = nullptr) {
+	sslm_seq s = TfNewBound(e, x.cfg, pool);
 	if (!s) return nullptr;
 	bool ok = true;
 	int32_t t = -100, count = -1;
@@ -628,6 +642,31 @@ std::string Str(const TfRun& r) {
 	return s + "}";
 }
 
+// A token S-CHOICE can pin at an arm's target decode other than the model's own: legal at that state, found
+// by the engine itself (the arm's state is saved once; each candidate is pinned on a restored copy and is legal
+// iff the decode emits it rather than a dead end). -1 when the state has one legal token only.
+int32_t TfLegalOther(Engine& e, const TfCtx& x, TfArm arm) {
+	sslm_seq s = TfBuild(e, x, arm);
+	if (!s) return -1;
+	const std::vector<uint8_t> b = e.Save(s);
+	int32_t model = -100;
+	const bool ok = TfDecode(e, x.cfg, s, 2, &model) == SSLM_OK && model >= 0;
+	sslm_seq_release(s);
+	if (!ok) return -1;
+	for (int32_t t = 0; t < 8192; ++t) {
+		if (t == model) continue;
+		sslm_seq q = nullptr;
+		if (sslm_seq_restore(e.m, &e.pool, b.data(), b.size(), &q) != SSLM_OK || !q) return -1;
+		superslm::test::sfd::ArmChoice(t);
+		int32_t out = -100;
+		const sslm_status st = TfDecode(e, x.cfg, q, 2, &out);
+		superslm::test::sfd::DisarmChoice();
+		sslm_seq_release(q);
+		if (st == SSLM_OK && out == t) return t;
+	}
+	return -1;
+}
+
 TfCtx TfMakeCtx(Engine& e, const TfCfg& c) {
 	TfCtx x;
 	x.cfg = c;
@@ -652,14 +691,11 @@ TfCtx TfMakeCtx(Engine& e, const TfCfg& c) {
 		}
 		sslm_seq_release(q);
 	}
-	sslm_seq b = TfNewBound(e, c);
-	if (b) {
-		int32_t count = 0;
-		const int32_t head = TfChainHead(e, b, &count);
-		if (count > 0 && head >= 0 && !x.stream.empty() && head != x.stream[0]) x.pin_b = head;
-		sslm_seq_release(b);
-	}
 	x.ok = x.n >= 3;
+	if (x.ok) {
+		x.pin_b = TfLegalOther(e, x, TfArm::kReady);
+		x.pin_c = TfLegalOther(e, x, TfArm::kCanonSpan);
+	}
 	CHECK_MSG(x.ok, "[TF %s] no target position: off's stream has %zu tokens and no position n >= 3 whose state is "
 	          "forced with a canonical first token other than the model's", TfCfgName(c).c_str(), x.stream.size());
 	return x;
@@ -733,7 +769,9 @@ int TfTrial(Engine& e, const TfCtx& x, TfArm arm, long k, int32_t order, int32_t
 	const bool fired = g_fired.load();
 	const bool pin_left = superslm::test::sfd::ChoiceArmed();
 	const std::vector<uint8_t> rest = e.Save(s);
-	if (rest != before) mask |= kTfRestDiffers;
+	// TF.7 counts a rest that differs only on a trial that fired and failed (an absorbed failure advances the
+	// decode, so its blob differs for a reason that is not the guard's).
+	if (fired && st != SSLM_OK && rest != before) mask |= kTfRestDiffers;
 	const char* an = TfArmName(arm);
 	const std::string cn = TfCfgName(x.cfg);
 	if (!fired || st == SSLM_OK) {
@@ -878,10 +916,37 @@ TfTally TfSweep(Engine& e, const TfCtx& x, TfArm arm, int32_t order, int32_t pin
 	return t;
 }
 
-// TF.6: one trial of the batch.
+// TF.6: where each sequence's allocations sit in the batched call. The batch's sizes are a shared preamble
+// (the solo decodes' common first P allocations) followed by each sequence's own allocations in order, which are
+// its solo decode's allocations after P. `from[i]` is sequence i's first allocation index; `from[3]` is the end.
+// False (and the cell fails) when no P gives that split exactly.
+bool TfBatchSplit(const std::vector<std::size_t>& batch, const std::vector<TfRef>& solo, long (&from)[4]) {
+	size_t lo = SIZE_MAX;
+	for (const TfRef& r : solo) lo = std::min(lo, r.sizes.size());
+	for (size_t pre = 0; pre <= lo; ++pre) {
+		bool common = true;
+		for (size_t q = 0; q < pre && common; ++q)
+			for (const TfRef& r : solo) common = common && r.sizes[q] == solo[0].sizes[q];
+		if (!common) break;
+		std::vector<std::size_t> want(solo[0].sizes.begin(), solo[0].sizes.begin() + long(pre));
+		long at = long(pre);
+		for (int i = 0; i < 3; ++i) {
+			from[i] = at;
+			want.insert(want.end(), solo[size_t(i)].sizes.begin() + long(pre), solo[size_t(i)].sizes.end());
+			at = long(want.size());
+		}
+		from[3] = at;
+		if (want == batch) return true;
+	}
+	return false;
+}
+
+// TF.6: one trial of the batch. Returns kTfFail, plus kTfInFinish when allocation k belonged to sequence 1 (the
+// second sequence, the one the plan names) and the call failed there.
 int TfBatchTrial(Engine& e, const TfCtx& x, const TfArm (&arms)[3], long k, const std::vector<std::vector<uint8_t>>& after,
-                 const std::vector<TfRef>& solo) {
+                 const std::vector<int32_t>& after_tok, const std::vector<TfRef>& solo, const long (&from)[4]) {
 	const int failures_before = g_failures;
+	int mask = 0;
 	sslm_seq seqs[3] = {};
 	std::vector<std::vector<uint8_t>> before;
 	for (int i = 0; i < 3; ++i) {
@@ -906,27 +971,40 @@ int TfBatchTrial(Engine& e, const TfCtx& x, const TfArm (&arms)[3], long k, cons
 		CHECK_MSG(now == after, "[TF.6 %s, k %ld] the failure was absorbed, but the blobs differ from the never-failed "
 		          "batch's", cn.c_str(), k);
 	} else {
-		int i = 0;
-		while (i < 3 && now[size_t(i)] == after[size_t(i)]) ++i;
-		CHECK_MSG(i < 3, "[TF.6 %s, k %ld] status %d, yet every sequence advanced", cn.c_str(), k, static_cast<int>(st));
-		if (i < 3) {
-			CHECK_MSG(now[size_t(i)] == before[size_t(i)], "[TF.6 %s, k %ld] the failing sequence (%d, %s) does not rest at "
-			          "its entry: %s, before %s", cn.c_str(), k, i, TfArmName(arms[i]), TfFields(now[size_t(i)]).c_str(),
-			          TfFields(before[size_t(i)]).c_str());
-			for (int j = i + 1; j < 3; ++j)
-				CHECK_MSG(now[size_t(j)] == before[size_t(j)], "[TF.6 %s, k %ld] sequence %d after the failing one was "
-				          "touched: %s, before %s", cn.c_str(), k, j, TfFields(now[size_t(j)]).c_str(),
-				          TfFields(before[size_t(j)]).c_str());
+		// The owner of allocation k, by index (-1: the shared preamble, before any sequence's own work).
+		int o = -1;
+		for (int i = 0; i < 3; ++i)
+			if (k >= from[i] && k < from[i + 1]) o = i;
+		if (o == 1) mask |= kTfInFinish;
+		CHECK_MSG(st == SSLM_ALLOCATION_FAILED, "[TF.6 %s, k %ld] status %d; want SSLM_ALLOCATION_FAILED", cn.c_str(), k,
+		          static_cast<int>(st));
+		for (int j = 0; j < 3; ++j) {
+			if (j < o) {
+				// §4.5: the sequences before the failing one keep their advance.
+				CHECK_MSG(now[size_t(j)] == after[size_t(j)] && out[j] == after_tok[size_t(j)],
+				          "[TF.6 %s, k %ld] sequence %d, before the failing one (%d), lost its advance: token %d (never-failed "
+				          "%d), %s, never-failed %s", cn.c_str(), k, j, o, out[j], after_tok[size_t(j)],
+				          TfFields(now[size_t(j)]).c_str(), TfFields(after[size_t(j)]).c_str());
+			} else {
+				CHECK_MSG(now[size_t(j)] == before[size_t(j)], "[TF.6 %s, k %ld] sequence %d (%s) %s: %s, before %s",
+				          cn.c_str(), k, j, TfArmName(arms[j]),
+				          j == o ? "is the failing one and does not rest at its entry"
+				                 : "comes after the failing one (or the preamble failed) and was touched",
+				          TfFields(now[size_t(j)]).c_str(), TfFields(before[size_t(j)]).c_str());
+			}
+		}
+		if (o >= 0) {
 			int32_t t = -100;
-			const int rs = static_cast<int>(TfDecode(e, x.cfg, seqs[i], 2, &t));
-			CHECK_MSG(rs == solo[size_t(i)].run.st[0] && t == solo[size_t(i)].run.tok[0] &&
-			              e.Save(seqs[i]) == solo[size_t(i)].run.blob[0],
+			const int rs = static_cast<int>(TfDecode(e, x.cfg, seqs[o], 2, &t));
+			CHECK_MSG(rs == solo[size_t(o)].run.st[0] && t == solo[size_t(o)].run.tok[0] &&
+			              e.Save(seqs[o]) == solo[size_t(o)].run.blob[0],
 			          "[TF.6 %s, k %ld] the failing sequence's retry alone: status %d token %d; never-failed %d:%d", cn.c_str(),
-			          k, rs, t, solo[size_t(i)].run.st[0], solo[size_t(i)].run.tok[0]);
+			          k, rs, t, solo[size_t(o)].run.st[0], solo[size_t(o)].run.tok[0]);
 		}
 	}
 	for (sslm_seq s : seqs) sslm_seq_release(s);
-	return g_failures != failures_before ? kTfFail : 0;
+	if (g_failures != failures_before) mask |= kTfFail;
+	return mask;
 }
 
 struct TfVerdicts {
@@ -937,6 +1015,7 @@ struct TfVerdicts {
 void RunTfCells(Engine& e, TfVerdicts* v, long* trials) {
 	const TfCfg cfgs[] = {{false, false}, {false, true}, {true, false}, {true, true}};
 	bool tf1b_damped_nows_green = false, tf1_any_finish = false;
+	long tf6_second = 0;  // TF.6 trials that failed inside the second sequence's own allocations
 	long tf3_trials = 0;
 	for (const TfCfg& c : cfgs) {
 		const TfCtx x = TfMakeCtx(e, c);
@@ -954,8 +1033,8 @@ void RunTfCells(Engine& e, TfVerdicts* v, long* trials) {
 				sslm_seq_release(s);
 			}
 		}
-		std::printf("[TF %s] off's stream %s; target position N %d, pin %d, start pin %d\n", cn.c_str(),
-		            Str(x.stream).c_str(), x.n, x.pin, x.pin_b);
+		std::printf("[TF %s] off's stream %s; target position N %d, pin %d, start pin %d, (c) pin %d\n", cn.c_str(),
+		            Str(x.stream).c_str(), x.n, x.pin, x.pin_b, x.pin_c);
 		// TF.1, with TF.3 read from its damped trials.
 		for (TfArm arm : kTfArms) {
 			const TfTally t = TfSweep(e, x, arm, 2, -1, twin_before, "TF.1");
@@ -991,9 +1070,16 @@ void RunTfCells(Engine& e, TfVerdicts* v, long* trials) {
 			TfArm arm;
 			int32_t pin;
 		};
-		const PinArm pins[] = {{TfArm::kLayer, x.pin}, {TfArm::kCanonPending, x.pin}, {TfArm::kReady, x.pin_b}};
+		const PinArm pins[] = {{TfArm::kLayer, x.pin},
+		                       {TfArm::kCanonPending, x.pin},
+		                       {TfArm::kReady, x.pin_b},
+		                       {TfArm::kCanonSpan, x.pin_c}};
 		for (const PinArm& pa : pins) {
-			if (pa.pin < 0) continue;
+			if (pa.pin < 0) {  // a missing pin is a failure, not a skip
+				v->Red("TF.5", std::string(TfArmName(pa.arm)) + ", " + cn + ": no legal token other than the model's at "
+				                   "the target decode to pin");
+				continue;
+			}
 			const TfTally t = TfSweep(e, x, pa.arm, 2, pa.pin, twin_before, "TF.5");
 			*trials += t.trials;
 			std::printf("[TF.5 %s, %s, pin %d] %ld trials, %ld in the finish, %ld failed\n", TfArmName(pa.arm), cn.c_str(),
@@ -1007,6 +1093,8 @@ void RunTfCells(Engine& e, TfVerdicts* v, long* trials) {
 			std::vector<TfRef> solo;
 			for (TfArm a : arms) solo.push_back(TfReference(e, x, a, 2, -1));
 			std::vector<std::vector<uint8_t>> after;
+			std::vector<int32_t> after_tok;
+			std::vector<std::size_t> batch_sizes;
 			long allocs = 0;
 			sslm_seq seqs[3] = {};
 			bool built = true;
@@ -1018,7 +1106,9 @@ void RunTfCells(Engine& e, TfVerdicts* v, long* trials) {
 				const sslm_status st = sslm_decode_step_v2(e.m, seqs, 3, &p, c.ws ? e.ws : nullptr, out);
 				g_armed = false;
 				allocs = g_index.load();
+				batch_sizes.assign(g_sizes, g_sizes + std::min(allocs, kSizeCap));
 				for (sslm_seq s : seqs) after.push_back(e.Save(s));
+				after_tok.assign(out, out + 3);
 				CHECK_MSG(st == SSLM_OK, "[TF.6 %s] the never-failed batch: status %d", cn.c_str(), static_cast<int>(st));
 				for (int i = 0; i < 3; ++i)
 					CHECK_MSG(after[size_t(i)] == solo[size_t(i)].run.blob[0], "[TF.6 %s] sequence %d's batched decode "
@@ -1026,17 +1116,55 @@ void RunTfCells(Engine& e, TfVerdicts* v, long* trials) {
 			}
 			for (sslm_seq s : seqs)
 				if (s) sslm_seq_release(s);
-			long failed = 0;
-			for (long k = 0; built && k < allocs; ++k) {
+			long from[4] = {0, 0, 0, 0};
+			const bool placed = built && TfBatchSplit(batch_sizes, solo, from);
+			CHECK_MSG(!built || placed, "[TF.6 %s] cannot place each sequence's allocations in the batched call (%ld): "
+			          "they are not a common preamble plus each solo decode's own allocations in order", cn.c_str(), allocs);
+			long failed = 0, in_second = 0;
+			for (long k = 0; placed && k < allocs; ++k) {
 				++*trials;
-				if (TfFork("TF.6", k, [&] { return TfBatchTrial(e, x, arms, k, after, solo); }) & kTfFail) ++failed;
+				const int m = TfFork("TF.6", k, [&] { return TfBatchTrial(e, x, arms, k, after, after_tok, solo, from); });
+				if (m & kTfFail) ++failed;
+				if (m & kTfInFinish) ++in_second;
 			}
-			std::printf("[TF.6 %s] %ld trials, %ld failed\n", cn.c_str(), allocs, failed);
-			if (!built || failed) v->Red("TF.6", cn + ": " + (built ? std::to_string(failed) + " of " + std::to_string(allocs) +
-			                                                               " trials" : std::string("setup failed")));
+			std::printf("[TF.6 %s] %ld trials (sequences from %ld, %ld, %ld), %ld failed in sequence 1, %ld failed\n",
+			            cn.c_str(), allocs, from[0], from[1], from[2], in_second, failed);
+			if (!built || !placed || failed)
+				v->Red("TF.6", cn + ": " + (!built    ? std::string("setup failed")
+				                            : !placed ? std::string("the batch's allocations could not be placed")
+				                                      : std::to_string(failed) + " of " + std::to_string(allocs) + " trials"));
+			if (placed && allocs > 0) tf6_second += in_second;
 		}
-		// TF.7: TF.1 (b) with the guard stubbed.
+		// TF.7: TF.1 (b) with the guard stubbed, and TF.2 (b)'s status exits (final norm, damped refused) with the
+		// guard stubbed: S-FINISHEXIT must sit behind the guard, so each exit then rests away from its entry.
 		if (c.damped && !c.ws) {
+			namespace sfd = superslm::test::sfd;
+			for (const sfd::FinishExit ex : {sfd::FinishExit::kFinalNorm, sfd::FinishExit::kDampedRefused}) {
+				const char* en = ex == sfd::FinishExit::kFinalNorm ? "final norm" : "damped refused";
+				sslm_seq s = TfBuild(e, x, TfArm::kReady);
+				if (!s) {
+					v->Red("TF.7", std::string("status exit ") + en + ": arm (b) did not build");
+					continue;
+				}
+				const std::vector<uint8_t> before = e.Save(s);
+				sfd::SetFinishGuardDisabled(true);
+				sfd::ArmFinishExit(ex, 0);
+				int32_t t = -100;
+				const sslm_status st = TfDecode(e, c, s, 2, &t);
+				const uint64_t fired = sfd::FinishExitFired();
+				sfd::DisarmFinishExit();
+				sfd::SetFinishGuardDisabled(false);
+				const bool differs = e.Save(s) != before;
+				sslm_seq_release(s);
+				std::printf("[TF.7 %s] guard off, status exit %s: status %d, fired %llu, rest %s the entry\n", cn.c_str(), en,
+				            static_cast<int>(st), static_cast<unsigned long long>(fired), differs ? "differs from" : "equals");
+				if (fired == 0 || st == SSLM_OK)
+					v->Red("TF.7", std::string("status exit ") + en + ": the exit was not taken with the guard off (status " +
+					                   std::to_string(static_cast<int>(st)) + ", fired " + std::to_string(fired) + ")");
+				else if (!differs)
+					v->Red("TF.7", std::string("status exit ") + en + ": with the guard off the rest still equals the entry, "
+					                   "so the guard is not what restores it (S-FINISHEXIT is not behind the guard)");
+			}
 			superslm::test::sfd::SetFinishGuardDisabled(true);
 			const TfTally t = TfSweep(e, x, TfArm::kReady, 2, -1, twin_before, "TF.7 (guard off)");
 			superslm::test::sfd::SetFinishGuardDisabled(false);
@@ -1051,6 +1179,8 @@ void RunTfCells(Engine& e, TfVerdicts* v, long* trials) {
 	CHECK_MSG(tf3_trials > 0, "[TF.3] no damped trial failed in the finish");
 	if (!tf1_any_finish) v->Red("TF.1", "no allocation in any finish");
 	if (tf3_trials == 0) v->Red("TF.3", "no damped finish trial");
+	// TF.6 is red-if-zero: some trial must fail in the second sequence, the one the plan names.
+	if (tf6_second == 0) v->Red("TF.6", "no trial failed inside the second sequence's own allocations");
 }
 
 // ===================================================================================================
@@ -1082,77 +1212,211 @@ bool XExactLive(Engine& e, const TfCtx& x) {
 	return st != SSLM_STATUS_NEXT_FREE;
 }
 
-// 5.X3 (ii): one trial. The sequence at N (t_{N-1} pending), allocation k of the exact call failing.
-// `off_blobs[i]` / `off_tok[i]` are off's (i + 1)-th decode from N; `ref_count` the never-failed call's j.
-int XCallTrial(Engine& e, const TfCtx& x, long k, const std::vector<int32_t>& d, int32_t ref_count,
-               const std::vector<std::vector<uint8_t>>& off_blobs, const std::vector<int32_t>& off_tok) {
-	enum : int { kFail = 1, kCommittedShort = 2 };
+// A fresh pool of its own, so two runs built the same way draw the same physical pages (the table entries are
+// then comparable across them).
+struct XPool {
+	Aligned* buf = nullptr;
+	sslm_kv_pool pool = nullptr;
+	explicit XPool(const Engine& e, uint32_t blocks = 2) {
+		const size_t size = blocks * sslm_kv_block_size(e.m) + sslm_kv_pool_overhead_size(e.m, blocks);
+		buf = new Aligned(size);
+		if (sslm_kv_pool_create(e.m, buf->p, size, blocks, &pool) != SSLM_OK) pool = nullptr;
+	}
+	~XPool() {
+		if (pool) sslm_kv_pool_destroy(pool);
+		delete buf;
+	}
+	XPool(const XPool&) = delete;
+	XPool& operator=(const XPool&) = delete;
+};
+
+// One observation: the decode's status and token, the blob, sslm_seq_kv_stats and the table entries.
+struct XObsA {
+	int st = 0;
+	int32_t tok = -100;
+	std::vector<uint8_t> blob;
+	sslm_seq_kv_stats_out kv{};
+	std::vector<uint32_t> table;
+};
+XObsA XObserveA(const Engine& e, sslm_seq s, int st, int32_t tok) {
+	XObsA o;
+	o.st = st;
+	o.tok = tok;
+	o.blob = e.Save(s);
+	o.kv.struct_size = sizeof(o.kv);
+	sslm_seq_kv_stats(s, &o.kv);
+	uint32_t mapped = 0;
+	for (uint32_t i = 0;; ++i) {
+		uint32_t page = 0;
+		if (sslm_pkv_test_only_seq_table_entry(s, i, &page, &mapped) != SSLM_OK || i >= mapped) break;
+		o.table.push_back(page);
+	}
+	return o;
+}
+std::string XDiffA(const XObsA& a, const XObsA& b) {
+	char buf[300];
+	if (a.st != b.st || a.tok != b.tok) {
+		std::snprintf(buf, sizeof buf, "status/token %d:%d, want %d:%d", a.st, a.tok, b.st, b.tok);
+		return buf;
+	}
+	if (a.blob != b.blob) return "blob differs: " + TfFields(a.blob) + "; want " + TfFields(b.blob);
+	const sslm_seq_kv_stats_out& p = a.kv;
+	const sslm_seq_kv_stats_out& q = b.kv;
+	if (p.context_length != q.context_length || p.mapped_private_pages != q.mapped_private_pages ||
+	    p.shared_pages != q.shared_pages || p.reserve_pages != q.reserve_pages ||
+	    p.materialized_pages != q.materialized_pages) {
+		std::snprintf(buf, sizeof buf, "kv stats: ctx %lld/%lld mapped %u/%u reserve %u/%u materialized %u/%u",
+		              static_cast<long long>(p.context_length), static_cast<long long>(q.context_length),
+		              p.mapped_private_pages, q.mapped_private_pages, p.reserve_pages, q.reserve_pages,
+		              p.materialized_pages, q.materialized_pages);
+		return buf;
+	}
+	if (a.table != b.table) return "table entries differ (" + std::to_string(a.table.size()) + " / " +
+	                               std::to_string(b.table.size()) + " mapped)";
+	return "";
+}
+
+// 5.X3 (ii): one trial, at page size 2 with S-SATROW armed on the last drafted row. Every run here is built in a
+// fresh pool of its own, so the table entries compare:
+//   off  -- N decodes, then d.size() + 4 more, observed after each;
+//   ref  -- the never-failed exact call (S-SATROW armed), then 3 decodes;
+//   the trial -- the exact call with allocation k failing.
+// Returns 1 on a failed check, 2 when the call returned OK with j below the never-failed j.
+int XCallTrial(Engine& e, const TfCtx& x, long k, const std::vector<int32_t>& d) {
 	const int failures_before = g_failures;
 	int mask = 0;
 	const std::string cn = TfCfgName(x.cfg);
-	sslm_seq s = TfBuild(e, x, TfArm::kLayer);
+	const int32_t sat_row = int32_t(d.size());  // rows 0 (p) .. k: the last drafted row
+	std::vector<XObsA> off;
+	{
+		XPool pa(e);
+		sslm_seq o = pa.pool ? TfBuild(e, x, TfArm::kLayer, &pa.pool) : nullptr;
+		for (size_t i = 0; o && i < d.size() + 4; ++i) {
+			int32_t t = -100;
+			const sslm_status st = TfDecode(e, x.cfg, o, 2, &t);
+			off.push_back(XObserveA(e, o, static_cast<int>(st), t));
+			if (st != SSLM_OK || t < 0) break;
+		}
+		if (o) sslm_seq_release(o);
+	}
+	int32_t ref_count = -1;
+	std::vector<XObsA> ref;
+	{
+		XPool pc(e);
+		sslm_seq r = pc.pool ? TfBuild(e, x, TfArm::kLayer, &pc.pool) : nullptr;
+		if (r) {
+			superslm::test::sfd::ArmSatRow(sat_row);
+			TfExact(e, x.cfg, r, int32_t(d.size()) + 1, d, 2, &ref_count);
+			superslm::test::sfd::DisarmSatRow();
+			for (int i = 0; i < 3; ++i) {
+				int32_t t = -100;
+				const sslm_status st = TfDecode(e, x.cfg, r, 2, &t);
+				ref.push_back(XObserveA(e, r, static_cast<int>(st), t));
+			}
+			sslm_seq_release(r);
+		}
+	}
+	if (off.size() < d.size() + 1 || ref.size() != 3 || ref_count < 0) {
+		CHECK_MSG(false, "[5.X3 (ii) %s, k %ld] setup: off %zu observations, never-failed count %d", cn.c_str(), k,
+		          off.size(), ref_count);
+		return 1;
+	}
+	XPool pb(e);
+	sslm_seq s = pb.pool ? TfBuild(e, x, TfArm::kLayer, &pb.pool) : nullptr;
 	if (!s) {
 		CHECK_MSG(false, "[5.X3 (ii) %s, k %ld] setup failed", cn.c_str(), k);
-		return kFail;
+		return 1;
 	}
-	const std::vector<uint8_t> before = e.Save(s);
+	const XObsA before = XObserveA(e, s, 0, 0);
 	int32_t count = -1;
+	superslm::test::sfd::ArmSatRow(sat_row);
 	Arm(k);
 	const sslm_status st = TfExact(e, x.cfg, s, int32_t(d.size()) + 1, d, 2, &count);
 	g_armed = false;
-	int32_t j = 0;
+	superslm::test::sfd::DisarmSatRow();
+	int32_t j = count;
 	if (st != SSLM_OK) {
-		CHECK_MSG(st == SSLM_ALLOCATION_FAILED && e.Save(s) == before,
-		          "[5.X3 (ii) %s, k %ld] status %d: a failed call must return SSLM_ALLOCATION_FAILED with nothing "
-		          "changed (blob %s)", cn.c_str(), k, static_cast<int>(st), e.Save(s) == before ? "unchanged" : "changed");
-		// the retry, with the failure gone, is the never-failed call
+		// A pass or prepare failure before any row is kept: nothing changed, pages and stats included.
+		const XObsA now = XObserveA(e, s, 0, 0);
+		CHECK_MSG(st == SSLM_ALLOCATION_FAILED && XDiffA(now, before).empty(),
+		          "[5.X3 (ii) %s, k %ld] status %d: a failed call must return SSLM_ALLOCATION_FAILED with nothing changed "
+		          "(%s)", cn.c_str(), k, static_cast<int>(st), XDiffA(now, before).c_str());
+		superslm::test::sfd::ArmSatRow(sat_row);
 		const sslm_status rs = TfExact(e, x.cfg, s, int32_t(d.size()) + 1, d, 2, &count);
+		superslm::test::sfd::DisarmSatRow();
 		CHECK_MSG(rs == SSLM_OK && count == ref_count, "[5.X3 (ii) %s, k %ld] the retry: status %d count %d; never-failed %d",
 		          cn.c_str(), k, static_cast<int>(rs), count, ref_count);
 		j = count;
 	} else {
 		CHECK_MSG(count >= 0 && count <= ref_count, "[5.X3 (ii) %s, k %ld] OK with count %d; the never-failed call "
 		          "confirmed %d, and a failure can only stop the check earlier", cn.c_str(), k, count, ref_count);
-		if (count >= 0 && count < ref_count) mask |= kCommittedShort;
-		j = count;
+		if (count >= 0 && count < ref_count) mask |= 2;
 	}
-	// The next three decodes equal off's at the same output positions: off's (j + 1)-th decode from N on.
+	// The next three decodes: against the never-failed exact run when the whole draft was kept (its last row's
+	// injected count is then committed), else against off at the same output positions (the injected row was
+	// rejected, so its count must not survive, and its pages went back).
 	for (int i = 0; i < 3 && j >= 0; ++i) {
-		const size_t at = size_t(j) + size_t(i);
-		if (at >= off_blobs.size()) break;
 		int32_t t = -100;
 		const sslm_status ds = TfDecode(e, x.cfg, s, 2, &t);
-		const std::vector<uint8_t> b = e.Save(s);
-		CHECK_MSG(ds == SSLM_OK && t == off_tok[at] && b == off_blobs[at],
-		          "[5.X3 (ii) %s, k %ld] decode %d after the call (j %d): status %d token %d, off %d; blob %s %s", cn.c_str(),
-		          k, i, j, static_cast<int>(ds), t, off_tok[at], b == off_blobs[at] ? "equals" : "differs from",
-		          TfFields(off_blobs[at]).c_str());
+		const XObsA now = XObserveA(e, s, static_cast<int>(ds), t);
+		const size_t at = size_t(j) + size_t(i);
+		const XObsA* want = j == ref_count ? &ref[size_t(i)] : at < off.size() ? &off[at] : nullptr;
+		if (!want) break;
+		const std::string diff = XDiffA(now, *want);
+		CHECK_MSG(diff.empty(), "[5.X3 (ii) %s, k %ld] decode %d after the call (j %d, status %d): %s", cn.c_str(), k, i, j,
+		          static_cast<int>(st), diff.c_str());
 		if (ds != SSLM_OK) break;
 	}
 	sslm_seq_release(s);
-	if (g_failures != failures_before) mask |= kFail;
+	if (g_failures != failures_before) mask |= 1;
 	return mask;
 }
 
 void RunXAllocCells(Engine& e, TfVerdicts* v, long* trials) {
 	const TfCfg cfgs[] = {{false, false}, {false, true}, {true, false}, {true, true}};
 	bool live_checked = false;
-	long short_commits = 0;
 	for (const TfCfg& c : cfgs) {
 		const TfCtx x = TfMakeCtx(e, c);
 		const std::string cn = TfCfgName(c);
 		if (!x.ok) {
-			v->Red("TF.1d", "no target position at " + cn);
-			v->Red("5.X3 (ii)", "no target position at " + cn);
+			for (const char* cell : {"TF.1d", "TF.4 (a) (d)", "TF.5 (d)"}) v->Red(cell, "no target position at " + cn);
 			continue;
 		}
 		if (!live_checked) {
 			live_checked = true;
 			if (!XExactLive(e, x)) {
-				v->Red("TF.1d", "exact mode is unimplemented (the J1-X verb returned SSLM_STATUS_NEXT_FREE, the red stub)");
-				v->Red("5.X3 (ii)", "exact mode is unimplemented (the J1-X verb returned SSLM_STATUS_NEXT_FREE, the red stub)");
+				for (const char* cell : {"TF.1d", "TF.4 (a) (d)", "TF.5 (d)"})
+					v->Red(cell, "exact mode is unimplemented (the J1-X verb returned SSLM_STATUS_NEXT_FREE, the red stub)");
 				return;
 			}
+		}
+		// TF.1d, first: exact mode's resting blob before the target decode equals canonical mode's pending-only
+		// commit at the same output position ((c'), §11.5 "(d)'s blob equals (a)'s"). (d0) at N; (d2) at N + j.
+		std::vector<int32_t> d2;
+		for (size_t q = size_t(x.n); q < x.stream.size() && d2.size() < 7; ++q) d2.push_back(x.stream[q]);
+		int32_t j2 = -1;
+		if (sslm_seq s = TfBuild(e, x, TfArm::kLayer)) {
+			TfExact(e, c, s, int32_t(d2.size()) + 1, d2, 2, &j2);
+			sslm_seq_release(s);
+		}
+		for (TfArm arm : {TfArm::kExact0, TfArm::kExact2}) {
+			TfCtx at = x;
+			if (arm == TfArm::kExact2) at.n = x.n + std::max(j2, 0);
+			std::vector<uint8_t> exact_blob, twin_blob;
+			if (sslm_seq s = TfBuild(e, x, arm)) {
+				exact_blob = e.Save(s);
+				sslm_seq_release(s);
+			}
+			if (sslm_seq s = TfBuild(e, at, TfArm::kCanonPending)) {
+				twin_blob = e.Save(s);
+				sslm_seq_release(s);
+			}
+			if (exact_blob.empty() || twin_blob.empty() || exact_blob != twin_blob)
+				v->Red("TF.1d", std::string(TfArmName(arm)) + ", " + cn + ": the exact commit's resting blob " +
+				                    (exact_blob.empty() || twin_blob.empty() ? std::string("did not build")
+				                                                             : TfFields(exact_blob) + " is not canonical "
+				                                                               "(c')'s at the same position " +
+				                                                               TfFields(twin_blob)));
 		}
 		// TF.1d: the ready branch after an exact commit; TfTrial's (b)/(c) rule applies (rest == before).
 		for (TfArm arm : {TfArm::kExact0, TfArm::kExact2}) {
@@ -1164,45 +1428,89 @@ void RunXAllocCells(Engine& e, TfVerdicts* v, long* trials) {
 				                    (t.trials ? std::to_string(t.failed) + " of " + std::to_string(t.trials) + " trials"
 				                              : std::string("no allocation to fail, or the arm did not build")));
 		}
-		// 5.X3 (ii): damped only (the check's damped finish), with and without a workspace.
-		if (!c.damped) continue;
+		// TF.4 (a) in the (d) arms: the target decode at order 3, a re-key of the order-2 state.
+		if (c.damped)
+			for (TfArm arm : {TfArm::kExact0, TfArm::kExact2}) {
+				const TfTally t = TfSweep(e, x, arm, 3, -1, {}, "TF.4");
+				*trials += t.trials;
+				std::printf("[TF.4 (a) %s, %s] %ld trials, %ld failed\n", TfArmName(arm), cn.c_str(), t.trials, t.failed);
+				if (t.failed || t.trials == 0)
+					v->Red("TF.4 (a) (d)", std::string(TfArmName(arm)) + ", " + cn + ": " +
+					                           (t.trials ? std::to_string(t.failed) + " of " + std::to_string(t.trials) +
+					                                           " trials"
+					                                     : std::string("no allocation to fail, or the arm did not build")));
+			}
+		// TF.5 in the (d) arms: S-CHOICE armed with a legal token other than the model's.
+		for (TfArm arm : {TfArm::kExact0, TfArm::kExact2}) {
+			const int32_t pin = TfLegalOther(e, x, arm);
+			if (pin < 0) {
+				v->Red("TF.5 (d)", std::string(TfArmName(arm)) + ", " + cn + ": no legal token other than the model's to pin");
+				continue;
+			}
+			const TfTally t = TfSweep(e, x, arm, 2, pin, {}, "TF.5");
+			*trials += t.trials;
+			std::printf("[TF.5 %s, %s, pin %d] %ld trials, %ld failed\n", TfArmName(arm), cn.c_str(), pin, t.trials, t.failed);
+			if (t.failed || t.trials == 0)
+				v->Red("TF.5 (d)", std::string(TfArmName(arm)) + ", " + cn + ": " +
+				                       (t.trials ? std::to_string(t.failed) + " of " + std::to_string(t.trials) + " trials"
+				                                 : std::string("no allocation to fail, or the arm did not build")));
+		}
+	}
+}
+
+// 5.X3 (ii) runs on its own engine, the page size pinned to 2.
+void RunX53ii(TfVerdicts* v, long* trials) {
+	Engine e(2);
+	if (!e.ok) {
+		v->Red("5.X3 (ii)", "the page-size-2 engine did not load");
+		return;
+	}
+	long short_commits = 0;
+	bool any = false;
+	for (const TfCfg& c : {TfCfg{true, false}, TfCfg{true, true}}) {
+		const TfCtx x = TfMakeCtx(e, c);
+		const std::string cn = TfCfgName(c);
+		if (!x.ok) {
+			v->Red("5.X3 (ii)", "no target position at " + cn);
+			continue;
+		}
+		if (!XExactLive(e, x)) {
+			v->Red("5.X3 (ii)", "exact mode is unimplemented (the J1-X verb returned SSLM_STATUS_NEXT_FREE, the red stub)");
+			return;
+		}
+		any = true;
 		std::vector<int32_t> d;
 		for (size_t q = size_t(x.n); q < x.stream.size() && d.size() < 7; ++q) d.push_back(x.stream[q]);
-		std::vector<std::vector<uint8_t>> off_blobs;
-		std::vector<int32_t> off_tok;
-		if (sslm_seq o = TfBuild(e, x, TfArm::kLayer)) {
-			for (size_t i = 0; i < d.size() + 4; ++i) {
-				int32_t t = -100;
-				if (TfDecode(e, c, o, 2, &t) != SSLM_OK || t < 0) break;
-				off_tok.push_back(t);
-				off_blobs.push_back(e.Save(o));
-			}
-			sslm_seq_release(o);
-		}
-		int32_t ref_count = -1;
 		long allocs = 0;
-		if (sslm_seq s = TfBuild(e, x, TfArm::kLayer)) {
-			Arm(-1);
-			const sslm_status st = TfExact(e, c, s, int32_t(d.size()) + 1, d, 2, &ref_count);
-			g_armed = false;
-			allocs = g_index.load();
-			CHECK_MSG(st == SSLM_OK && ref_count >= 2, "[5.X3 (ii) %s] the never-failed call: status %d count %d", cn.c_str(),
-			          static_cast<int>(st), ref_count);
-			sslm_seq_release(s);
+		{
+			XPool pc(e);
+			sslm_seq s = pc.pool ? TfBuild(e, x, TfArm::kLayer, &pc.pool) : nullptr;
+			if (s) {
+				int32_t ref_count = -1;
+				superslm::test::sfd::ArmSatRow(int32_t(d.size()));
+				Arm(-1);
+				const sslm_status st = TfExact(e, c, s, int32_t(d.size()) + 1, d, 2, &ref_count);
+				g_armed = false;
+				superslm::test::sfd::DisarmSatRow();
+				allocs = g_index.load();
+				CHECK_MSG(st == SSLM_OK && ref_count >= 2, "[5.X3 (ii) %s] the never-failed call: status %d count %d",
+				          cn.c_str(), static_cast<int>(st), ref_count);
+				sslm_seq_release(s);
+			}
 		}
 		long failed = 0;
 		for (long k = 0; k < allocs; ++k) {
 			++*trials;
-			const int m = TfFork("5.X3 (ii)", k, [&] { return XCallTrial(e, x, k, d, ref_count, off_blobs, off_tok); });
+			const int m = TfFork("5.X3 (ii)", k, [&] { return XCallTrial(e, x, k, d); });
 			if (m & 1) ++failed;
 			if (m & 2) ++short_commits;
 		}
-		std::printf("[5.X3 (ii) %s] %ld trials, %ld failed\n", cn.c_str(), allocs, failed);
+		std::printf("[5.X3 (ii) %s, page 2] %ld trials, %ld failed\n", cn.c_str(), allocs, failed);
 		if (failed || allocs == 0)
 			v->Red("5.X3 (ii)", cn + ": " + (allocs ? std::to_string(failed) + " of " + std::to_string(allocs) + " trials"
 			                                         : std::string("the call made no allocation to fail")));
 	}
-	if (live_checked && short_commits == 0)
+	if (any && short_commits == 0)
 		v->Red("5.X3 (ii)", "no trial failed inside a check row's finish (OK with j below the never-failed j): the sweep "
 		                    "never reached FinishRow");
 }
@@ -1308,14 +1616,15 @@ int main() {
 		if (e.ok) RunXAllocCells(e, &xv, &x_trials);
 		else ++g_failures;
 	}
-	static const char* const kXCells[] = {"TF.1d", "5.X3 (ii)"};
+	RunX53ii(&xv, &x_trials);
+	static const char* const kXCells[] = {"TF.1d", "TF.4 (a) (d)", "TF.5 (d)", "5.X3 (ii)"};
 	if (g_failures != failures_before_x)
 		for (const char* cell : kXCells) xv.Red(cell, "setup failed");
 	for (const char* cell : kXCells) {
 		std::string why;
 		for (const std::string& r : xv.red)
 			if (r.rfind(std::string(cell) + ":", 0) == 0) why += (why.empty() ? "" : "; ") + r.substr(std::strlen(cell) + 2);
-		std::printf("[schema fast-decode alloc] cell %-9s %s%s%s\n", cell, why.empty() ? "green" : "RED", why.empty() ? "" : " -- ",
+		std::printf("[schema fast-decode alloc] cell %-12s %s%s%s\n", cell, why.empty() ? "green" : "RED", why.empty() ? "" : " -- ",
 		            why.c_str());
 	}
 	std::printf("schema fast-decode J1-X sweep: %ld trials; %d setup checks, %d setup failures\n", x_trials,
