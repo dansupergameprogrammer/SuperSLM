@@ -124,6 +124,17 @@ constexpr GoldenStream kGoldenStreams[] = {
     {"prompt_result", 42, "16072100850158b6b6314415875d694601b47c80de8335be6d276230c65b08fb"},
 };
 
+// Cell 9.1 (fix round 1, audit F-9): the SSB blob `main` saves after the POTION prompt, the start chain by
+// explicit SCHEMA_CONTENT prefill, and one greedy decode (a pending choice), on F-SFD. Computed on main
+// (SUPERSLM_SFD_PRINT_GOLDENS=1); the J1 build's blob for the same calls must equal it byte for byte, which
+// is constraint C8 (the save format does not change) with a cell that can fail inside one binary.
+// Cell 6.5 (rev 1.2.2, X14's kill): the contract-breaking POTION stream (one start-chain token, then a
+// decode at the forced state it leaves, then the §5.6 loop), from main's reference replay with that head.
+constexpr size_t kBrokenStreamLength = 23;
+constexpr const char* kBrokenStreamDigest = "ad0a0c70c0e1d0ffd8e8093a7855b9c81e859185a98839278f8ceb852e7e97d3";
+constexpr size_t kMainBlobSize = 32992;
+constexpr const char* kMainBlobDigest = "e03fa1092d1f5d99b63535ac96022071828b2a446672f66c83169573242c10d8";
+
 // ---- small utilities ------------------------------------------------------------------------------
 
 std::string Str(const std::vector<int32_t>& v, size_t limit = 40) {
@@ -144,6 +155,14 @@ std::string HexDigest(const std::vector<int32_t>& ids) {
 		b[3] = static_cast<uint8_t>(u >> 24);
 		h.Update(b, 4);
 	}
+	uint8_t out[32];
+	h.Final(out);
+	return superslm::ToHex(out);
+}
+
+std::string BytesDigest(const std::vector<uint8_t>& b) {
+	superslm::Sha256 h;
+	if (!b.empty()) h.Update(b.data(), b.size());
 	uint8_t out[32];
 	h.Final(out);
 	return superslm::ToHex(out);
@@ -620,14 +639,16 @@ struct Rig {
 	std::vector<sslm_seq> seqs;
 	bool ok = false;
 
-	explicit Rig(sslm_model model, int workspaces = 1, uint32_t blocks = 8, int32_t max_batch = 3) : m(model) {
+	explicit Rig(sslm_model model, int workspaces = 1, uint32_t blocks = 8, int32_t max_batch = 3,
+	             int32_t max_chunk = 64)
+	    : m(model) {
 		if (!m) return;
 		const size_t size = blocks * sslm_kv_block_size(m) + sslm_kv_pool_overhead_size(m, blocks);
 		pool_buf = std::make_unique<Aligned>(size);
 		const sslm_status ps = sslm_kv_pool_create(m, pool_buf->p, size, blocks, &pool);
 		CHECK_MSG(ps == SSLM_OK, "sslm_kv_pool_create == %d", static_cast<int>(ps));
 		ok = ps == SSLM_OK;
-		const sslm_config cfg{max_batch, 64, kLayers, 0u};
+		const sslm_config cfg{max_batch, max_chunk, kLayers, 0u};
 		for (int i = 0; i < workspaces && ok; ++i) {
 			const size_t wsz = sslm_workspace_size(m, &cfg);
 			ws_bufs.push_back(std::make_unique<Aligned>(wsz));
@@ -801,6 +822,7 @@ struct JfStep {
 	sslm_status st = SSLM_OK;
 	std::vector<int32_t> toks;  // verb: the forced ids it admitted; decode: {out}
 	bool pending_before = false;
+	bool embedded_pending = false;  // verb: this call embedded the pending token (read from the blob)
 };
 
 struct JfRun {
@@ -825,25 +847,50 @@ struct JfOpts {
 	std::function<void(sslm_seq&, const JfStep&)> after;
 };
 
+// The sequence's resting shape, read from its SSB blob: a pending token (decoded, not yet embedded) is
+// layer 0, not ready for logits, current_token >= 0 (§5.4). Fix round 1 (audit F-1, F-2): the loop reads
+// this from the engine instead of tracking it, because a no-op verb call at an unforced state leaves the
+// pending token pending (§5.2, §5.3; cell 8.7), and a budget-1 call may admit the pending token alone.
+struct Shape {
+	bool ok = false;
+	bool pending = false;
+	int64_t ctx = 0;
+};
+Shape ReadShape(sslm_model m, sslm_seq s) {
+	std::vector<uint8_t> blob(sslm_seq_state_size(m) + 4096);
+	size_t n = blob.size();
+	Shape sh;
+	if (sslm_seq_save(s, blob.data(), &n) != SSLM_OK) return sh;
+	blob.resize(n);
+	const Blob b = ParseBlob(blob);
+	sh.ok = b.ok;
+	sh.pending = b.ok && b.layer == 0 && b.ready == 0 && b.current >= 0;
+	sh.ctx = b.ctx;
+	return sh;
+}
+
 // The §5.6 loop: call the verb until the query reports no chain, then decode; repeat until decode's -2
-// or a non-OK status. The prompt has already been prefilled.
+// or a non-OK status. The prompt has already been prefilled. A verb call made progress when it admitted
+// a forced token or embedded the pending token (the blob's pending flag cleared, context_length rose);
+// a call that made none while the query still reports a chain is "stuck". A decode is choice -> choice
+// when the pending token was still pending when it ran (it embedded that token itself).
 JfRun RunJf(sslm_model m, sslm_seq& s, const JfOpts& o) {
 	JfRun r;
-	bool pending = false;  // a decode produced a token not yet admitted
 	for (int d = 0; d < o.max_decodes; ++d) {
-		bool admitted_forced = false;
 		for (int guard = 0; guard < 1000; ++guard) {
+			const Shape before = ReadShape(m, s);
 			JfStep step;
 			step.kind = 0;
-			step.pending_before = pending;
+			step.pending_before = before.pending;
 			const Jump j = JumpForward(m, s, o.budget, o.vparams, o.w);
 			step.st = j.st;
 			step.toks = j.forced;
+			const Shape after = ReadShape(m, s);
+			const bool embedded_pending = before.pending && !after.pending && after.ctx > before.ctx;
+			step.embedded_pending = embedded_pending;
 			r.steps.push_back(step);
 			++r.verb_calls;
 			r.stream.insert(r.stream.end(), j.forced.begin(), j.forced.end());
-			if (!j.forced.empty()) admitted_forced = true;
-			if (j.st == SSLM_OK && (pending || !j.forced.empty())) pending = false;
 			if (o.after) o.after(s, step);
 			if (j.st != SSLM_OK) {
 				r.end_status = j.st;
@@ -855,7 +902,7 @@ JfRun RunJf(sslm_model m, sslm_seq& s, const JfOpts& o) {
 				return r;
 			}
 			if (q.count == 0) break;
-			if (j.forced.empty()) {
+			if (j.forced.empty() && !embedded_pending) {
 				r.stuck = true;
 				r.end_status = SSLM_INVALID_ARGUMENT;
 				return r;
@@ -863,13 +910,13 @@ JfRun RunJf(sslm_model m, sslm_seq& s, const JfOpts& o) {
 		}
 		JfStep step;
 		step.kind = 1;
-		step.pending_before = pending;
+		step.pending_before = ReadShape(m, s).pending;
 		int32_t out = -100;
 		step.st = sslm_decode_step_v2(m, &s, 1, &o.dparams, o.w, &out);
 		step.toks = {out};
 		r.steps.push_back(step);
 		++r.decodes;
-		if (pending && !admitted_forced) ++r.choice_choice;
+		if (step.pending_before) ++r.choice_choice;
 		if (o.after) o.after(s, step);
 		if (step.st != SSLM_OK) {
 			r.end_status = step.st;
@@ -885,7 +932,6 @@ JfRun RunJf(sslm_model m, sslm_seq& s, const JfOpts& o) {
 		}
 		r.stream.push_back(out);
 		r.choices.push_back(out);
-		pending = true;
 	}
 	return r;
 }
@@ -929,7 +975,10 @@ struct Replay {
 };
 
 Replay ReferenceReplay(sslm_model m, const Sfd& f, const char* schema, const std::vector<int32_t>& prompt,
-                       sslm_adapter adapter = nullptr, int max_choices = 400) {
+                       sslm_adapter adapter = nullptr, int max_choices = 400,
+                       const std::vector<int32_t>& head = {}) {
+	// `head` (cell 6.5): tokens admitted as content before the first decode, in place of the start chain;
+	// the first decode then runs wherever they leave the walk (a forced state, for the contract violation).
 	Replay rp;
 	const RefSchema& r = f.R(schema);
 	if (r.st.empty()) return rp;
@@ -944,7 +993,14 @@ Replay ReferenceReplay(sslm_model m, const Sfd& f, const char* schema, const std
 		}
 		return true;
 	};
-	if (!add_chain()) return rp;
+	if (head.empty()) {
+		if (!add_chain()) return rp;
+	} else {
+		for (int32_t t : head) {
+			rp.stream.push_back(t);
+			if (!f.Step(schema, s, t, &s)) return rp;
+		}
+	}
 	for (int i = 0; i < max_choices; ++i) {
 		if (prompt.size() + rp.stream.size() >= size_t(kCap)) {
 			rp.capped = true;
@@ -1544,22 +1600,45 @@ void Cell_6_3() {
 		if (!a || !b || !full.PromptOk(a, f.prompt_potion) || !m1.PromptOk(b, f.prompt_potion)) continue;
 		const sslm_decode_params pa = full.Damped(2, 32);
 		const sslm_decode_params pb = m1.Damped(2, 32);
-		int bad = 0, bad_rows = 0, legal_ok = 0;
+		// Fix round 1 (audit F-4, reading 4 rejected for damped greedy): the full-finish arm is the same build,
+		// so a defect in the shared damped masker moves both arms together. Two anchors outside the build:
+		// (1) at every step whose reference state is not accepting, the produced token is legal there by the
+		// reference table (an unmasked or poisoned row picks an illegal candidate, and the walk misses: -2);
+		// (2) the post-mask rows (S-ROW) of the poisoned legal-row arm and the full arm are byte-equal, so a
+		// masked position left holding workspace poison, rather than INT32_MIN, differs from the full row.
+		int bad = 0, bad_rows = 0, legal_ok = 0, bad_srow = 0, bad_legal = 0, informative = 0;
 		for (int step = 0; step < 64; ++step) {
 			const uint32_t walk = m1.State(b).walk;
 			const size_t n = f.Row(schema, walk).size();
+			const bool accepting = walk < f.R(schema).st.size() && f.R(schema).st[walk].accepting;
 			if (n < 32) ++legal_ok;
 			int32_t ta = -100, tb = -100;
+			sfd::LastFinishRowReset();
 			const sslm_status sa = full.Decode1(a, pa, full.W(), &ta);
+			const std::vector<int32_t> row_a = SRow();
 			m1.Poison(0, 0x63u + uint32_t(step));
 			sfd::RowsLogReset();
+			sfd::LastFinishRowReset();
 			const sslm_status sb = m1.Decode1(b, pb, m1.W(), &tb);
+			const std::vector<int32_t> row_b = SRow();
 			if (!(sfd::RowsLogCount() == 1 && LastRows() == n)) ++bad_rows;
+			if (row_a.empty() || row_a != row_b) ++bad_srow;
+			if (!accepting) {
+				++informative;
+				uint32_t nx = 0;
+				if (sa != SSLM_OK || ta < 0 || !f.Step(schema, walk, ta, &nx)) ++bad_legal;
+				if (sb != SSLM_OK || tb < 0 || !f.Step(schema, walk, tb, &nx)) ++bad_legal;
+			}
 			if (sa != sb || ta != tb || full.Save(a) != m1.Save(b)) ++bad;
 			if (sa != SSLM_OK) break;
 		}
 		CHECK_MSG(legal_ok > 0, "[6.3] %s: no step had fewer legal tokens than top_k 32", schema);
+		CHECK_MSG(informative > 0, "[6.3] %s: no step was at a non-accepting state", schema);
 		CHECK_MSG(bad_rows == 0, "[6.3] %s: %d of 64 steps did not run the legal-row finish (S-ROWS != n)", schema, bad_rows);
+		CHECK_MSG(bad_srow == 0, "[6.3] %s: %d of 64 steps: the post-mask row (S-ROW) of the poisoned legal-row arm differs "
+		          "from the full finish's (or no row was read)", schema, bad_srow);
+		CHECK_MSG(bad_legal == 0, "[6.3] %s: %d tokens at non-accepting states are not legal by the reference table "
+		          "(%d informative steps)", schema, bad_legal, informative);
 		CHECK_MSG(bad == 0, "[6.3] %s: %d steps differ from the full finish in token, anti-LM state or blob", schema, bad);
 	}
 }
@@ -1702,7 +1781,8 @@ void CheckStreamIsReference(const char* cell, const Sfd& f, const char* schema, 
 	          Str(want).c_str());
 }
 
-// 10.1 [J1] The feature oracle, (a) through (e) (§5.9), with forced_token_count asserted.
+// 10.1 [J1] The feature oracle, (a) through (e) (§5.9), with forced_token_count asserted, and (f) (rev 1.2.2) the
+// verb's admission at every forced state (X19 with (a)).
 void Cell_10_1() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
@@ -1790,6 +1870,29 @@ void Cell_10_1() {
 	}
 	CHECK_MSG(states == 266 && bad_d == 0, "[10.1 (d)] %d of %d states: the engine's chain differs from the reference "
 	          "rule's", bad_d, states);
+	// (f) (rev 1.2.2; audit F-10) the verb's own admission at every forced state of every schema, the 4
+	// fallback states included: ids equal the reference chain, and context_length rises by its length.
+	int bad_f = 0, forced_states = 0;
+	for (const auto& [name, r] : f.ref) {
+		Rig rig(f.m1->m);
+		for (uint32_t st = 0; st < r.st.size(); ++st) {
+			const RefState& rs = r.st[st];
+			if (!rs.forced || rs.chain.empty()) continue;
+			++forced_states;
+			sslm_seq s = ReachState(rig, f, name.c_str(), st, f.prompt_potion);
+			if (!s) {
+				++bad_f;
+				continue;
+			}
+			const int64_t ctx0 = rig.State(s).ctx;
+			const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
+			const Blob b = rig.State(s);
+			if (j.st != SSLM_OK || j.forced != rs.chain || b.ctx != ctx0 + int64_t(rs.chain.size())) ++bad_f;
+			rig.Release(s);
+		}
+	}
+	CHECK_MSG(forced_states > 0 && bad_f == 0, "[10.1 (f)] %d of %d forced states: the verb's admission differs from the "
+	          "reference chain (ids or context_length)", bad_f, forced_states);
 }
 
 // 1.1 [J1] One sequence: prompt, the loop to completion, reset, bind another schema, the loop again.
@@ -2030,6 +2133,147 @@ void Cell_2_6() {
 	          "[2.6] the chain holds the replacement character's token 5691");
 }
 
+// 2.7 (rev 1.2.2) [J1] The read-only query's refusals (§5.3): NULL model, NULL seq, NULL out_count, NULL
+// out_accepting, cap < 0, NULL ids with cap > 0 and a released seq give SSLM_INVALID_ARGUMENT; a model with
+// no table gives SSLM_ARTIFACT_REJECTED. The output buffers (pre-filled with a sentinel) are unwritten, and
+// the SSB blob is byte-equal before and after.
+constexpr int32_t kSent = -0x5F5F;  // cell 2.7's output sentinel
+
+void Cell_2_7() {
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	struct Out {
+		std::vector<int32_t> ids = std::vector<int32_t>(8, kSent);
+		int32_t count = kSent, accepting = kSent;
+		bool Untouched() const {
+			for (int32_t x : ids)
+				if (x != kSent) return false;
+			return count == kSent && accepting == kSent;
+		}
+	};
+	Rig rig(f.m1->m);
+	sslm_seq s = rig.NewSeq(kPotion);
+	if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
+	const std::vector<uint8_t> before = rig.Save(s);
+	struct Case {
+		const char* what;
+		int which;
+	};
+	const Case cases[] = {{"NULL model", 0}, {"NULL seq", 1},      {"NULL out_count", 2},      {"NULL out_accepting", 3},
+	                      {"cap < 0", 4},    {"NULL ids, cap 8", 5}};
+	for (const Case& c : cases) {
+		Out o;
+		sslm_status st = SSLM_OK;
+		switch (c.which) {
+			case 0: st = sslm_seq_forced_tokens(nullptr, s, o.ids.data(), 8, &o.count, &o.accepting); break;
+			case 1: st = sslm_seq_forced_tokens(rig.m, nullptr, o.ids.data(), 8, &o.count, &o.accepting); break;
+			case 2: st = sslm_seq_forced_tokens(rig.m, s, o.ids.data(), 8, nullptr, &o.accepting); break;
+			case 3: st = sslm_seq_forced_tokens(rig.m, s, o.ids.data(), 8, &o.count, nullptr); break;
+			case 4: st = sslm_seq_forced_tokens(rig.m, s, o.ids.data(), -1, &o.count, &o.accepting); break;
+			default: st = sslm_seq_forced_tokens(rig.m, s, nullptr, 8, &o.count, &o.accepting); break;
+		}
+		CHECK_MSG(st == SSLM_INVALID_ARGUMENT && o.Untouched() && rig.Save(s) == before,
+		          "[2.7] %s: status %d (want SSLM_INVALID_ARGUMENT), outputs untouched %d, blob unchanged %d", c.what,
+		          static_cast<int>(st), o.Untouched(), rig.Save(s) == before);
+	}
+	// A released seq: not live in the registry. The handle is never dereferenced by a conforming build.
+	{
+		sslm_seq dead = rig.NewSeq(kPotion);
+		if (dead) {
+			rig.Release(dead);
+			Out o;
+			const sslm_status st = sslm_seq_forced_tokens(rig.m, dead, o.ids.data(), 8, &o.count, &o.accepting);
+			CHECK_MSG(st == SSLM_INVALID_ARGUMENT && o.Untouched(), "[2.7] a released seq: status %d, outputs untouched %d",
+			          static_cast<int>(st), o.Untouched());
+		}
+	}
+	// A model with no table (no TOK1).
+	{
+		std::unique_ptr<Mapped> m = Map(VariantWithout(f, {kSecTokenizer, kSecUnicode}, 0));
+		CHECK_MSG(m->st == SSLM_OK, "[2.7] map without TOK1 == %d", static_cast<int>(m->st));
+		if (m->m) {
+			Rig r2(m->m);
+			sslm_seq q = r2.NewSeq(kPotion);
+			if (q && r2.PromptOk(q, f.prompt_potion)) {
+				const std::vector<uint8_t> b0 = r2.Save(q);
+				Out o;
+				const sslm_status st = sslm_seq_forced_tokens(r2.m, q, o.ids.data(), 8, &o.count, &o.accepting);
+				CHECK_MSG(st == SSLM_ARTIFACT_REJECTED && o.Untouched() && r2.Save(q) == b0, "[2.7] no table: status %d "
+				          "(want SSLM_ARTIFACT_REJECTED), outputs untouched %d", static_cast<int>(st), o.Untouched());
+			}
+		}
+	}
+}
+
+// 3.4 (rev 1.2.2) [M1, TSan leg] M1's legal-list split on real worker threads: a hook that runs each
+// call's tasks concurrently (one per thread, the caller taking task 0), at max_tasks 4 and 8, at
+// PROMPT_RESULT's 146,994-row state and at POTION's 16-row choice state. The produced token and the S-ROW
+// bytes equal serial's; on the TSan leg an overlapping or mis-bounded split is a reported race.
+struct ThreadHook {
+	int32_t max_tasks = 4;
+	std::atomic<int> calls{0};
+	sslm_parallel_for Pf() { return sslm_parallel_for{&Run, this, max_tasks, 0u}; }
+	static void Run(void* ctx, int32_t task_count, sslm_task_fn task, void* task_ctx) {
+		ThreadHook& h = *static_cast<ThreadHook*>(ctx);
+		h.calls.fetch_add(1);
+		std::vector<std::thread> workers;
+		for (int32_t i = 1; i < task_count; ++i) workers.emplace_back([task, task_ctx, i] { task(task_ctx, i); });
+		if (task_count > 0) task(task_ctx, 0);
+		for (std::thread& t : workers) t.join();
+	}
+};
+
+void Cell_3_4() {
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	size_t big = 0;
+	const uint32_t s_big = LargestRowState(f, kPromptResult, &big);
+	const uint32_t s_choice = FirstChoiceState(f, kPotion);
+	struct Case {
+		const char* schema;
+		uint32_t state;
+	};
+	const Case cases[] = {{kPromptResult, s_big}, {kPotion, s_choice}};
+	for (const Case& c : cases) {
+		const size_t n = f.Row(c.schema, c.state).size();
+		int32_t want_tok = -100;
+		std::vector<int32_t> want_row;
+		{
+			Rig ref(f.m1->m);
+			sslm_seq r = ReachState(ref, f, c.schema, c.state, f.prompt_potion);
+			sfd::LastFinishRowReset();
+			if (!r || ref.Decode1(r, ref.Greedy(), ref.W(), &want_tok) != SSLM_OK) {
+				CHECK_MSG(false, "[3.4] the serial decode at %s state %u failed", c.schema, c.state);
+				continue;
+			}
+			want_row = SRow();
+		}
+		for (int32_t mt : {4, 8}) {
+			Rig rig(f.m1->m);
+			ThreadHook h;
+			h.max_tasks = mt;
+			const sslm_parallel_for pf = h.Pf();
+			if (!rig.ok || sslm_workspace_set_parallel_for(rig.W(), &pf) != SSLM_OK) continue;
+			sslm_seq s = ReachState(rig, f, c.schema, c.state, f.prompt_potion);
+			if (!s) continue;
+			sfd::RowsLogReset();
+			sfd::LastFinishRowReset();
+			int32_t tok = -100;
+			const sslm_status st = rig.Decode1(s, rig.Greedy(), rig.W(), &tok);
+			const std::vector<int32_t> row = SRow();
+			CHECK_MSG(st == SSLM_OK && tok == want_tok, "[3.4] %s state %u (n %zu) max_tasks %d: status %d token %d, "
+			          "serial %d", c.schema, c.state, n, mt, static_cast<int>(st), tok, want_tok);
+			CHECK_MSG(sfd::RowsLogCount() == 1 && LastRows() == n, "[3.4] %s state %u max_tasks %d: the threaded finish "
+			          "was not the legal-row finish (S-ROWS %llu, want n = %zu)", c.schema, c.state, mt,
+			          static_cast<unsigned long long>(LastRows()), n);
+			CHECK_MSG(!row.empty() && row == want_row, "[3.4] %s state %u max_tasks %d: the threaded S-ROW differs from "
+			          "serial's (rows read %zu / %zu)", c.schema, c.state, mt, row.size(), want_row.size());
+			CHECK_MSG(h.calls.load() >= 1, "[3.4] %s state %u max_tasks %d: the hook's run was never called", c.schema,
+			          c.state, mt);
+		}
+	}
+}
+
 // 3.2 [J1] Two sequences on two threads share one table (TSan). No race, and the outputs equal serial.
 void Cell_3_2() {
 	const Sfd& f = GetSfd();
@@ -2171,6 +2415,45 @@ void Cell_4_2() {
 		const Blob ba = rig.State(a), bb = rig.State(b);
 		CHECK_MSG(ba.ok && bb.ok && ba.kv == bb.kv && ba.ctx == bb.ctx, "[4.2] span of %d: K/V differs from token-by-token "
 		          "prefill (context %lld vs %lld)", m, static_cast<long long>(ba.ctx), static_cast<long long>(bb.ctx));
+		// Fix round 1 (audit N-6): explicit SCHEMA_CONTENT prefill also adds to forced_token_count, so the
+		// whole blob compares, not the K/V region alone.
+		CHECK_MSG(rig.Save(a) == rig.Save(b), "[4.2] span of %d: the blob differs from token-by-token prefill's", m);
+	}
+	// Fix round 1 (audit F-6; §5.3): the two lawful call shapes no other cell makes. The LONGKEY start span
+	// (26 tokens) admitted (a) with ws NULL and (b) at budget 65 on a workspace whose max_chunk_budget is 8
+	// (the heap fallback; rev 1's refusal is withdrawn) gives status OK, the reference chain, and a blob
+	// byte-equal to the in-workspace budget-64 admission's.
+	{
+		std::vector<uint8_t> want;
+		{
+			Rig rig(f.m1->m);
+			sslm_seq s = rig.NewSeq(kLongKey);
+			if (s && rig.PromptOk(s, f.prompt_potion)) {
+				const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
+				if (j.st == SSLM_OK && j.forced == chain) want = rig.Save(s);
+			}
+		}
+		CHECK_MSG(!want.empty(), "[4.2 reference] the in-workspace budget-64 admission of the LONGKEY start span failed");
+		{
+			Rig rig(f.m1->m);
+			sslm_seq s = rig.NewSeq(kLongKey);
+			if (s && rig.PromptOk(s, f.prompt_potion)) {
+				const Jump j = JumpForward(rig.m, s, 64, nullptr, nullptr);
+				CHECK_MSG(j.st == SSLM_OK && j.forced == chain && !want.empty() && rig.Save(s) == want,
+				          "[4.2 ws NULL] status %d, admitted %zu (want %zu), blob equal %d", static_cast<int>(j.st),
+				          j.forced.size(), chain.size(), !want.empty() && rig.Save(s) == want);
+			}
+		}
+		{
+			Rig rig(f.m1->m, 1, 8, 3, 8);
+			sslm_seq s = rig.NewSeq(kLongKey);
+			if (rig.ok && s && rig.PromptOk(s, f.prompt_potion)) {
+				const Jump j = JumpForward(rig.m, s, 65, nullptr, rig.W());
+				CHECK_MSG(j.st == SSLM_OK && j.forced == chain && !want.empty() && rig.Save(s) == want,
+				          "[4.2 budget 65 > max_chunk_budget 8] status %d, admitted %zu (want %zu), blob equal %d",
+				          static_cast<int>(j.st), j.forced.size(), chain.size(), !want.empty() && rig.Save(s) == want);
+			}
+		}
 	}
 }
 
@@ -2184,7 +2467,12 @@ void Cell_5_1() {
 	for (int holder = 0; holder < 2; ++holder) {
 		const sslm_status limit_st = holder == 0 ? SSLM_CONTEXT_CAP_EXCEEDED : SSLM_KV_BUDGET_EXCEEDED;
 		const char* hname = holder == 0 ? "cap holder" : "KV-budget holder";
-		for (int h = 0; h <= 4; ++h) {  // the headroom at the pending choice; h = 4 is the "h >= k" row for small k
+		// Fix round 1 (audit F-5): k is derived from the run, through the reference walk (the start chain,
+		// then the decode's choice), never from the engine's walk. The sweep runs h = 0 .. 10, which spans
+		// k - 1, k and k + 1 for every k F-SFD's POTION gives here (6 on main); each h is classified by its
+		// own k, and the rows h = k - 1, h = k and h = k + 1 must all have run on both holders.
+		bool saw_below = false, saw_exact = false, saw_above = false;
+		for (int h = 0; h <= 10; ++h) {  // the headroom at the pending choice
 			Rig rig(f.m1->m);
 			std::vector<int32_t> prompt;
 			int32_t budget = 0;
@@ -2203,8 +2491,18 @@ void Cell_5_1() {
 			int32_t c = -100;
 			if (rig.Decode1(s, rig.Greedy(), rig.W(), &c) != SSLM_OK || c < 0) continue;
 			const Blob before = rig.State(s);
-			const RefState& next = r.st[before.walk < r.st.size() ? before.walk : 0];
+			uint32_t ref_walk = r.start;
+			bool walked = true;
+			for (int32_t tok : r.st[r.start].chain) walked = walked && f.Step(kPotion, ref_walk, tok, &ref_walk);
+			walked = walked && f.Step(kPotion, ref_walk, c, &ref_walk);
+			CHECK_MSG(walked && ref_walk < r.st.size(), "[5.1 %s h %d] the choice %d is not legal on the reference walk",
+			          hname, h, c);
+			if (!walked || ref_walk >= r.st.size()) continue;
+			const RefState& next = r.st[ref_walk];
 			const size_t k = 1 + next.chain.size();
+			if (h > 0 && size_t(h) + 1 == k) saw_below = true;
+			if (size_t(h) == k) saw_exact = true;
+			if (size_t(h) == k + 1) saw_above = true;
 			const std::vector<uint8_t> blob_before = rig.Save(s);
 			const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
 			const Blob after = rig.State(s);
@@ -2219,7 +2517,7 @@ void Cell_5_1() {
 			}
 			if (size_t(h) < k) {
 				const size_t forced = size_t(h) - 1;  // the pending token takes one row
-				uint32_t walk = before.walk;
+				uint32_t walk = ref_walk;
 				for (size_t i = 0; i < forced; ++i) f.Step(kPotion, walk, next.chain[i], &walk);
 				CHECK_MSG(j.st == limit_st, "[5.1 %s h %d < k %zu] status %d, want the limit status", hname, h, k,
 				          static_cast<int>(j.st));
@@ -2241,6 +2539,8 @@ void Cell_5_1() {
 			CHECK_MSG(rig.State(s).ctx == ctx, "[5.1 %s h %d] the next decode raised context_length %lld -> %lld", hname, h,
 			          static_cast<long long>(ctx), static_cast<long long>(rig.State(s).ctx));
 		}
+		CHECK_MSG(saw_below && saw_exact && saw_above, "[5.1 %s] the sweep missed a boundary row: h = k - 1 %d, h = k %d, "
+		          "h = k + 1 %d", hname, saw_below, saw_exact, saw_above);
 	}
 }
 
@@ -2370,6 +2670,12 @@ void Cell_6_5() {
 		CHECK_MSG(valid && rest.dead_end, "[6.5] the contract-breaking stream is not schema-valid or did not end");
 	}
 	CHECK_MSG(broken[0] == broken[1] && !broken[0].empty(), "[6.5] the contract-breaking stream is not deterministic");
+	// Rev 1.2.2: the pinned stream. The violation moves the walk mid-chain, so a verb that carried a chain
+	// remainder across calls (X14) admits an illegal token next and cannot produce this stream.
+	CHECK_MSG(broken[0].size() == kBrokenStreamLength && HexDigest(broken[0]) == kBrokenStreamDigest,
+	          "[6.5] the contract-breaking stream %s (%zu tokens, digest %s); main's replay pins %zu, %s",
+	          Str(broken[0]).c_str(), broken[0].size(), HexDigest(broken[0]).c_str(), kBrokenStreamLength,
+	          kBrokenStreamDigest);
 	CHECK_MSG(broken[0] != lawful && !lawful.empty(), "[6.5] the contract-breaking stream equals the lawful one; the cell "
 	          "shows nothing");
 }
@@ -2466,7 +2772,11 @@ void Cell_8_2() {
 		std::vector<int32_t> plain;
 		{
 			Rig rig(f.m1->m);
-			plain = FreshRun(rig, f, kPotion, f.prompt_potion, GreedyOpts(rig, budget)).stream;
+			const JfRun pr = FreshRun(rig, f, kPotion, f.prompt_potion, GreedyOpts(rig, budget));
+			plain = pr.stream;
+			// Fix round 1 (audit F-2): the run covers the whole stream, to the dead end, at every budget.
+			CHECK_MSG(pr.dead_end, "[8.2] budget %d without the hook: the run ended with status %d (stuck %d) after %zu "
+			          "tokens", budget, static_cast<int>(pr.end_status), pr.stuck, pr.stream.size());
 		}
 		Rig rig(f.m1->m);
 		CountingHook h;
@@ -2480,7 +2790,7 @@ void Cell_8_2() {
 		o.after = [&](sslm_seq&, const JfStep& st) {
 			const size_t now = h.Counts().size();
 			if (st.kind == 0 && st.st == SSLM_OK) {
-				const size_t m = st.toks.size() + (st.pending_before ? 1 : 0);
+				const size_t m = st.toks.size() + (st.embedded_pending ? 1 : 0);
 				if (m == 1) {
 					++one_row;
 					if (now > calls_before) ++one_row_threaded;
@@ -2493,6 +2803,8 @@ void Cell_8_2() {
 		};
 		h.Clear();
 		const JfRun r = RunJf(rig.m, s, o);
+		CHECK_MSG(r.dead_end, "[8.2] budget %d with the hook: the run ended with status %d (stuck %d)", budget,
+		          static_cast<int>(r.end_status), r.stuck);
 		CHECK_MSG(r.stream == plain && !plain.empty(), "[8.2] budget %d with the hook: %s, without %s", budget,
 		          Str(r.stream).c_str(), Str(plain).c_str());
 		if (budget == 1) {
@@ -2526,6 +2838,8 @@ void Cell_8_3() {
 	const Blob bb = rig.State(b);
 	CHECK_MSG(j.st == SSLM_OK && j.forced == chain && bb.kv == ba.kv && bb.walk == ba.walk && bb.forced == ba.forced,
 	          "[8.3] the verb's admission differs from the explicit prefill (status %d)", static_cast<int>(j.st));
+	// Fix round 1 (audit N-6): both admissions add to forced_token_count, so the whole blob compares.
+	CHECK_MSG(rig.Save(a) == rig.Save(b), "[8.3] the blob after the verb differs from the explicit prefill's");
 }
 
 // 8.5 [J1] An adapter-bound sequence. Oracle (e) runs against a fresh sequence with the same adapter.
@@ -2578,7 +2892,24 @@ AntiLm ReadAntiLm(Rig& rig, sslm_seq s) {
 	return AntiLm{b.order, b.hist};
 }
 
-// 8.6 (rev 1.2) [J1, AL, F-SFD POTION] The anti-LM rule, read through the SSB blob's history.
+// A POTION choice -> choice construction (cells 8.6 (viii) e, 8.7): a non-accepting unforced state s_q
+// where 't' leads to an unforced 4-row choice state s_t. Returns 't''s id; s_q stays UINT32_MAX if none.
+int32_t FindChoiceChoice(const Sfd& f, uint32_t* s_q, uint32_t* s_t) {
+	const int32_t t_tok = f.TokenOf("t");
+	const RefSchema& r = f.R(kPotion);
+	for (uint32_t s = 0; s < r.st.size() && *s_q == UINT32_MAX; ++s) {
+		uint32_t n = 0;
+		if (!r.st[s].forced && !r.st[s].accepting && f.Step(kPotion, s, t_tok, &n) && !r.st[n].forced &&
+		    f.Row(kPotion, n).size() == 4) {
+			*s_q = s;
+			*s_t = n;
+		}
+	}
+	return t_tok;
+}
+
+// 8.6 (rev 1.2, arms through (ix) at rev 1.2.2) [J1, AL, F-SFD POTION] The anti-LM rule, read through the SSB
+// blob's history. X23d maps to (ix) with LSan.
 void Cell_8_6() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
@@ -2785,6 +3116,111 @@ void Cell_8_6() {
 			          static_cast<int>(j.st), static_cast<int>(want), rig.Save(s) == before);
 		}
 	}
+	// (viii) (d), (e) (fix round 1, audit F-8; §5.8 "Order"): the two admitting-or-validated calls that must
+	// never touch the history either. On an order-3 history, a damped order-2 call that (d) admits only the
+	// pending token (h = 1 on a KV-budget holder: the limit status), or (e) is a no-op (choice -> choice at
+	// an unforced state, cell 8.7's construction). Order and history are byte-equal to before.
+	{
+		Rig rig(f.m1->m);
+		const int32_t budget = static_cast<int32_t>(f.prompt_potion.size() + start.size()) + 1;
+		sslm_seq s = rig.NewBudgeted(budget, kPotion);
+		if (s && rig.PromptOk(s, f.prompt_potion)) {
+			const sslm_decode_params p3 = rig.Damped(3);
+			const Jump j0 = JumpForward(rig.m, s, 64, &p3, rig.W());
+			int32_t t = -100;
+			rig.Decode1(s, p3, rig.W(), &t);  // a choice, pending, with one token of headroom
+			const AntiLm a0 = ReadAntiLm(rig, s);
+			const Blob b0 = rig.State(s);
+			const sslm_decode_params p2 = rig.Damped(2);
+			const Jump j = JumpForward(rig.m, s, 64, &p2, rig.W());
+			const AntiLm a1 = ReadAntiLm(rig, s);
+			const Blob b1 = rig.State(s);
+			CHECK_MSG(j0.st == SSLM_OK && a0.order == 3 && !a0.hist.empty(), "[8.6 (viii) d] setup: status %d, order %d",
+			          static_cast<int>(j0.st), a0.order);
+			CHECK_MSG(j.st == SSLM_KV_BUDGET_EXCEEDED && j.count == 0 && b1.ctx == b0.ctx + 1 && b1.ready == 1,
+			          "[8.6 (viii) d] h = 1: status %d count %d, context %lld -> %lld, ready %u; want the limit status and "
+			          "the pending token alone admitted", static_cast<int>(j.st), j.count, static_cast<long long>(b0.ctx),
+			          static_cast<long long>(b1.ctx), b1.ready);
+			CHECK_MSG(a1.order == a0.order && a1.hist == a0.hist, "[8.6 (viii) d] the pending-only call changed the "
+			          "history: order %d -> %d, %s -> %s", a0.order, a1.order, Str(a0.hist).c_str(), Str(a1.hist).c_str());
+		}
+	}
+	{
+		uint32_t s_q = UINT32_MAX, s_t = UINT32_MAX;
+		const int32_t t_tok = FindChoiceChoice(f, &s_q, &s_t);
+		CHECK_MSG(s_q != UINT32_MAX, "[8.6 (viii) e] no POTION choice -> choice construction");
+		Rig rig(f.m1->m);
+		sslm_seq s = s_q == UINT32_MAX ? nullptr : ReachState(rig, f, kPotion, s_q, f.prompt_potion);
+		if (s) {
+			sfd::ArmChoice(t_tok);
+			int32_t c = -100;
+			rig.Decode1(s, rig.Damped(3), rig.W(), &c);  // creates the order-3 history; 't' pending
+			sfd::DisarmChoice();
+			const AntiLm a0 = ReadAntiLm(rig, s);
+			const std::vector<uint8_t> before = rig.Save(s);
+			const sslm_decode_params p2 = rig.Damped(2);
+			const Jump j = JumpForward(rig.m, s, 64, &p2, rig.W());
+			const AntiLm a1 = ReadAntiLm(rig, s);
+			CHECK_MSG(c == t_tok && a0.order == 3 && !a0.hist.empty(), "[8.6 (viii) e] setup: S-CHOICE gave %d (want %d), "
+			          "order %d", c, t_tok, a0.order);
+			CHECK_MSG(j.st == SSLM_OK && j.count == 0 && a1.order == a0.order && a1.hist == a0.hist &&
+			              rig.Save(s) == before,
+			          "[8.6 (viii) e] the no-op call: status %d count %d, order %d -> %d, blob unchanged %d",
+			          static_cast<int>(j.st), j.count, a0.order, a1.order, rig.Save(s) == before);
+		}
+	}
+	// (ix) (rev 1.2.2; audit F-7) The verb's own re-key: a damped decode at order 3 creates a history (the
+	// start span's first token, now pending), then the verb at damped order 2 admits the pending token and
+	// the chain. The state is at order 2 and the history is exactly the verb's forced tokens. Reference:
+	// the same calls with the verb replaced by order-2 decodes, which re-key the same way (main's code).
+	// LSan on the ASan leg catches an old state re-keyed without being destroyed (X23d).
+	{
+		uint32_t walk = r.start;
+		int32_t first = -1;
+		std::vector<int32_t> want;
+		{
+			Rig ref(f.m1->m);
+			sslm_seq s = ref.NewSeq(kPotion);
+			if (s && ref.PromptOk(s, f.prompt_potion)) {
+				ref.Decode1(s, ref.Damped(3), ref.W(), &first);
+				if (first >= 0 && f.Step(kPotion, walk, first, &walk) && walk < r.st.size()) want = r.st[walk].chain;
+			}
+		}
+		std::vector<int32_t> ref_hist;
+		int32_t ref_order = 0;
+		{
+			Rig ref(f.m1->m);
+			sslm_seq s = ref.NewSeq(kPotion);
+			if (s && ref.PromptOk(s, f.prompt_potion)) {
+				int32_t t = -100;
+				ref.Decode1(s, ref.Damped(3), ref.W(), &t);
+				for (size_t i = 0; i < want.size(); ++i) ref.Decode1(s, ref.Damped(2), ref.W(), &t);
+				const AntiLm a = ReadAntiLm(ref, s);
+				ref_hist = a.hist;
+				ref_order = a.order;
+			}
+		}
+		CHECK_MSG(!want.empty() && ref_order == 2 && ref_hist.size() == want.size(), "[8.6 (ix)] reference: chain %s, "
+		          "jump-forward off re-keys to order %d history %s", Str(want).c_str(), ref_order, Str(ref_hist).c_str());
+		Rig rig(f.m1->m);
+		sslm_seq s = rig.NewSeq(kPotion);
+		if (s && rig.PromptOk(s, f.prompt_potion)) {
+			int32_t t = -100;
+			rig.Decode1(s, rig.Damped(3), rig.W(), &t);
+			const AntiLm a0 = ReadAntiLm(rig, s);
+			const sslm_decode_params p2 = rig.Damped(2);
+			const Jump j = JumpForward(rig.m, s, 64, &p2, rig.W());
+			const AntiLm a = ReadAntiLm(rig, s);
+			CHECK_MSG(t == first && a0.order == 3 && a0.hist.size() == 1, "[8.6 (ix)] setup: decode@3 gave %d (want %d), "
+			          "order %d history %s", t, first, a0.order, Str(a0.hist).c_str());
+			CHECK_MSG(j.st == SSLM_OK && j.forced == want && a.order == 2 && a.hist == j.forced &&
+			              a.order == ref_order && a.hist.size() == ref_hist.size(),
+			          "[8.6 (ix)] verb@2 after decode@3: status %d forced %s, order %d, history %s; want order 2 and the "
+			          "history = the forced tokens %s", static_cast<int>(j.st), Str(j.forced).c_str(), a.order,
+			          Str(a.hist).c_str(), Str(want).c_str());
+		}
+	}
+
 }
 
 // 8.7 [J1] Choice followed by choice (POTION 't', forced with S-CHOICE). The verb is a no-op, the pending
@@ -2833,7 +3269,8 @@ void Cell_8_7() {
 }
 
 // 8.8 [J1] Jump-forward from a ready seed (after the prompt), after a dead end, and after a
-// ParallelForIncomplete. Nothing is embedded twice: context_length and S-LAYERROWS both show it.
+// ParallelForIncomplete. Nothing is embedded twice: context_length and S-LAYERROWS both show it. Rev 1.2.2: the
+// next decode is finish-only (X13 with 10.1 (b)).
 void Cell_8_8() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
@@ -2888,7 +3325,29 @@ void Cell_8_8() {
 		              sfd::LayerRowsLogAt(0).rows == k,
 		          "[8.8 arm %d] S-LAYERROWS: %zu entries, first %llu rows; want one batched pass of %zu", arm,
 		          sfd::LayerRowsLogCount(), static_cast<unsigned long long>(sfd::LayerRowsLogAt(0).rows), k);
+		// Rev 1.2.2 (X13's kill): after the admission the sequence rests ready for logits, so the next decode
+		// runs a finish only: no S-LAYERROWS decode entry and no context_length rise.
+		CHECK_MSG(after.ready == 1, "[8.8 arm %d] after the admission: ready_for_logits %u", arm, after.ready);
+		sfd::LayerRowsLogReset();
+		int32_t nt = -100;
+		const sslm_status ns = rig.Decode1(s, rig.Greedy(), rig.W(), &nt);
+		CHECK_MSG(ns == SSLM_OK && sfd::LayerRowsLogCount() == 0 && rig.State(s).ctx == after.ctx,
+		          "[8.8 arm %d] the next decode: status %d, %zu S-LAYERROWS entries, context %lld -> %lld; want a "
+		          "finish only", arm, static_cast<int>(ns), sfd::LayerRowsLogCount(), static_cast<long long>(after.ctx),
+		          static_cast<long long>(rig.State(s).ctx));
 	}
+}
+
+// The calls whose blob kMainBlobDigest pins: prompt, start chain by explicit prefill, one greedy decode.
+std::vector<uint8_t> MainShapeBlob(Rig& rig, const Sfd& f) {
+	const RefSchema& r = f.R(kPotion);
+	sslm_seq s = rig.NewSeq(kPotion);
+	if (!s || !rig.PromptOk(s, f.prompt_potion) || !rig.ContentOk(s, r.st[r.start].chain)) return {};
+	int32_t c = -100;
+	if (rig.Decode1(s, rig.Greedy(), rig.W(), &c) != SSLM_OK || c < 0) return {};
+	std::vector<uint8_t> b = rig.Save(s);
+	rig.Release(s);
+	return b;
 }
 
 // 9.1 [J1] Restore each resting shape (§5.7), both ways between main's paths and the J1 verbs.
@@ -2897,7 +3356,7 @@ void Cell_9_1() {
 	if (!f.ok) return;
 	const RefSchema& r = f.R(kPotion);
 	const std::vector<int32_t>& start = r.st[r.start].chain;
-	Rig rig(f.m1->m, 1, 12);  // five originals and five restores
+	Rig rig(f.m1->m, 1, 14);  // five originals, five restores, and the (f)/(g) arms
 	// (a) A pending embed saved by main mid-generation (prefill + decode) continues under jump-forward.
 	{
 		sslm_seq s = rig.NewSeq(kPotion);
@@ -2957,6 +3416,26 @@ void Cell_9_1() {
 			}
 		}
 	}
+	// (f) Fix round 1 (audit F-9): main's blob, pinned. The same calls on this build save the same bytes.
+	{
+		const std::vector<uint8_t> b = MainShapeBlob(rig, f);
+		CHECK_MSG(!b.empty() && b.size() == kMainBlobSize && BytesDigest(b) == kMainBlobDigest, "[9.1 main blob] %zu bytes, "
+		          "digest %s; main saved %zu bytes, %s", b.size(), BytesDigest(b).c_str(), kMainBlobSize, kMainBlobDigest);
+	}
+	// (g) A blob saved right after a verb call equals the blob of the same tokens admitted by explicit prefill
+	// (both add to forced_token_count, so the whole blob compares), which main can restore.
+	{
+		sslm_seq a = rig.NewSeq(kPotion);
+		sslm_seq b = rig.NewSeq(kPotion);
+		if (a && b && rig.PromptOk(a, f.prompt_potion) && rig.PromptOk(b, f.prompt_potion) && rig.ContentOk(b, start)) {
+			const Jump j = JumpForward(rig.m, a, 64, nullptr, rig.W());
+			CHECK_MSG(j.st == SSLM_OK && j.forced == start && rig.Save(a) == rig.Save(b), "[9.1 verb blob] status %d forced "
+			          "%s; the blob after the verb differs from explicit prefill's", static_cast<int>(j.st),
+			          Str(j.forced).c_str());
+		}
+		if (a) rig.Release(a);
+		if (b) rig.Release(b);
+	}
 	// (e) A blob saved right after a verb call restores and continues by plain decode, as the original does.
 	{
 		sslm_seq s = rig.NewSeq(kPotion);
@@ -3014,7 +3493,15 @@ void Cell_9_2() {
 	}
 	CHECK_MSG(!version.empty() && version != "1.13.1", "[9.2] the project version is still %s",
 	          version.empty() ? "(CMakeLists.txt not found)" : version.c_str());
-	// No new status (§5.3): the closed enum's last ordinal is unchanged.
+	// No new status (§5.3; rev 1.2.2, audit M-2): the status list's entry count equals main's (30), and
+	// the existing ordinals are unchanged.
+	{
+		int n = 0;
+#define SFD_COUNT_STATUS(name) ++n;
+		SSLM_STATUS_ENUM_LIST(SFD_COUNT_STATUS)
+#undef SFD_COUNT_STATUS
+		CHECK_MSG(n == 30, "[9.2] the status list has %d entries; main has 30", n);
+	}
 	CHECK_MSG(static_cast<int>(SSLM_KV_BUDGET_EXCEEDED) == 29 && static_cast<int>(SSLM_ALLOCATION_FAILED) == 25 &&
 	              static_cast<int>(SSLM_SCHEMA_SPAN_UNREACHABLE) == 23 && static_cast<int>(SSLM_ARTIFACT_REJECTED) == 4,
 	          "[9.2] a status ordinal moved");
@@ -3039,7 +3526,20 @@ void Cell_10_2() {
 	CHECK_MSG(z == SSLM_OK && count == int32_t(chain.size()) && acc == 0, "[10.2] cap 0, null ids: status %d count %d "
 	          "accepting %d", static_cast<int>(z), count, acc);
 	CHECK_MSG(rig.Save(s) == before, "[10.2] the query changed the save blob");
-	CHECK_MSG(rig.TryBind(s, kPotion) == SSLM_OK, "[10.2] the query cleared bind eligibility");
+	// Bind eligibility (fix round 1, audit F-3): the prompt prefill already cleared it on `s`, so the
+	// query's "changes nothing, including bind eligibility" is checked on a sequence that is eligible:
+	// prefilled, then reset (which re-arms eligibility and keeps the binding, cell 1.1), then queried,
+	// then rebound.
+	{
+		sslm_seq e = rig.NewSeq(kLongKey);
+		if (e && rig.PromptOk(e, f.prompt_potion)) {
+			CHECK_MSG(sslm_seq_reset(e) == SSLM_OK, "[10.2] reset");
+			const Query qe = QueryForced(rig.m, e, 5);
+			CHECK_MSG(qe.st == SSLM_OK && qe.count == int32_t(chain.size()), "[10.2] after the reset: status %d count %d",
+			          static_cast<int>(qe.st), qe.count);
+			CHECK_MSG(rig.TryBind(e, kPotion) == SSLM_OK, "[10.2] the query cleared bind eligibility");
+		}
+	}
 	// Unbound: 0.
 	sslm_seq u = rig.NewSeq(nullptr);
 	if (u) {
@@ -3109,6 +3609,18 @@ void Cell_11_3() {
 void PrintGoldens() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
+	{
+		Rig rig(f.m1->m);
+		const std::vector<uint8_t> b = MainShapeBlob(rig, f);
+		std::printf("SFD GOLDEN main blob: %zu bytes, digest %s\n", b.size(), BytesDigest(b).c_str());
+	}
+	{
+		const RefSchema& r = f.R(kPotion);
+		const std::vector<int32_t> head = {r.st[r.start].chain.empty() ? -1 : r.st[r.start].chain[0]};
+		const Replay rp = ReferenceReplay(f.m1->m, f, kPotion, f.prompt_potion, nullptr, 400, head);
+		std::printf("SFD GOLDEN broken stream: ok %d dead_end %d length %zu digest %s\n  stream %s\n", rp.ok, rp.dead_end,
+		            rp.stream.size(), HexDigest(rp.stream).c_str(), Str(rp.stream, 400).c_str());
+	}
 	for (const char* schema : {kPotion, kPromptResult}) {
 		const Replay rp = ReferenceReplay(f.m1->m, f, schema, schema == kPotion ? f.prompt_potion : f.prompt_pr);
 		std::printf("SFD GOLDEN stream %s: ok %d dead_end %d capped %d length %zu choices %zu digest %s\n  stream %s\n", schema,
@@ -3157,8 +3669,10 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("2.3", Cell_2_3);
 	run("2.5", Cell_2_5);
 	run("2.6", Cell_2_6);
+	run("2.7", Cell_2_7);
 	run("3.2", Cell_3_2);
 	run("3.3", Cell_3_3);
+	run("3.4", Cell_3_4);
 	run("4.2", Cell_4_2);
 	run("5.1", Cell_5_1);
 	run("5.2", Cell_5_2);
