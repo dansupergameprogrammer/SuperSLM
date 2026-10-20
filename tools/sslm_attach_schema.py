@@ -28,7 +28,8 @@ Refusals (non-zero exit, the reason on stderr, and no new file at `--out`):
 - the checkpoint's serialized tokenizer tables differ from the base's TOKENIZER section;
 - a schema name that is empty, repeated, or whose FNV-1a-64 hash is zero (the runtime resolves a
   saved schema by that hash);
-- a schema file that is missing or unreadable, or is not valid JSON;
+- a schema file that is missing or unreadable, is not valid JSON, or has a schema node (the root, a
+  `properties` value or `items`) that is not a JSON object;
 - a `--limits-json` that is unreadable, not JSON, names an unknown limit, or gives a value that is not
   a non-negative integer;
 - a schema the compiler refuses: an unsupported keyword, a resource limit (`--limits-json` replaces
@@ -147,11 +148,40 @@ def _load_limits(path: Path | None) -> dict | None:
 
 def _read_schema(name: bytes, path: Path):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        schema = json.loads(path.read_text(encoding="utf-8"))
     except OSError as error:
         raise AttachRefused(f"schema {name!r}: file {path} cannot be read ({error})") from error
     except ValueError as error:
         raise AttachRefused(f"schema {name!r}: file {path} is not valid JSON ({error})") from error
+    _check_schema_nodes(name, path, schema)
+    return schema
+
+
+def _check_schema_nodes(name: bytes, path: Path, schema) -> None:
+    """Every node the compiler descends into (the root, each `properties` value, `items`) must be a
+    JSON object; anything else (`[]`, `true`, a string) is refused here by its RFC 6901 pointer."""
+    stack = [(schema, "")]
+    while stack:
+        node, pointer = stack.pop()
+        if not isinstance(node, dict):
+            where = f"the schema node at pointer '{pointer}'" if pointer else "the schema root"
+            raise AttachRefused(f"schema {name!r} ({path}): {where} is a JSON {_json_kind(node)}, not an object; "
+                                f"every schema node must be a JSON object")
+        if isinstance(node.get("properties"), dict):
+            for key, child in node["properties"].items():
+                stack.append((child, f"{pointer}/properties/{key.replace('~', '~0').replace('/', '~1')}"))
+        if "items" in node:
+            stack.append((node["items"], f"{pointer}/items"))
+
+
+def _json_kind(value) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if value is None:
+        return "null"
+    if isinstance(value, (int, float)):
+        return "number"
+    return {list: "array", str: "string"}.get(type(value), type(value).__name__)
 
 
 def _verifier(explicit: str | None) -> str:
@@ -245,7 +275,7 @@ def attach(base: Path, ckpt: Path, schemas: list[tuple[bytes, Path]], out: Path,
             mp = SC.compile_schema_to_mask_pages(schema, vocab, special_ids=special, limits=limits, name=name)
         except SC.SchemaCompileError as error:
             raise AttachRefused(f"schema {name!r} ({path}) refused by the compiler: {error}") from error
-        except (TypeError, ValueError) as error:
+        except (TypeError, ValueError, AttributeError) as error:
             raise AttachRefused(f"schema {name!r} ({path}) cannot be compiled: {error}") from error
         compiled.append((name, mp))
     scm1 = SC.serialize_scm1(compiled, vocab_size)
