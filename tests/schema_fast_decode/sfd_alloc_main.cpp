@@ -16,8 +16,13 @@
 // the blob of a sequence that never failed; a further save and the release are clean. A trial whose
 // verb call returns SSLM_OK (the failed allocation was absorbed) passes if its blob is the never-failed
 // one. A trial whose failure comes after tokens were admitted (the history update after the pass; code
-// review round 1, observation 9) is outside these cells: it is reported, and only its save and release
-// are held to the sanitizers. On POSIX every trial runs in a forked child, so a crash or a sanitizer abort in one trial fails
+// review round 1, observation 9) is outside these cells: its status and blob are not asserted.
+//
+// Fix round 4 (code review re-check, finding 9): every trial then makes the sequence's next use, two damped
+// decodes, which must not crash and must equal the decodes of a sequence restored from the failed
+// sequence's own save blob (and the never-failed decodes where the blob is the never-failed one). A second
+// sweep fails each allocation of one damped decode step (sslm_decode_step_v2) on the same order-3 state, at
+// order 2 (a re-key) and at order 3, and holds its next use to the same checks. On POSIX every trial runs in a forked child, so a crash or a sanitizer abort in one trial fails
 // that trial and the sweep goes on; elsewhere the trials run in-process.
 //
 // Allocation indices are the global operator new's (throwing and nothrow, scalar and array); the
@@ -236,8 +241,67 @@ struct Engine {
 	}
 };
 
-// One trial at allocation index k. Returns true iff every check in it passed.
-bool Trial(Engine& e, long k, const std::vector<uint8_t>& ref_after, long* seen) {
+// Fix round 4 (code review re-check, finding 9): the sequence's next use after a failure. Two damped decodes
+// at `order` must not crash, and they must give what a sequence restored from the failed sequence's own save
+// blob gives: the blob is the sequence's whole declared state (sslm_seq_restore rebuilds the anti-LM tables
+// from the saved history), so a half-applied update that the blob does not carry -- a context entry with
+// total 0, say -- is a divergence here and a division by zero in the decode. Where the failed sequence's
+// blob is the never-failed sequence's, the decodes must also equal the never-failed decodes.
+struct Decoded {
+	std::vector<int> st;
+	std::vector<int32_t> tok;
+	bool operator==(const Decoded& o) const { return st == o.st && tok == o.tok; }
+};
+std::string Str(const Decoded& d) {
+	std::string s = "{";
+	for (size_t i = 0; i < d.st.size(); ++i)
+		s += (i ? "," : "") + std::to_string(d.st[i]) + ":" + std::to_string(d.tok[i]);
+	return s + "}";
+}
+constexpr int kNextDecodes = 2;
+Decoded DecodeN(Engine& e, sslm_seq s, int32_t order, int n = kNextDecodes) {
+	Decoded d;
+	const sslm_decode_params p = e.Damped(order);
+	for (int i = 0; i < n; ++i) {
+		int32_t out = -100;
+		d.st.push_back(static_cast<int>(sslm_decode_step_v2(e.m, &s, 1, &p, e.ws, &out)));
+		d.tok.push_back(out);
+		std::fflush(stdout);
+	}
+	return d;
+}
+// Returns the live sequence's decodes; checks them against the restored copy and, when `ref_blob` matches,
+// against `ref`.
+void NextUse(Engine& e, sslm_seq s, int32_t order, const char* tag, long k, const std::vector<uint8_t>& ref_blob,
+             const Decoded& ref) {
+	const std::vector<uint8_t> snap = e.Save(s);
+	std::printf("[%s k %ld] next use: %d damped decodes at order %d\n", tag, k, kNextDecodes, order);
+	std::fflush(stdout);
+	const Decoded live = DecodeN(e, s, order);
+	sslm_seq r = nullptr;
+	const sslm_status rs = snap.empty() ? SSLM_INVALID_ARGUMENT : sslm_seq_restore(e.m, &e.pool, snap.data(), snap.size(), &r);
+	CHECK_MSG(rs == SSLM_OK && r, "[%s k %ld] restoring the failed sequence's blob == %d", tag, k, static_cast<int>(rs));
+	if (rs == SSLM_OK && r) {
+		const Decoded restored = DecodeN(e, r, order);
+		CHECK_MSG(live == restored, "[%s k %ld] after the failure the sequence decodes %s, its own restored blob %s", tag,
+		          k, Str(live).c_str(), Str(restored).c_str());
+		sslm_seq_release(r);
+	}
+	if (snap == ref_blob) {
+		CHECK_MSG(live == ref, "[%s k %ld] the blob is the never-failed one, but the decodes are %s, never-failed %s",
+		          tag, k, Str(live).c_str(), Str(ref).c_str());
+	}
+}
+
+void Arm(long k) {
+	g_fail_at = k;
+	g_fired = false;
+	g_index = 0;
+	g_armed = true;
+}
+
+// One verb trial at allocation index k. Returns true iff every check in it passed.
+bool Trial(Engine& e, long k, const std::vector<uint8_t>& ref_after, const Decoded& ref_next) {
 	const int failures_before = g_failures;
 	sslm_seq s = e.Setup();
 	if (!s) return false;
@@ -246,23 +310,21 @@ bool Trial(Engine& e, long k, const std::vector<uint8_t>& ref_after, long* seen)
 	CHECK_MSG(a0.ok && a0.order == 3 && a0.hist.size() == 1, "[k %ld] setup: order %d history %s", k, a0.order,
 	          Str(a0.hist).c_str());
 	int32_t count = -1;
-	g_fail_at = k;
-	g_fired = false;
-	g_index = 0;
-	g_armed = true;
+	Arm(k);
 	const sslm_status st = e.Verb(s, 2, &count);
 	g_armed = false;
-	*seen = g_index.load();
+	const long seen = g_index.load();
 	const bool fired = g_fired.load();
 	std::printf("[k %ld] verb@2 on an order-3 state, allocation #%ld failing (fired %d, %ld allocations): status %d "
-	            "count %d\n", k, k, fired, *seen, static_cast<int>(st), count);
+	            "count %d\n", k, k, fired, seen, static_cast<int>(st), count);
 	std::fflush(stdout);
 	if (fired && st != SSLM_OK && count > 0) {
 		// The failure came after the admission (the anti-LM history update that follows the pass): tokens
-		// were admitted, so this is not the failed call of cells 5.2 and 8.6 (vi). Code review round 1
-		// lists it as observation 9, outside this round; the trial still saves and releases below.
-		std::printf("NOTE [k %ld] status %d after %d tokens were admitted: outside cells 5.2 and 8.6 (vi)\n", k,
-		            static_cast<int>(st), count);
+		// were admitted, so this is not the failed call of cells 5.2 and 8.6 (vi), and nothing is asserted of
+		// the status or the blob. Fix round 4 (re-check finding 9): the next use below is held to no crash and
+		// to determinism.
+		std::printf("NOTE [k %ld] status %d after %d tokens were admitted: outside cells 5.2 and 8.6 (vi); the next "
+		            "use is checked\n", k, static_cast<int>(st), count);
 	} else if (fired && st != SSLM_OK) {
 		const std::vector<uint8_t> after = e.Save(s);
 		const AntiLm a1 = ReadAntiLm(after);
@@ -283,15 +345,67 @@ bool Trial(Engine& e, long k, const std::vector<uint8_t>& ref_after, long* seen)
 		          "absorbed; want SSLM_OK and the never-failed blob", k, static_cast<int>(st), count);
 	}
 	std::fflush(stdout);
+	NextUse(e, s, 2, "verb", k, ref_after, ref_next);
 	(void)e.Save(s);
 	sslm_seq_release(s);
 	return g_failures == failures_before;
 }
 
+// Fix round 4: one trial of the damped decode step's own allocations. The setup's order-3 state, then one
+// damped decode at `order` (2 re-keys, 3 does not) with allocation k failing, then the next use. The failed
+// decode's own status and resting state are main's and are not asserted (code review re-check, non-blocking:
+// main's decode clears ready_for_logits before the finish).
+bool DecodeTrial(Engine& e, int32_t order, long k, const std::vector<uint8_t>& ref_after, const Decoded& ref_next) {
+	const int failures_before = g_failures;
+	sslm_seq s = e.Setup();
+	if (!s) return false;
+	const sslm_decode_params p = e.Damped(order);
+	int32_t out = -100;
+	Arm(k);
+	const sslm_status st = sslm_decode_step_v2(e.m, &s, 1, &p, e.ws, &out);
+	g_armed = false;
+	std::printf("[decode@%d k %ld] damped decode on an order-3 state, allocation #%ld failing (fired %d, %ld "
+	            "allocations): status %d token %d\n", order, k, k, g_fired.load() ? 1 : 0, g_index.load(),
+	            static_cast<int>(st), out);
+	std::fflush(stdout);
+	const std::string tag = "decode@" + std::to_string(order);
+	NextUse(e, s, order, tag.c_str(), k, ref_after, ref_next);
+	(void)e.Save(s);
+	sslm_seq_release(s);
+	return g_failures == failures_before;
+}
+
+template <typename F>
+void RunTrial(const char* tag, long k, std::vector<std::string>* failed, F&& body) {
+	std::fflush(stdout);
+#if !defined(_WIN32)
+	const pid_t pid = fork();
+	if (pid == 0) {
+		const bool pass = body();
+		std::fflush(stdout);
+		std::_Exit(pass ? 0 : 1);
+	}
+	int status = 0;
+	const bool waited = pid > 0 && waitpid(pid, &status, 0) == pid;
+	const bool pass = waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+	++g_checks;
+	if (!pass) {
+		++g_failures;
+		if (waited && WIFSIGNALED(status))
+			std::printf("FAIL [%s k %ld] the trial died with signal %d\n", tag, k, WTERMSIG(status));
+		else if (waited && WIFEXITED(status) && WEXITSTATUS(status) != 1)
+			std::printf("FAIL [%s k %ld] the trial exited %d (a sanitizer report, above)\n", tag, k, WEXITSTATUS(status));
+	}
+#else
+	const bool pass = body();
+#endif
+	if (!pass) failed->push_back(std::string(tag) + ":" + std::to_string(k));
+}
+
 }  // namespace
 
 int main() {
-	std::vector<long> failed;
+	std::vector<std::string> failed;
 	long trials = 0;
 	{
 		Engine e;
@@ -299,58 +413,63 @@ int main() {
 			std::printf("schema fast-decode alloc sweep: setup failed (%d failures)\n", g_failures);
 			return 1;
 		}
-		// The never-failed reference, and the number of allocations one verb@2 call makes.
+		// The verb sweep's never-failed reference, and the number of allocations one verb@2 call makes.
 		std::vector<uint8_t> ref_after;
+		Decoded ref_next;
 		long total = 0;
 		{
 			sslm_seq s = e.Setup();
 			if (!s) return 1;
 			int32_t count = -1;
-			g_fail_at = -1;
-			g_index = 0;
-			g_armed = true;
+			Arm(-1);
 			const sslm_status st = e.Verb(s, 2, &count);
 			g_armed = false;
 			total = g_index.load();
 			CHECK_MSG(st == SSLM_OK && count == 1, "reference verb@2: status %d count %d", static_cast<int>(st), count);
 			ref_after = e.Save(s);
 			const AntiLm a = ReadAntiLm(ref_after);
-			std::printf("reference: verb@2 on an order-3 state makes %ld allocations; after it, order %d history %s\n",
-			            total, a.order, Str(a.hist).c_str());
+			ref_next = DecodeN(e, s, 2);
+			std::printf("reference: verb@2 on an order-3 state makes %ld allocations; after it, order %d history %s; "
+			            "the next decodes %s\n", total, a.order, Str(a.hist).c_str(), Str(ref_next).c_str());
 			sslm_seq_release(s);
 		}
 		CHECK_MSG(total > 0, "the verb call made no allocation to fail");
 		for (long k = 0; k < total; ++k) {
 			++trials;
-			std::fflush(stdout);
-#if !defined(_WIN32)
-			const pid_t pid = fork();
-			if (pid == 0) {
-				long seen = 0;
-				const bool pass = Trial(e, k, ref_after, &seen);
-				std::fflush(stdout);
-				std::_Exit(pass ? 0 : 1);
+			RunTrial("verb", k, &failed, [&] { return Trial(e, k, ref_after, ref_next); });
+		}
+		// Fix round 4: the damped decode step's own allocations, at a re-keying order and at the live one.
+		for (int32_t order : {2, 3}) {
+			std::vector<uint8_t> dref_after;
+			Decoded dref_next;
+			long dtotal = 0;
+			{
+				sslm_seq s = e.Setup();
+				if (!s) return 1;
+				const sslm_decode_params p = e.Damped(order);
+				int32_t out = -100;
+				Arm(-1);
+				const sslm_status st = sslm_decode_step_v2(e.m, &s, 1, &p, e.ws, &out);
+				g_armed = false;
+				dtotal = g_index.load();
+				CHECK_MSG(st == SSLM_OK && out >= 0, "reference decode@%d: status %d token %d", order,
+				          static_cast<int>(st), out);
+				dref_after = e.Save(s);
+				dref_next = DecodeN(e, s, order);
+				std::printf("reference: decode@%d on an order-3 state makes %ld allocations (token %d); the next "
+				            "decodes %s\n", order, dtotal, out, Str(dref_next).c_str());
+				sslm_seq_release(s);
 			}
-			int status = 0;
-			const bool waited = pid > 0 && waitpid(pid, &status, 0) == pid;
-			const bool pass = waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
-			++g_checks;
-			if (!pass) {
-				++g_failures;
-				failed.push_back(k);
-				if (waited && WIFSIGNALED(status))
-					std::printf("FAIL [k %ld] the trial died with signal %d\n", k, WTERMSIG(status));
-				else if (waited && WIFEXITED(status) && WEXITSTATUS(status) != 1)
-					std::printf("FAIL [k %ld] the trial exited %d (a sanitizer report, above)\n", k, WEXITSTATUS(status));
+			CHECK_MSG(dtotal > 0, "decode@%d made no allocation to fail", order);
+			const std::string tag = "decode@" + std::to_string(order);
+			for (long k = 0; k < dtotal; ++k) {
+				++trials;
+				RunTrial(tag.c_str(), k, &failed, [&] { return DecodeTrial(e, order, k, dref_after, dref_next); });
 			}
-#else
-			long seen = 0;
-			if (!Trial(e, k, ref_after, &seen)) failed.push_back(k);
-#endif
 		}
 	}
 	std::string list;
-	for (size_t i = 0; i < failed.size(); ++i) list += (i ? "," : "") + std::to_string(failed[i]);
+	for (size_t i = 0; i < failed.size(); ++i) list += (i ? "," : "") + failed[i];
 	std::printf("schema fast-decode alloc sweep: %ld trials, %zu failed {%s}; %d checks, %d failures\n", trials,
 	            failed.size(), list.c_str(), g_checks, g_failures);
 	return failed.empty() && g_failures == 0 ? 0 : 1;
