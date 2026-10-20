@@ -1117,8 +1117,9 @@ chain is that token, then the chain of the state it leads to. The table costs
     `SSLM_OK`. In every partial case the next `decode_step` runs the finish
     only. What the next `decode_step` does at h = 0 depends on whether a token
     is pending: with one pending it must embed it, so it returns the same limit
-    status; with none (the rest state a partial admission leaves) it runs the
-    finish only and returns `SSLM_OK` with a token.
+    status; with none (the sequence is already ready for logits, as a partial
+    admission leaves it) it runs the finish only and returns `SSLM_OK` with a
+    token, as `decode_step` does on a ready sequence without jump-forward.
   - **Decode parameters.** NULL means greedy. Greedy parameters leave the
     damped-greedy anti-LM state untouched. Damped parameters create or re-key
     the state exactly as `sslm_decode_step_v2` would with the same parameters,
