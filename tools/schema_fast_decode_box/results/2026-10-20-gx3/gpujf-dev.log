@@ -1,0 +1,4 @@
+prompt tokens 41, schema potion_shop_order (index 0), whole-token depth, logits head on the device, 15 pairs after 1 warm-up
+off: tokens 28 stop accepting submits 27 | query wall 342.159 [340.764, 344.293] ms gpu 174.535 ms | per token wall 12.220 gpu 6.233 ms | digest 7e46330608d11704 all_equal 1
+on: tokens 21 stop accepting submits 10 | query wall 201.025 [200.564, 201.738] ms gpu 109.987 ms | per token wall 9.573 gpu 5.237 ms | digest 8ad5ea7961656cef all_equal 1
+off / on wall: 1.7066 [1.6927, 1.7112]

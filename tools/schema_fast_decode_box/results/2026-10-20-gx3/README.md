@@ -129,3 +129,25 @@ off / on wall = 2.660 [2.646, 2.665].
   device head, otherwise on the host through `LogitsSiteParallel`) and only then applies the schema mask
   (`ApplyMaskAndArgmax`). It does not take the masked finish's legal-rows-only path, so the GPU gets none of M1's saving
   at a finish; with a device head (as the packaged example maps it) the host part of a finish is about 1.35 ms.
+
+### The same comparison with the logits head on the device (`gpujf-dev.*`)
+
+The packaged example maps the model with `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`, so each finish computes the logits row on
+the device. The bench's `--device-head` flag maps it the same way; everything else is as above (bench sha256 `bf995c70…`,
+`run-gpujf-dev.ps1`).
+
+| | off, head on host | on, head on host | off, head on device | on, head on device |
+|---|---|---|---|---|
+| query wall ms [interval] | 645.4 [644.4, 646.6] | 242.8 [242.3, 243.9] | 342.2 [340.8, 344.3] | 201.0 [200.6, 201.7] |
+| query gpu_busy ms | 176.6 | 110.2 | 174.5 | 110.0 |
+| layer submissions | 27 | 10 | 27 | 10 |
+| tokens | 28 | 21 | 28 | 21 |
+| per token wall ms | 23.05 | 11.56 | 12.22 | 9.57 |
+| digest | `7e46330608d11704` | `8ad5ea7961656cef` | `7e46330608d11704` | `8ad5ea7961656cef` |
+
+off / on wall: 2.660 [2.646, 2.665] with the head on the host; 1.707 [1.693, 1.711] with the head on the device.
+
+With the head on the device, a token's finish no longer pays the host's full-vocabulary logits row (about 11 ms), so the
+off arm drops from 645 to 342 ms and jump-forward's lead narrows to 1.71x. What it still saves at this residency is 17
+layer submissions (about 3.7 ms each, GX.3 above), the forced tokens' finishes on the device, and 7 tokens of the stream.
+The tokens are the same at both residencies.

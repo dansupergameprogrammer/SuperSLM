@@ -19,7 +19,9 @@
 // layer-loop submissions (the finish's logits are not in it), submissions, tokens, ms per token, the token stream and
 // its FNV-1a 64 digest. Per pair, R = off / on wall.
 //
-// Usage: sslm_schema_fast_decode_gpu_jf_bench <model.sslm> [--pairs 15] [--warmup 1] [--max-new 64] [--json PATH]
+// Usage: sslm_schema_fast_decode_gpu_jf_bench <model.sslm> [--pairs 15] [--warmup 1] [--max-new 64] [--device-head] [--json PATH]
+// --device-head maps the model with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE (the packaged example's residency): each finish
+// computes the logits row on the device. Without it the host computes it (LogitsSiteParallel over all V rows).
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -125,6 +127,9 @@ int main(int argc, char** argv) {
 	const int warmup = std::atoi(Arg(argc, argv, "--warmup", "1"));
 	const int max_new = std::atoi(Arg(argc, argv, "--max-new", "64"));
 	const char* json_path = Arg(argc, argv, "--json", nullptr);
+	bool device_head = false;
+	for (int i = 2; i < argc; ++i)
+		if (std::strcmp(argv[i], "--device-head") == 0) device_head = true;
 
 	// The artifact, once, aligned: the CPU ABI maps it (tokenizer, forced table) and the GPU maps its view.
 	std::FILE* f = std::fopen(argv[1], "rb");
@@ -190,6 +195,7 @@ int main(int argc, char** argv) {
 
 	GpuContextConfig cfg{};
 	GpuResidencyConfig rcfg{};
+	if (device_head) rcfg.flags |= SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE;
 	SslmGpuContext* ctx = nullptr;
 	Ok(sslm_gpu_context_create(cfg, &ctx), "sslm_gpu_context_create");
 	SslmGpuModelHandle* model = nullptr;
@@ -335,15 +341,17 @@ int main(int argc, char** argv) {
 		       ",\"per_token_gpu_busy_ms\":" + JStat(gt) + ",\"digest\":\"" + d + "\",\"streams_all_equal\":" +
 		       (equal ? "true" : "false") + ",\"stream\":" + JIds(runs.front().stream) + "}";
 	};
-	std::printf("prompt tokens %zu, schema potion_shop_order (index %zu), whole-token depth, %d pairs after %d warm-up\n",
-	            prompt.size(), schema_index, pairs, warmup);
+	std::printf("prompt tokens %zu, schema potion_shop_order (index %zu), whole-token depth, logits head on the %s, %d pairs after "
+	            "%d warm-up\n",
+	            prompt.size(), schema_index, device_head ? "device" : "host", pairs, warmup);
 	const std::string ja = arm("off", offs), jb = arm("on", ons);
 	const Stat r = Summarize(ratio);
 	std::printf("off / on wall: %.4f [%.4f, %.4f]\n", r.median, r.lo, r.hi);
 	if (json_path) {
 		std::FILE* o = std::fopen(json_path, "wb");
 		if (!o) return 4;
-		const std::string js = "{\"mode\":\"gpu-jf\",\"pairs\":" + std::to_string(pairs) + ",\"warmup\":" +
+		const std::string js = std::string("{\"mode\":\"gpu-jf\",\"logits_head\":\"") + (device_head ? "device" : "host") +
+		                       "\",\"pairs\":" + std::to_string(pairs) + ",\"warmup\":" +
 		                       std::to_string(warmup) + ",\"prompt_tokens\":" + std::to_string(prompt.size()) +
 		                       ",\"prompt\":" + JIds(prompt) + ",\"arms\":[" + ja + "," + jb + "],\"ratio_off_over_on\":" +
 		                       JStat(r) + "}";

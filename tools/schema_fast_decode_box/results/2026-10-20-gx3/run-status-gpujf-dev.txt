@@ -1,0 +1,4 @@
+[2026-10-20T12:48:41.9062700-07:00] start pid 7000; source D:\SuperSLM\.worktrees\sfd-arm-36fe4b37 at 36fe4b37d6d6cd715182884d6b22d43a68682cdb (+ D:\SuperSLM\.worktrees\sfd-results\tools\schema_fast_decode_gpu_jf_bench.cpp)
+[2026-10-20T12:48:51.0527921-07:00] built: sha256 bf995c704d43d6b4dd59a581f2622ea53b87d7600d38d2cc128ff2044e6ef4cf
+[2026-10-20T12:48:51.6331324-07:00] model sha256 9ccf7e378bbe47aa0ffd3810aa82875926cbe51af1bdfa08393c3fae657463da
+[2026-10-20T12:49:15.0812175-07:00] end PASS
