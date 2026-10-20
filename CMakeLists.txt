@@ -553,6 +553,16 @@ foreach(_sslm_dt_bench ${_sslm_dt_benches})
 	endif()
 endforeach()
 
+# Schema fast-decode plan (rev 1.2.1) §9 (J1) and §10 (B1-B3): the jump-forward and masked-finish
+# bench, on the production library and the public C ABI only.
+add_executable(sslm_schema_fast_decode_bench tools/schema_fast_decode_bench.cpp)
+target_link_libraries(sslm_schema_fast_decode_bench PRIVATE superslm)
+if(MSVC)
+	target_compile_options(sslm_schema_fast_decode_bench PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_schema_fast_decode_bench PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
 add_executable(sslm_bench_prefill tools/t2147_chunk_batched_pins.cpp)
 target_link_libraries(sslm_bench_prefill PRIVATE superslm)
 if(MSVC)
