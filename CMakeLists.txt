@@ -85,21 +85,15 @@ endif()
 # (src/bad_alloc_wrap.h #ifdef-gates it out entirely -- Layer 1 stays
 # independently embeddable, D-SLM13).
 if(BUILD_TESTING)
-# Schema fast-decode plan (rev 1.2.1) §9, slices M1 and J1: the red suite
-# (tests/test_schema_fast_decode.cpp) runs inside every full-suite binary. Until M1 and J1 land, the
-# surface it calls is defined by tests/schema_fast_decode/sfd_red_stubs.cpp (no behaviour, so every
-# cell is red at its assertion). The builder defines the real symbols in the library and turns this
-# option OFF in the same commit; left ON beside them, the link refuses the duplicate symbols.
-option(SUPERSLM_SFD_RED_STUBS "Link the schema fast-decode red suite's no-behaviour stubs (until M1/J1 land)" ON)
+# Schema fast-decode plan (rev 1.2.1) §9, slices M1 and J1: the suite
+# (tests/test_schema_fast_decode.cpp) runs inside every full-suite binary, against the real M1/J1
+# symbols and the §11.0 seams the test libraries define (src/sslm_abi.cpp). The red round's
+# no-behaviour stubs (and their SUPERSLM_SFD_RED_STUBS option) were removed when M1 and J1 landed.
 function(superslm_add_schema_fast_decode_cells _sfd_target)
-	target_sources(${_sfd_target} PRIVATE tests/test_schema_fast_decode.cpp
-		tests/schema_fast_decode/sfd_red_stubs.cpp)
+	target_sources(${_sfd_target} PRIVATE tests/test_schema_fast_decode.cpp)
 	target_include_directories(${_sfd_target} PRIVATE tests)
 	# The source tree, for cell 9.2's reads of the ABI inventory and the project version.
 	target_compile_definitions(${_sfd_target} PRIVATE SFD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-	if(SUPERSLM_SFD_RED_STUBS)
-		target_compile_definitions(${_sfd_target} PRIVATE SUPERSLM_SFD_RED_STUBS)
-	endif()
 endfunction()
 add_library(superslm_test_injection STATIC ${SUPERSLM_CORE_SOURCES})
 target_include_directories(superslm_test_injection PUBLIC include)

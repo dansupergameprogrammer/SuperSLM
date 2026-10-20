@@ -1534,6 +1534,31 @@ SslmForwardStatus LogitsSiteParallel(const int8_t* final_codes, size_t hidden_si
                                      int64_t* wide_logits, int32_t* out_logits,
                                      const sslm_parallel_for* pf);
 
+// Schema fast-decode plan (rev 1.2.1) §4.3, slice M1: the static exactness predicate of the
+// legal-row finish. True iff hidden_size * 16384 < INT32_MAX (|int8 * int8| <= 16384), i.e. iff
+// hidden_size <= 131,071. Under it no head row's dot can fall outside int32, so NarrowRowChecked
+// never rejects a row and no legal logit equals INT32_MIN; skipping the illegal rows then cannot
+// turn a whole-row rejection into a token. sslm_model_map computes each model's flag from it once.
+bool LegalRowFinishExact(size_t hidden_size) noexcept;
+
+// Schema fast-decode plan §4.1 steps 1-2 and §4.2, slice M1: the finish's logits over the legal rows
+// only. For each id in legal_ids[0, n) (ascending, each < vocab_size): wide_logits[id] =
+// GemmInt8AccumulateRow over head row `id` (the same dot LogitsSite computes for that row), then
+// out_logits[id] = that value through NarrowRowChecked. No other position of either array is
+// written; the decode step's maskers overwrite every illegal position with INT32_MIN before
+// anything reads the row (the schema's mask page equals its CSR row).
+// - Threading: serial when `pf` is null, `pf->run` is null or `pf->max_tasks <= 1`. Otherwise the
+//   legal list is split by SplitColumns over n at alignment 64 with no minimum work, and `run` is
+//   called iff n >= 1 (a one-task call included), as LogitsSiteParallel calls it for any V.
+// - n = 0 computes nothing, calls no hook, and returns Ok.
+// - A hook that omits, repeats or invents a task index returns ParallelForIncomplete and writes
+//   nothing to `out_logits`. Narrowing runs serially after `run` returns.
+// No heap allocation. Not exported (LogitsSiteParallel's note on the export slot applies).
+SslmForwardStatus LogitsSiteLegalRows(const int8_t* final_codes, size_t hidden_size,
+                                      const int8_t* head_weights, size_t vocab_size,
+                                      const uint32_t* legal_ids, size_t n, int64_t* wide_logits,
+                                      int32_t* out_logits, const sslm_parallel_for* pf);
+
 // C16 (master plan §6.8 row C16; §6.4 step 16): the pinned argmax
 // tie-break -- LOWEST token index. Caller-ensures `n >= 1` (the same
 // caller-ensures convention as FloorDivI64/ShiftByMax -- an empty logit row

@@ -3527,6 +3527,65 @@ SslmForwardStatus LogitsSiteParallel(const int8_t* final_codes, size_t hidden_si
 	return NarrowRowChecked(wide_logits, vocab_size, out_logits);
 }
 
+// Schema fast-decode plan §4.3 (forward_sites.h): |dot| <= hidden * 16384 must stay below INT32_MAX.
+bool LegalRowFinishExact(size_t hidden_size) noexcept {
+	return hidden_size <= static_cast<size_t>(INT32_MAX) / size_t{16384};
+}
+
+namespace {
+
+// Call-local state of one LogitsSiteLegalRows call, as LogitsTaskCtx is for LogitsSiteParallel.
+struct LegalRowsTaskCtx {
+	const int8_t* final_codes;
+	size_t hidden_size;
+	const int8_t* head_weights;
+	const uint32_t* legal_ids;
+	size_t n;
+	int64_t* wide_logits;
+	size_t rows_per_task;
+};
+
+void LegalRowsDots(const LegalRowsTaskCtx& c, size_t begin, size_t end) noexcept {
+	for (size_t j = begin; j < end; ++j) {
+		const size_t id = c.legal_ids[j];
+		GemmInt8AccumulateRow(c.final_codes, c.head_weights + id * c.hidden_size, c.hidden_size, 1,
+		                      c.wide_logits + id);
+	}
+}
+
+void LegalRowsTask(void* ctx, size_t task_index) noexcept {
+	const LegalRowsTaskCtx& c = *static_cast<const LegalRowsTaskCtx*>(ctx);
+	const size_t begin = task_index * c.rows_per_task;
+	LegalRowsDots(c, begin, std::min(c.n, begin + c.rows_per_task));
+}
+
+}  // namespace
+
+SslmForwardStatus LogitsSiteLegalRows(const int8_t* final_codes, size_t hidden_size,
+                                      const int8_t* head_weights, size_t vocab_size,
+                                      const uint32_t* legal_ids, size_t n, int64_t* wide_logits,
+                                      int32_t* out_logits, const sslm_parallel_for* pf) {
+	(void)vocab_size;  // the caller's ids are each < vocab_size (forward_sites.h)
+	if (n == 0) return SslmForwardStatus::Ok;
+	LegalRowsTaskCtx ctx{final_codes, hidden_size, head_weights, legal_ids, n, wide_logits, n};
+	if (pf == nullptr || pf->run == nullptr || pf->max_tasks <= 1) {
+		LegalRowsDots(ctx, 0, n);
+	} else {
+		// §4.2: LogitsSiteParallel's split and rule for calling `run`, over the legal list.
+		const ColumnSplit split = SplitColumns(n, /*work=*/0, static_cast<size_t>(pf->max_tasks),
+		                                       /*align=*/64, /*min_work=*/0);
+		ctx.rows_per_task = split.rows_per_task;
+		const SslmForwardStatus st = RunExactlyOnce(*pf, split.task_count, &LegalRowsTask, &ctx);
+		if (st != SslmForwardStatus::Ok) return st;
+	}
+	for (size_t j = 0; j < n; ++j) {
+		const size_t id = legal_ids[j];
+		const SslmForwardStatus st = NarrowRowChecked(wide_logits + id, 1, out_logits + id);
+		if (st != SslmForwardStatus::Ok) return st;
+	}
+	return SslmForwardStatus::Ok;
+}
+
 // C16's pinned tie-break (master plan §6.8 row C16, D-SLM35, T-1389): scans
 // left to right and keeps the running maximum's FIRST index -- a later
 // element strictly greater replaces it; a later element merely EQUAL to the

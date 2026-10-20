@@ -181,3 +181,24 @@ SUPERSLM_API sslm_status sslm_seq_kv_stats(sslm_seq seq, sslm_seq_kv_stats_out* 
  * sslm_seq_restore is this verb with a NULL prefix. */
 SUPERSLM_API sslm_status sslm_seq_restore_shared(sslm_model model, sslm_kv_pool* pool, const void* blob, size_t size,
                                     sslm_prefix prefix_or_null, sslm_seq* out, uint32_t* out_shared_pages);
+/* Schema jump-forward (1.15.0). The forced chain of a schema-bound sequence's current walk state:
+ * from a state where the schema admits exactly one byte string before its next choice, the tokens
+ * that spell it, as the forced-next table built at model map gives them (docs/api.md). Read-only:
+ * writes up to `cap` ids (out_ids may be NULL when cap == 0); *out_count = the full chain length
+ * (may exceed cap), 0 when no schema is bound or the state is unforced; *out_accepting = 1 iff the
+ * walk state is accepting. Changes nothing, including bind eligibility. SSLM_ARTIFACT_REJECTED when
+ * the model has no table (an artifact without SCM1 or TOK1). */
+SUPERSLM_API sslm_status sslm_seq_forced_tokens(sslm_model model, sslm_seq seq,
+                                                int32_t* out_ids, int32_t cap, int32_t* out_count,
+                                                int32_t* out_accepting);
+/* Admits the pending choice token (one decode_step produced and has not yet embedded), if any, then
+ * forced-chain tokens, up to `chunk_budget` tokens in all, in one batched layer pass through the
+ * prefill path; writes the admitted *forced* ids to out_forced (cap >= chunk_budget required) and
+ * their count to *out_forced_count. `params` (NULL = greedy) is validated exactly as
+ * sslm_decode_step_v2 validates it; damped params feed the forced tokens to the anti-LM history.
+ * A no-op (OK, count 0) when no schema is bound or the state is unforced. A limit admits a prefix
+ * and returns the limit status, as sslm_prefill does. The host loop: call this until
+ * sslm_seq_forced_tokens reports 0, then decode_step (docs/api.md gives the contract). */
+SUPERSLM_API sslm_status sslm_seq_jump_forward(sslm_model model, sslm_seq seq, int32_t chunk_budget,
+                                               const sslm_decode_params* params, sslm_workspace ws,
+                                               int32_t* out_forced, int32_t cap, int32_t* out_forced_count);
