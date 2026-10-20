@@ -111,7 +111,7 @@ def fp_carrier_obj(tmp_path_factory):
 @pytest.fixture(scope="session")
 def poisoned_archive(real_coff_archive, fp_carrier_obj, tmp_path_factory):
     """The forty-seventh population's own must-reject (D-SLM5053): the real
-    archive plus the carrier appended last (object position 21 of 21)."""
+    archive plus the carrier appended last (object position 22 of 22)."""
     out_dir = tmp_path_factory.mktemp("t2380_poisoned")
     out_path = str(out_dir / "poisoned.lib")
     af.build_poisoned_archive(real_coff_archive, fp_carrier_obj, out_path, str(out_dir / "work"))
@@ -121,20 +121,21 @@ def poisoned_archive(real_coff_archive, fp_carrier_obj, tmp_path_factory):
 @pytest.fixture(scope="session")
 def fp_at_k_archives(real_coff_archive, fp_carrier_obj, tmp_path_factory):
     """The forty-eighth population's own must-reject family (D-SLM5068):
-    twenty-one real archives, one per object-member position k in 1..21, each
-    holding the same twenty real objects plus the carrier at position k
-    (k=21 is poisoned_archive's own construction, built independently here
+    twenty-two real archives, one per object-member position k in 1..22, each
+    holding the same twenty-one real objects plus the carrier at position k
+    (k=22 is poisoned_archive's own construction, built independently here
     rather than shared, so this fixture stands alone). Built once per
-    session -- twenty-one real lib.exe invocations."""
+    session -- twenty-two real lib.exe invocations."""
     n_objects = len(af.raw_object_payloads(real_coff_archive))
     # Decode threading D0 added src/forward/parallel_split.cpp: 18 real objects from D0 on (was 17),
     # so the carrier sweep is 1..19 and each fp_at_k.lib holds 22 members / 19 objects. The paged-KV page module
     # added src/kv_pages.cpp: 19 real objects from then on, a carrier sweep of 1..20 and 23 members / 20 objects.
     # GPU paged KV G3 added src/gpu/gpu_inflight_registry.cpp: 20 real objects from then on, a carrier sweep of 1..21 and 24 members / 21 objects.
-    assert n_objects == 20, "expected 20 real objects, found {}".format(n_objects)
+    # The precached-prefix blob codec added src/spx1_format.cpp: 21 real objects from then on, a carrier sweep of 1..22 and 25 members / 22 objects.
+    assert n_objects == 21, "expected 21 real objects, found {}".format(n_objects)
     out_dir = tmp_path_factory.mktemp("t2380_fp_at_k")
     archives = {}
-    for k in range(1, n_objects + 2):  # 1..21
+    for k in range(1, n_objects + 2):  # 1..22
         out_path = str(out_dir / ("fp_at_%02d.lib" % k))
         af.build_archive_with_extra_member_at(
             real_coff_archive, fp_carrier_obj, k, out_path, str(out_dir / ("work_%02d" % k)))
@@ -145,15 +146,15 @@ def fp_at_k_archives(real_coff_archive, fp_carrier_obj, tmp_path_factory):
 # ===========================================================================
 # Fixture verification -- confirms every fp_at_k.lib genuinely carries the
 # carrier at its own claimed position and nowhere else, and genuinely has
-# 24 members/21 objects. Not xfail (uses only archive_fixtures.py's own
+# 25 members/22 objects. Not xfail (uses only archive_fixtures.py's own
 # fixture-verification reader, never the production surface).
 # ===========================================================================
 
 def test_fp_at_k_fixtures_place_carrier_at_the_claimed_position(fp_at_k_archives):
     for k, path in fp_at_k_archives.items():
         total, counts = af.raw_member_counts(path)
-        assert total == 24 and counts.get("OBJECT") == 21, (
-            "fp_at_{:02d}.lib: expected 24 members / 21 objects, got {} / {} "
+        assert total == 25 and counts.get("OBJECT") == 22, (
+            "fp_at_{:02d}.lib: expected 25 members / 22 objects, got {} / {} "
             "({})".format(k, total, counts.get("OBJECT"), counts)
         )
         objs = af.raw_object_payloads(path)
@@ -172,9 +173,9 @@ def test_fp_at_k_fixtures_place_carrier_at_the_claimed_position(fp_at_k_archives
 def test_poisoned_archive_fixture_matches_forty_seventh_population(poisoned_archive):
     """Fixture verification: poisoned.lib is exactly the forty-seventh
     population's own claimed construction, measured (D-SLM5069's own
-    correction): 24 members / 21 objects, the carrier last."""
+    correction): 25 members / 22 objects, the carrier last."""
     total, counts = af.raw_member_counts(poisoned_archive)
-    assert total == 24 and counts.get("OBJECT") == 21, (total, counts)  # 23 / 20 before src/gpu/gpu_inflight_registry.cpp; 22 / 19 before src/kv_pages.cpp; 21 / 18 before decode threading D0
+    assert total == 25 and counts.get("OBJECT") == 22, (total, counts)  # 24 / 21 before src/spx1_format.cpp; 23 / 20 before src/gpu/gpu_inflight_registry.cpp; 22 / 19 before src/kv_pages.cpp; 21 / 18 before decode threading D0
     objs = af.raw_object_payloads(poisoned_archive)
     assert objs[-1][0] == "fp_carrier.obj", objs[-1][0]
 
@@ -227,12 +228,12 @@ def test_pop47_must_reject_poisoned_archive_composition(poisoned_archive, tmp_pa
 
 # ===========================================================================
 # Population 48 (D-SLM5068) -- THE CELL THAT MATTERS MOST. Membership,
-# swept at resolving power Δn = 1 across all twenty-one archive positions.
+# swept at resolving power Δn = 1 across all twenty-two archive positions.
 #
-# Discriminating coordinate: the archive member position k in 1..21 at
+# Discriminating coordinate: the archive member position k in 1..22 at
 # which the carrier sits.
 # Must-accept, fixed across every k: the real, unmodified archive.
-# Must-reject, for every k: fp_at_k.lib -- twenty-one object members, exactly one
+# Must-reject, for every k: fp_at_k.lib -- twenty-two object members, exactly one
 # classified REJECT, wherever k places it.
 # Graded observable: whether the job's own exit code reflects the
 # classified REJECT AT POSITION k, for every k -- not whether it reflects
@@ -245,9 +246,9 @@ def test_pop47_must_reject_poisoned_archive_composition(poisoned_archive, tmp_pa
 # missing.
 # ===========================================================================
 
-@pytest.mark.parametrize("k", list(range(1, 22)))  # 1..20 before src/gpu/gpu_inflight_registry.cpp; 1..19 before src/kv_pages.cpp; 1..18 before decode threading D0
+@pytest.mark.parametrize("k", list(range(1, 23)))  # 1..21 before src/spx1_format.cpp; 1..20 before src/gpu/gpu_inflight_registry.cpp; 1..19 before src/kv_pages.cpp; 1..18 before decode threading D0
 def test_pop48_membership_resolves_carrier_at_every_position(k, fp_at_k_archives, tmp_path):
-    """Must-reject, position k of 21: fp_at_k.lib must make the job exit
+    """Must-reject, position k of 22: fp_at_k.lib must make the job exit
     nonzero, whichever position k places the carrier at. A driver that
     silently drops object-member position k from classification -- byte-
     identical to the honest driver in every other respect -- exits 0 on
@@ -265,8 +266,8 @@ def test_pop48_membership_resolves_carrier_at_every_position(k, fp_at_k_archives
 
 def test_pop48_resolving_power_is_stated_and_matches_the_sweep():
     """Per design Sec4.1's resolving-power clause (D-SLM5066): this
-    population's own resolving power is Δn = 1, swept across all twenty-one
-    positions the real archive's own member count (20 clean objects + 1
+    population's own resolving power is Δn = 1, swept across all twenty-two
+    positions the real archive's own member count (21 clean objects + 1
     carrier) admits -- pinned here as a literal fact about the parametrize
     range above, so a future edit that narrows the sweep (e.g. back to a
     single pinned k) is caught by this cell rather than silently reducing
@@ -276,8 +277,8 @@ def test_pop48_resolving_power_is_stated_and_matches_the_sweep():
     assert len(parametrize_markers) == 1, markers
     argname, argvalues = parametrize_markers[0].args
     assert argname == "k"
-    assert list(argvalues) == list(range(1, 22)), (
+    assert list(argvalues) == list(range(1, 23)), (
         "the forty-eighth population's own sweep no longer covers all "
-        "twenty-one positions 1..21 -- resolving power narrowed from Δn = 1 "
+        "twenty-two positions 1..22 -- resolving power narrowed from Δn = 1 "
         "swept across every position to something coarser"
     )

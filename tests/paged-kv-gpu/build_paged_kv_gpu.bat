@@ -85,7 +85,7 @@ cl /c %CLF% /Fo"%OUT%\cpu\\" "%ENG%\src\artifact.cpp" "%ENG%\src\sha256.cpp" "%E
     "%ENG%\src\model.cpp" "%ENG%\src\intmath.cpp" "%ENG%\src\silu_lut.cpp" "%ENG%\src\matmul.cpp" ^
     "%ENG%\src\proof_manifest.cpp" "%ENG%\src\trace_hook.cpp" "%ENG%\src\forward\checked_chain_funnel.cpp" ^
     "%ENG%\src\forward\forward_sites.cpp" "%ENG%\src\forward\parallel_split.cpp" "%ENG%\src\gpu\gpu_inflight_registry.cpp" "%ENG%\src\decode_digest.cpp" ^
-    "%ENG%\src\kv_pages.cpp" "%ENG%\src\sslm_abi.cpp" "%ENG%\src\damped_greedy_antilm.cpp" "%ENG%\src\damped_greedy_topk.cpp" ^
+    "%ENG%\src\kv_pages.cpp" "%ENG%\src\spx1_format.cpp" "%ENG%\src\sslm_abi.cpp" "%ENG%\src\damped_greedy_antilm.cpp" "%ENG%\src\damped_greedy_topk.cpp" ^
     "%ENG%\src\damped_greedy_phaseD.cpp" "%ENG%\src\damped_greedy_phaseD_loop.cpp" > "%OUT%\cpu\build.log" 2>&1
 if errorlevel 1 ( type "%OUT%\cpu\build.log" & echo ENGINE CPU BUILD FAILED & exit /b 3 )
 call :mklib cpu
@@ -147,6 +147,12 @@ call :exe g1e_cell_10_3 plain G6 "g1e_cell_10_3" ""
 call :exe g1e_cell_10_5 plain G6 "g1e_cell_10_5" ""
 call :exe g1e_cell_10_7 plain G6 "g1e_cell_10_7" ""
 call :exe pkvg_g6_decode_timing plain G6 "pkvg_g6_decode_timing" ""
+call :exe pcg_cell_format plain F2 "..\precache-gpu\pcg_cell_format" ""
+call :exe pcg_cell_pool plain F2 "..\precache-gpu\pcg_cell_pool" ""
+call :exe pcg_cell_busy plain F2 "..\precache-gpu\pcg_cell_busy" ""
+call :exe pcg_cell_faults alloc F2 "..\precache-gpu\pcg_cell_faults" ""
+call :exe pcg_cell_schema plain F2 "..\precache-gpu\pcg_cell_schema" ""
+call :exe pcg_cell_budget_snapshot plain F2 "..\precache-gpu\pcg_cell_budget_snapshot" ""
 :only_old
 if defined OLDTREE call :oldreader
 echo PKVG BUILD: %NLINKED% linked, %NRED% red by link, %NCOMPILE% red by compile or unexpected link failure
@@ -200,19 +206,21 @@ set "DFLAG="
 if not "%D%"=="" set "TAG=%D:#=_%"
 if not "%D%"=="" set "D=%D:#==%"
 if not "%D%"=="" set "DFLAG=/D%D%"
+rem A source outside this folder (..\precache-gpu\NAME) keeps its object and log in ODIR under its file name.
+for %%F in ("%SRC%") do set "OBJN=%%~nF"
 set "ODIR=%OUT%\cells\%CFG%_%TAG%"
 if not exist "%ODIR%" mkdir "%ODIR%"
-if exist "%ODIR%\%SRC%.obj" goto :cell_have
-cl /c %CLF% !DEF_%CFG%! %DFLAG% /Fo"%ODIR%\%SRC%.obj" "%HEREDIR%%SRC%.cpp" > "%ODIR%\%SRC%.log" 2>&1
+if exist "%ODIR%\%OBJN%.obj" goto :cell_have
+cl /c %CLF% !DEF_%CFG%! %DFLAG% /Fo"%ODIR%\%OBJN%.obj" "%HEREDIR%%SRC%.cpp" > "%ODIR%\%OBJN%.log" 2>&1
 if errorlevel 1 (
     echo [%STEP%] %EXE%: RED BY COMPILE in %SRC%.cpp
-    findstr /R /C:"error C[0-9]*" "%ODIR%\%SRC%.log"
+    findstr /R /C:"error C[0-9]*" "%ODIR%\%OBJN%.log"
     set /a NCOMPILE+=1
     set CELLFAIL=1
     exit /b 0
 )
 :cell_have
-set OBJS=%OBJS% "%ODIR%\%SRC%.obj"
+set OBJS=%OBJS% "%ODIR%\%OBJN%.obj"
 exit /b 0
 
 rem ---- :gpulib CONFIG: every GPU source of build.bat's list, with the configuration's definitions ----------------
