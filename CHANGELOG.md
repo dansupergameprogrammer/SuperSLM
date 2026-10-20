@@ -24,6 +24,12 @@ format changes, and no artifact needs reconversion.
   `sslm_prefill`; damped-greedy parameters feed the forced tokens to the anti-LM history). Both return
   `SSLM_ARTIFACT_REJECTED` on an artifact without a table. `docs/api.md` states the host loop under
   which the output does not depend on the chunk budget.
+- **Fix (decode step, damped greedy):** when a call named a new anti-LM order and the new state's
+  allocation failed, the old state had already been freed but was still referenced, so the next save
+  read freed memory and the next re-key or release freed it twice. The replacement is now created
+  before the old state is freed; a failed create returns `SSLM_ALLOCATION_FAILED` with the existing
+  state intact. The jump-forward verb shares this block, and installs a re-keyed state only after it
+  has admitted a forced token, so a failed call leaves the history and its order unchanged.
 - **Tools:** `sslm_schema_fast_decode_bench` (`tools/schema_fast_decode_bench.cpp`), the box steps'
   bench: extraction off against on, span sizes, the batched pass for M tokens and the finish.
 - **Tests:** the M1/J1 suite (`tests/test_schema_fast_decode.cpp`) runs against the real symbols; the

@@ -1111,21 +1111,28 @@ chain is that token, then the chain of the state it leads to. The table costs
     passes validation, a no-op included, clears bind eligibility.
   - **Limits** follow `sslm_prefill`. With headroom h left by the context cap
     or the KV budget and k the tokens the call would admit: at h = 0 nothing
-    is admitted and the call returns the limit status (the next `decode_step`
-    returns the same); at 1 <= h < k the pending token (if any) and the next
-    chain tokens up to h are admitted and the call returns the limit status;
-    at h >= k all k are admitted with `SSLM_OK`. In every partial case the
-    next `decode_step` runs the finish only.
+    is admitted and the call returns the limit status; at 1 <= h < k the
+    pending token (if any) and the next chain tokens up to h are admitted and
+    the call returns the limit status; at h >= k all k are admitted with
+    `SSLM_OK`. In every partial case the next `decode_step` runs the finish
+    only. What the next `decode_step` does at h = 0 depends on whether a token
+    is pending: with one pending it must embed it, so it returns the same limit
+    status; with none (the rest state a partial admission leaves) it runs the
+    finish only and returns `SSLM_OK` with a token.
   - **Decode parameters.** NULL means greedy. Greedy parameters leave the
     damped-greedy anti-LM state untouched. Damped parameters create or re-key
     the state exactly as `sslm_decode_step_v2` would with the same parameters,
     then feed it every chain token admitted, in order; this happens only once
     every refusal check has passed and at least one chain token will be
     admitted, so a refused, limit-only, no-op or pending-only call never
-    touches the history. Pass the same parameters to the verb and to
+    touches the history. A re-keyed state is installed only once a chain
+    token has been admitted, so a call that fails for any reason, an
+    allocation failure in the pass included, leaves the history and its order
+    as they were. Pass the same parameters to the verb and to
     `sslm_decode_step_v2`, and the history is the output stream, as it is
     without jump-forward. A failed create returns `SSLM_ALLOCATION_FAILED`
-    before any token is admitted.
+    before any token is admitted, with the existing state intact (the same
+    holds for `sslm_decode_step_v2`'s own create).
   - **Concurrency.** The verb takes decode's posture on the sequence (it
     consumes the token a concurrent `decode_step` would): a concurrent
     `sslm_seq_release` or `decode_step` of the same sequence waits for it.
