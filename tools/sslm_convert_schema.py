@@ -74,16 +74,22 @@ Sec4.1, Wizard repo) compiles to a cyclic item automaton:
 - **Construction.** `_groups()` emits an array as a one-element group holding an `_ArrayGroup`
   sentinel; `_char_dfa()` wires the byte NFA recursively (epsilon-free) and determinizes it by the same
   subset construction every schema already uses. `_token_targets`, the special-id exclusion and the
-  `MaskPages` representation are unchanged; a schema without an array compiles to the same table as
-  before.
+  `MaskPages` representation are unchanged. A schema without an array compiles to the same table as
+  v1.13.1 **only when every release limit admits it**: `RELEASE_LIMITS` binds every schema, so an
+  array-free schema v1.13.1 compiled is now refused when it crosses a limit (an `enum` whose literals
+  total more than 4,096 NFA nodes, an object chain nested 9 deep, a table above the transition or
+  section limit). Whether the limits bind array-free schemas is open (S1 code review, finding 1).
 - **Refused.** `maxItems` is refused by name even where a small value could be flattened (Sec4.1).
 - **Resource admission.** Seven limits (`RELEASE_LIMITS`, the frozen provisional release values of the
   T-3094 S0 limits freeze) are checked at their counting stage, each with its own named diagnostic
   (`LIMIT_DIAGNOSTICS`): `minItems` per array (the diagnostic names the array's RFC 6901 schema
   pointer) and nesting depth before any automaton is built; NFA states as each node is created; token-DFA
   states, token transitions, SCM1 section bytes and tracked temporary bytes as the token table grows. The
-  tracked budget is reserved before each charged structure is allocated, so a refusal stops at the
-  crossing rather than after the whole table exists. `limits=` replaces named limits for one call only;
+  tracked budget is reserved before each charged structure is allocated (NFA nodes and edges, byte-DFA
+  states, token states, and each token row's staging bound of one transition per vocabulary id), so a
+  refusal stops at the crossing rather than after the whole table exists. The vocabulary trie is the
+  exception: it is charged a fixed model constant (`_CHARGE_TRIE`, 8,224 B), not its built size (about
+  79 MB at a 151,936-id vocabulary); per-node trie charging is open (S1 code review, finding 3). `limits=` replaces named limits for one call only;
   the compiled artifact reports every count in `MaskPages.resource_counts`.
 - **Every reachable state can finish.** The empty-row refusal (G-7a) is the zero-step case of the class
   rule this compiler enforces: a schema whose token DFA has a reachable state from which no accepting
@@ -440,8 +446,10 @@ def _array_group(
         arrays[pointer] = min_items
     if limits is not None and min_items > limits["minItems"]:
         raise SchemaCompileError(
-            f"{LIMIT_DIAGNOSTICS['minItems']} exceeded: the array at schema pointer {pointer} "
-            f"requires minItems {min_items}, above the per-array limit of {limits['minItems']}",
+            f"{LIMIT_DIAGNOSTICS['minItems']} exceeded: "
+            f"{'the root array (schema pointer' if not pointer else 'the array at schema pointer'} '{pointer}'"
+            f"{')' if not pointer else ''} requires minItems {min_items}, above the per-array limit of "
+            f"{limits['minItems']}",
             reason="each required item is a separate copy of the item automaton; the limit applies "
                    "to every array independently (D-SLM8087)",
         )
@@ -611,7 +619,7 @@ def _add_string_leaf(
 class _NFA:
     """The epsilon-free byte NFA under construction: `edges[node][byte]` is the node's target set.
     Node 0 is the start. Every node is created through `add_node`, which charges the admission
-    budget (when there is one) before the node exists; edges are charged as they are added."""
+    budget (when there is one) before the node exists; every edge is charged before it is inserted."""
 
     def __init__(self, admission: "_Admission | None") -> None:
         self.admission = admission
@@ -636,26 +644,50 @@ class _NFA:
         """A literal byte chain from `start` to `end` (a fresh node when `end` is None)."""
         following = self.add_node() if end is None else end
         node = start
-        added = 0
         for index, byte_val in enumerate(raw):
             target = following if index == len(raw) - 1 else self.add_node()
-            targets = self.edges[node].setdefault(byte_val, set())
-            if target not in targets:
-                targets.add(target)
-                added += 1
+            if target not in self.edges[node].get(byte_val, ()):
+                self.charge_edges(1)
+                self.edges[node].setdefault(byte_val, set()).add(target)
             node = target
-        self.charge_edges(added)
         return following
+
+    def refund_edges(self, count: int) -> None:
+        if self.admission is not None and count:
+            self.admission.release(count * _CHARGE_NFA_EDGE)
+
+
+_STRING_LEAF_EDGES: list[int] = []
+
+
+def _string_leaf_edge_bound() -> int:
+    """The number of edges one string leaf adds when wired from a cursor with no edges of its own
+    (an upper bound on what it adds anywhere): measured once on a scratch automaton."""
+    if not _STRING_LEAF_EDGES:
+        scratch: list[dict[int, set[int]]] = [{}]
+
+        def add() -> int:
+            scratch.append({})
+            return len(scratch) - 1
+
+        _add_string_leaf(scratch, add, 0, set())
+        _STRING_LEAF_EDGES.append(sum(len(t) for row in scratch for t in row.values()))
+    return _STRING_LEAF_EDGES[0]
 
 
 def _wire(nfa: _NFA, groups: Sequence[_Group], cursor: int) -> int:
     """Wires `groups` into `nfa` from `cursor`; returns the node after the last group."""
     for group in groups:
         if len(group) == 1 and group[0] is _STRING_LEAF:
+            # The leaf's edge bound is reserved before any of its edges exist; the part the
+            # cursor already carried (a shared edge is not a new one) is returned afterwards.
+            bound = _string_leaf_edge_bound()
+            nfa.charge_edges(bound)
             before = nfa.edge_count((cursor,))
             first_new = len(nfa.edges)
             following = _add_string_leaf(nfa.edges, nfa.add_node, cursor, nfa.content_nodes)
-            nfa.charge_edges(nfa.edge_count((cursor,)) - before + nfa.edge_count(range(first_new, len(nfa.edges))))
+            nfa.refund_edges(bound - (nfa.edge_count((cursor,)) - before
+                                      + nfa.edge_count(range(first_new, len(nfa.edges)))))
             cursor = following
             continue
         if len(group) == 1 and isinstance(group[0], _ArrayGroup):
@@ -1045,6 +1077,17 @@ class _Admission:
     def _reserve(self, nbytes: int, what: str) -> None:
         self._admit("tracked_temporary_bytes", nbytes, what)
 
+    def release(self, nbytes: int) -> None:
+        """Returns reserved bytes whose structure was smaller than its reservation, or was freed."""
+        self.counts["tracked_temporary_bytes"] -= nbytes
+
+    def row_staging(self, vocab_size: int) -> int:
+        """Reserves the bound of one token row's staging buffer (one transition per vocabulary id)
+        before the row is walked; the caller releases it once the row is stored."""
+        nbytes = vocab_size * _CHARGE_TRANSITION
+        self._reserve(nbytes, f"the staging buffer of one token row (up to {vocab_size:,} transitions)")
+        return nbytes
+
     def nfa_node(self) -> None:
         self._admit("nfa_states", 1, "one more byte-NFA node")
         self._reserve(_CHARGE_NFA_NODE, "one more byte-NFA node")
@@ -1171,6 +1214,7 @@ def compile_schema_to_mask_pages(
         if current in char_accepting:
             admission.accepting_state()
             accepting.add(state)
+        staged = admission.row_staging(len(vocab))
         targets = _token_targets(char_dfa, current, trie, content_states)
         if not targets and current not in char_accepting:
             prefix = prefixes[state]
@@ -1196,6 +1240,7 @@ def compile_schema_to_mask_pages(
                 queue.append(target)
             row[token_id] = ids[target]
         transitions[state] = row
+        admission.release(staged)
 
     dead = _states_that_cannot_finish(transitions, accepting)
     if dead:
