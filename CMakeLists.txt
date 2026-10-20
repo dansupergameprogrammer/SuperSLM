@@ -92,9 +92,9 @@ endif()
 # no-behaviour stubs (and their SUPERSLM_SFD_RED_STUBS option) were removed when M1 and J1 landed.
 # Plan rev 1.3.3, slice TF (§4.5, §11.5): the TF cells' two seams are defined with no behaviour by
 # tests/schema_fast_decode/sfd_red_stubs_tf.cpp until TF lands, so every TF cell is red at its
-# assertion. The TF build defines the seams in the library and turns this option OFF in the same
-# commit; left ON beside them, the link refuses the duplicate symbols.
-option(SUPERSLM_SFD_TF_RED_STUBS "Link the schema fast-decode TF red cells' no-behaviour seam stubs (until TF lands)" ON)
+# assertion. TF has landed: the library defines the seams (src/sslm_abi.cpp) and this option is OFF,
+# which compiles the stub file empty; turned back ON, the link refuses the duplicate symbols.
+option(SUPERSLM_SFD_TF_RED_STUBS "Link the schema fast-decode TF red cells' no-behaviour seam stubs (until TF lands)" OFF)
 # Plan rev 1.3.3, slice J1-X (§5.10, §11.4): the same for exact mode. While ON, the suite calls the
 # shipped 8-argument verb, and sfd_red_stubs_x.cpp defines a no-behaviour 9-argument overload (returning
 # SSLM_STATUS_NEXT_FREE) and the J1-X seams (tests/schema_fast_decode/sfd_api.h groups 1x and 5). The
