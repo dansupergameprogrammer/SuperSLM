@@ -2576,6 +2576,55 @@ sslm_status EnsureAntiLm(sslm_seq_s* seq, int32_t order, bool from_verb) {
 // A non-OK return ends the call with that status and nothing admitted.
 using PrefillPrePassFn = sslm_status (*)(void* ctx, int32_t admit_count);
 
+// Schema fast-decode plan §16 Q6 C. True iff this pass runs as one-row passes: the caller asked for
+// the split (`split_max_rows` > 0, sslm_seq_jump_forward only), the admission is 2..split_max_rows
+// rows, and a one-row pass would actually thread -- bit 1 set, and GemmDispatch's own rule
+// (MatvecGroupSplit's task_count >= 2) met by the chunk path's largest one-row projection (gate, up
+// and down each carry hidden_size * intermediate_size weight bytes). A hook with max_tasks < 2 or no
+// `run`, or a model below the minimum work per task, would run the one-row passes serially, which is
+// slower than the batched pass, so it keeps the batched pass. The cheap tests come first, so a
+// prefill (split_max_rows 0) reads nothing else.
+bool JumpSplitEngages(const superslm::SslmModelConfig& c, const sslm_workspace_s* ws, int32_t admit_count,
+                      int32_t split_max_rows) {
+	if (split_max_rows < 2 || admit_count < 2 || admit_count > split_max_rows) return false;
+	const superslm::GemmThreading threading = MatvecThreading(ws);
+	return threading.row != nullptr &&
+	       superslm::MatvecGroupSplit(threading.row, c.hidden_size, c.intermediate_size).task_count >= 2;
+}
+
+// Schema fast-decode plan §16 Q6 C: the admitted rows [0, admit_count) of `embed_codes` as admit_count
+// one-row passes, each taking the threaded one-row split. Bit-identical by chunk invariance (§5.6): each
+// row is its own EmbedEntry, and row i's pass reads exactly the K/V rows [0, context_length + i) the
+// batched pass would. `state` is not moved here (the caller commits after the last row), so a row that
+// fails leaves the call uncommitted, as a failed batched pass does. Kept out of line so the unsplit
+// path in PrefillWholeTokensImpl is the pre-Q6 C code.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__)
+__attribute__((noinline))
+#endif
+sslm_status RunJumpSplitPasses(const sslm_model_s* model, superslm::SequenceLayerState& state,
+                               sslm_kv_pool_s* kv_pool, superslm::kv_pages::PageHolder* kv,
+                               const superslm::LayerWeights* layers, int8_t* embed_codes,
+                               superslm::CarriedScale* hidden_scales, int32_t admit_count,
+                               const sslm_workspace_s* ws) {
+	const superslm::SslmModelConfig& c = model->view.config;
+	const superslm::GemmThreading threading = MatvecThreading(ws);
+	for (size_t r = 0; r < static_cast<size_t>(admit_count); ++r) {
+		SfdLogLayerRows(/*kLayerRowsBatched=*/0, 1);
+		const superslm::SslmForwardStatus st = superslm::RunLayerLoopChunkBatched(
+		    embed_codes + r * c.hidden_size, hidden_scales + r, 1, layers, c.num_hidden_layers, c.hidden_size,
+		    c.head_dim, c.num_key_value_heads, c.intermediate_size, c.context_cap,
+		    state.context_length + static_cast<int64_t>(r), model->view.rope_tables, ViewOf(kv_pool, kv),
+		    /*option_g_fused_k_landing=*/false, &state.kv_saturation_count, /*site_prefix=*/{}, nullptr,
+		    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim, &state.kv_landing_saturation_count,
+		    &state.k_channel_landing_saturation_count, &state.rope_q_saturation_count,
+		    &state.rope_k_saturation_count, threading);
+		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+	}
+	return SSLM_OK;
+}
+
 // Shared whole-token prefill loop -- design Sec8.1's "every layer" prefill semantics, the SAME
 // EmbedEntry+RunLayerLoop composition RunGreedyDecodeLoop's own RunWholeToken lambda uses for
 // its own prefill phase (forward_sites.cpp), reused here as ONE implementation rather than two
@@ -2745,44 +2794,37 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 			hidden_scales[static_cast<size_t>(i)] = embed_scale;
 		}
 
-		// Decode-threading plan §3.4: `admit_count` is the chunk's M, so a call that admits
-		// exactly one token takes the one-row split whatever `count` the caller sent.
-		const superslm::GemmThreading threading = MatvecThreading(ws);
-		// Schema fast-decode plan §16 Q6 C: a caller that passes `split_max_rows`
-		// (sslm_seq_jump_forward only) runs an admission of 2..split_max_rows rows as that many
-		// one-row passes when a one-row pass would actually thread -- GemmDispatch's own rule,
-		// MatvecGroupSplit's task_count >= 2, for the chunk path's largest one-row projection
-		// (gate, up and down each carry hidden_size * intermediate_size weight bytes). A hook with
-		// max_tasks < 2 or no `run`, or a model below the minimum work per task, would run the
-		// one-row passes serially, which is slower than the batched pass, so it keeps the batched
-		// pass. Bit-identical by chunk invariance (§5.6): each row is its own EmbedEntry, and row
-		// i's pass reads exactly the K/V rows [0, context_length + i) the batched pass would.
-		// `state` moves only after the last row, so a row that fails leaves the call uncommitted,
-		// as a failed batched pass does.
-		const bool one_row_threads =
-		    threading.row != nullptr &&
-		    superslm::MatvecGroupSplit(threading.row, c.hidden_size, c.intermediate_size).task_count >= 2;
-		const size_t pass_rows = (one_row_threads && admit_count >= 2 && admit_count <= split_max_rows)
-		                             ? 1u
-		                             : static_cast<size_t>(admit_count);
-		for (size_t r0 = 0; r0 < static_cast<size_t>(admit_count); r0 += pass_rows) {
+		// Schema fast-decode plan §16 Q6 C: the split runs only where JumpSplitEngages says so
+		// (sslm_seq_jump_forward's short admissions on a host whose one-row pass threads), and in
+		// its own function. Every other call -- every prefill, prefix prefill, span of 8 or more,
+		// and every call on a host that cannot thread -- runs the one batched call below, the
+		// pre-Q6 C code unchanged (box A/B 2026-10-20: with the split loop inline here, MSVC's
+		// one-thread jump-forward arm ran ~21% slower on the unsplit path).
+		if (JumpSplitEngages(c, ws, admit_count, split_max_rows)) {
+			const sslm_status split_st = RunJumpSplitPasses(model, state, kv_pool, kv, layers, embed_codes,
+			                                                hidden_scales.data(), admit_count, ws);
+			if (split_st != SSLM_OK) return split_st;
+		} else {
 			// T-2432 (Track A step 2/3): q_width threaded explicitly -- this is the real production
 			// path `sslm_prefill` drives (T-2425's own finding: RunLayerLoopChunkBatched is the ONLY
 			// path sslm_prefill reaches), so a non-square candidate's real num_attention_heads must
 			// reach this call, not fall back to the `q_width == hidden_size` default.
-			SfdLogLayerRows(/*kLayerRowsBatched=*/0, static_cast<uint64_t>(pass_rows));
+			SfdLogLayerRows(/*kLayerRowsBatched=*/0, static_cast<uint64_t>(admit_count));
 			const superslm::SslmForwardStatus st = superslm::RunLayerLoopChunkBatched(
-			    embed_codes + r0 * c.hidden_size, hidden_scales.data() + r0, pass_rows, layers,
+			    embed_codes, hidden_scales.data(), static_cast<size_t>(admit_count), layers,
 			    c.num_hidden_layers, c.hidden_size, c.head_dim, c.num_key_value_heads,
-			    c.intermediate_size, c.context_cap, state.context_length + static_cast<int64_t>(r0),
-			    model->view.rope_tables, ViewOf(kv_pool, kv), /*option_g_fused_k_landing=*/false,
-			    &state.kv_saturation_count, /*site_prefix=*/{}, nullptr,
+			    c.intermediate_size, c.context_cap, state.context_length, model->view.rope_tables,
+			    ViewOf(kv_pool, kv), /*option_g_fused_k_landing=*/false, &state.kv_saturation_count,
+			    /*site_prefix=*/{}, nullptr,
 			    /*q_width=*/static_cast<size_t>(c.num_attention_heads) * c.head_dim,
 			    // The per-site census the total sums, filled here as RunLayerLoop's decode path
 			    // already fills it, so a prefilled sequence's census still sums to its total unless
 			    // its history since its last reset includes an 'SSB4', 'SSB3' or 'SSB2' restore.
 			    &state.kv_landing_saturation_count, &state.k_channel_landing_saturation_count,
-			    &state.rope_q_saturation_count, &state.rope_k_saturation_count, threading);
+			    &state.rope_q_saturation_count, &state.rope_k_saturation_count,
+			    // Decode-threading plan §3.4: `admit_count` is the chunk's M, so a call that admits
+			    // exactly one token takes the one-row split whatever `count` the caller sent.
+			    MatvecThreading(ws));
 			if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
 		}
 
