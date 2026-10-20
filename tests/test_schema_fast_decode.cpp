@@ -55,6 +55,7 @@
 #include "superslm/sha256.h"
 #include "superslm/sslm_abi.h"
 #include "support/bad_alloc_injection.h"
+#include "../src/forward/parallel_split.h"  // the minimum-work seam (cells 3.3, 8.2)
 
 #if !defined(SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS)
 #error "test_schema_fast_decode.cpp needs a library built with SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS"
@@ -2340,7 +2341,21 @@ struct BlockingHook {
 // 3.3 [J1] Under TSan: a release during the verb, and a decode_step on the same sequence during the verb.
 // No race, and the surviving call's outputs are unchanged. The verb is held inside a one-token admission
 // (budget 1, threaded under bit 1) by a hook that blocks in `run`.
+// The decode-threading minimum-work seam (src/forward/parallel_split.h), lowered for one scope. Fix round 2:
+// on F-SFD's small projections (hidden 64), a one-token admission never reaches the default 256 KiB per
+// task, so the M = 1 matvec split never calls `run` (plan §5.3: a one-token prefill threads exactly as a
+// decode step does). Cells 3.3 and 8.2 observe that split, so they lower the minimum inside their own
+// scope only; every other cell keeps the default.
+struct MinWorkScope {
+	explicit MinWorkScope(size_t bytes) { superslm::test::SetMinRowBytesPerTask(bytes); }
+	~MinWorkScope() { superslm::test::ResetMinRowBytesPerTask(); }
+	MinWorkScope(const MinWorkScope&) = delete;
+	MinWorkScope& operator=(const MinWorkScope&) = delete;
+};
+constexpr size_t kSmallMinWork = 1024;  // at most 4 KiB: every F-SFD M = 1 projection then threads
+
 void Cell_3_3() {
+	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
 	const std::vector<int32_t>& start = f.R(kPotion).st[f.R(kPotion).start].chain;
@@ -2766,6 +2781,7 @@ void Cell_8_1() {
 // 8.2 [J1] Jump-forward with the hook and bit 1, for a one-token admission (threaded) and for M >= 2
 // (serial). The outputs equal the run without a hook.
 void Cell_8_2() {
+	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
 	for (int32_t budget : {1, 64}) {
