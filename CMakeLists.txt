@@ -564,8 +564,9 @@ foreach(_sslm_dt_bench ${_sslm_dt_benches})
 	endif()
 endforeach()
 
-# Schema fast-decode plan (rev 1.2.1) §9 (J1) and §10 (B1-B3): the jump-forward and masked-finish
-# bench, on the production library and the public C ABI only.
+# Schema fast-decode plan (rev 1.2.1) §9 (J1) and §10 (B1-B4): the jump-forward and masked-finish
+# bench, on the production library: the public C ABI, plus the finish primitives in `finishrows`.
+# tools/schema_fast_decode_box/run_box_step.ps1 drives it on the box.
 add_executable(sslm_schema_fast_decode_bench tools/schema_fast_decode_bench.cpp)
 target_link_libraries(sslm_schema_fast_decode_bench PRIVATE superslm)
 if(MSVC)

@@ -37,7 +37,10 @@ format changes, and no artifact needs reconversion.
   penalty skips any context with no observations. The two internal hash tables' growth is now
   exception-safe as well (a failed growth no longer empties the table).
 - **Tools:** `sslm_schema_fast_decode_bench` (`tools/schema_fast_decode_bench.cpp`), the box steps'
-  bench: extraction off against on, span sizes, the batched pass for M tokens and the finish.
+  bench: extraction arms in interleaved pairs (off, on, the AA/2X/CB1 controls), cross-process pooling for
+  `main` against M1, span sizes, the batched pass for M tokens, the finish at chosen legal-row counts, and
+  the B4 quality runs (the on arm sealed apart); `tools/schema_fast_decode_box/run_box_step.ps1` drives
+  §10's steps B0-B4 on the box, one resumable step at a time.
 - **Tests:** the M1/J1 suite (`tests/test_schema_fast_decode.cpp`) runs against the real symbols; the
   red round's stubs and the `SUPERSLM_SFD_RED_STUBS` option are removed.
 

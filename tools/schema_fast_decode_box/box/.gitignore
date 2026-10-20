@@ -1,0 +1,4 @@
+# The frozen inputs are staged here on the box (acceptance-rules.md, potion-population-v1.jsonl);
+# the driver checks their sha256. They are not part of the repository.
+*
+!.gitignore
