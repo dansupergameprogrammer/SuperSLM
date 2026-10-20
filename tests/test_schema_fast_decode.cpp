@@ -2949,6 +2949,8 @@ void Cell_8_1() {
 
 // 8.2 [J1] Jump-forward with the hook and bit 1, for a one-token admission (threaded) and for M >= 2
 // (serial). The outputs equal the run without a hook.
+// §16 Q6 C (k = 7, box rule 3.10): an admission of M = 2..7 rows now runs as one-row threaded passes, so
+// only M >= 8 stays serial; the budget-64 arm asserts both halves (the Q6C cells cover the rule itself).
 void Cell_8_2() {
 	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
@@ -2969,7 +2971,7 @@ void Cell_8_2() {
 		if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) continue;
 		sslm_seq s = rig.NewSeq(kPotion);
 		if (!s || !rig.PromptOk(s, f.prompt_potion)) continue;
-		int one_row = 0, one_row_threaded = 0, multi_row = 0, multi_row_threaded = 0;
+		int one_row = 0, one_row_threaded = 0, multi_row = 0, multi_row_threaded = 0, wide_row = 0, wide_row_threaded = 0;
 		JfOpts o = GreedyOpts(rig, budget);
 		size_t calls_before = 0;
 		o.after = [&](sslm_seq&, const JfStep& st) {
@@ -2979,9 +2981,12 @@ void Cell_8_2() {
 				if (m == 1) {
 					++one_row;
 					if (now > calls_before) ++one_row_threaded;
-				} else if (m >= 2) {
+				} else if (m >= 2 && m <= 7) {
 					++multi_row;
 					if (now > calls_before) ++multi_row_threaded;
+				} else if (m >= 8) {
+					++wide_row;
+					if (now > calls_before) ++wide_row_threaded;
 				}
 			}
 			calls_before = now;
@@ -2996,8 +3001,9 @@ void Cell_8_2() {
 			CHECK_MSG(one_row > 0 && one_row_threaded == one_row, "[8.2] %d of %d one-token admissions called run", one_row_threaded,
 			          one_row);
 		} else {
-			CHECK_MSG(multi_row > 0 && multi_row_threaded == 0, "[8.2] %d of %d admissions of M >= 2 called run",
-			          multi_row_threaded, multi_row);
+			CHECK_MSG(multi_row > 0 && multi_row_threaded == multi_row, "[8.2] %d of %d admissions of M = 2..7 called run "
+			          "(Q6 C: all of them)", multi_row_threaded, multi_row);
+			CHECK_MSG(wide_row_threaded == 0, "[8.2] %d of %d admissions of M >= 8 called run", wide_row_threaded, wide_row);
 		}
 	}
 }
@@ -3794,6 +3800,398 @@ void Cell_11_3() {
 	          static_cast<unsigned long long>(sfd::WalkCount()), j1.count);
 }
 
+// ===================================================================================================
+// §16 Q6 C: short spans under bit 1 (k = 7, box scorecard 2026-10-20, rule 3.10)
+// ===================================================================================================
+//
+// Q6 C, chosen: under bit 1 a verb call whose pass admits M rows with 2 <= M <= k runs them as M one-row
+// passes, each through the threaded one-token split; k = 7 by rule 3.10 (M = 2..7 lose 5.4-8.6 ms per span
+// to one-token threaded admissions, M = 8 wins). M = 1, M >= 8 and every call without bit 1 keep the one
+// batched pass. S-LAYERROWS shows the shape (M entries of one row, or one entry of M rows), the hook's
+// `run` calls show the threading, and everything observable equals the batched pass's: status, the forced
+// ids, the count, and the whole save blob (K/V, residual, walk, forced_token_count, anti-LM order and
+// history, the saturation census). These cells run with the minimum-work seam lowered (kSmallMinWork), so
+// a one-row pass on F-SFD's small projections reaches `run`.
+
+constexpr size_t kQ6cSplitMax = 7;
+
+// The S-LAYERROWS shape the rule asks of one verb call that admits `m` rows.
+bool Q6cShapeIs(const std::vector<sfd::LayerRowsEntry>& passes, size_t m, bool bit1) {
+	const bool split = bit1 && m >= 2 && m <= kQ6cSplitMax;
+	if (passes.size() != (split ? m : 1)) return false;
+	for (const sfd::LayerRowsEntry& e : passes)
+		if (e.kind != sfd::kLayerRowsBatched || e.rows != (split ? 1 : m)) return false;
+	return true;
+}
+
+std::string Q6cShape(const std::vector<sfd::LayerRowsEntry>& passes) {
+	std::string s = "{";
+	for (size_t i = 0; i < passes.size(); ++i)
+		s += (i ? "," : "") + std::to_string(passes[i].kind) + ":" + std::to_string(passes[i].rows);
+	return s + "}";
+}
+
+std::vector<sfd::LayerRowsEntry> Q6cPasses() {
+	std::vector<sfd::LayerRowsEntry> v;
+	for (size_t i = 0; i < sfd::LayerRowsLogCount(); ++i) v.push_back(sfd::LayerRowsLogAt(i));
+	return v;
+}
+
+enum class Q6cArm { kNoHook, kBit1, kBit0 };
+
+struct SpanRun {
+	bool ok = false;
+	Jump j;
+	std::vector<uint8_t> blob;
+	std::vector<sfd::LayerRowsEntry> passes;
+	size_t run_calls = 0;
+};
+
+// A LONGKEY sequence resting ready for logits at `state` (the prompt, then the reference path as content,
+// with no workspace and so no hook), then one verb call at `budget` under `arm`. `kv_room` >= 0 makes the
+// holder a budget holder with that many positions past the path.
+SpanRun Q6cSpan(const Sfd& f, uint32_t state, int32_t budget, Q6cArm arm, const sslm_decode_params* params = nullptr,
+                int32_t kv_room = -1) {
+	SpanRun o;
+	const RefSchema& r = f.R(kLongKey);
+	if (state >= r.st.size()) return o;
+	Rig rig(f.m1->m);
+	CountingHook h;
+	h.max_tasks = 4;
+	if (!rig.ok) return o;
+	if (arm != Q6cArm::kNoHook && !Install(rig.W(), &h, arm == Q6cArm::kBit1 ? SSLM_PARALLEL_FOR_MATVEC : 0u)) return o;
+	sslm_seq s = kv_room < 0 ? rig.NewSeq(kLongKey)
+	                         : rig.NewBudgeted(int32_t(f.prompt_potion.size() + r.st[state].path.size()) + kv_room, kLongKey);
+	if (!s || !rig.PromptOk(s, f.prompt_potion) || !rig.ContentOk(s, r.st[state].path)) return o;
+	h.Clear();
+	sfd::LayerRowsLogReset();
+	o.j = JumpForward(rig.m, s, budget, params, rig.W());
+	o.passes = Q6cPasses();
+	o.run_calls = h.Counts().size();
+	o.blob = rig.Save(s);
+	o.ok = !o.blob.empty();
+	return o;
+}
+
+// The first LONGKEY state whose forced chain has exactly `len` tokens (UINT32_MAX if none), and the state
+// with the longest chain.
+uint32_t Q6cChainState(const Sfd& f, size_t len) {
+	const RefSchema& r = f.R(kLongKey);
+	for (uint32_t s = 0; s < r.st.size(); ++s)
+		if (r.st[s].forced && r.st[s].chain.size() == len) return s;
+	return UINT32_MAX;
+}
+uint32_t Q6cLongestState(const Sfd& f) {
+	const RefSchema& r = f.R(kLongKey);
+	uint32_t best = UINT32_MAX;
+	for (uint32_t s = 0; s < r.st.size(); ++s)
+		if (r.st[s].forced && (best == UINT32_MAX || r.st[s].chain.size() > r.st[best].chain.size())) best = s;
+	return best;
+}
+
+// Q6C.1 [Q6 C] One verb call at M = 1, 2, 7, 8 and 9 rows, both as a whole span (budget 64 at a state whose
+// chain is M) and as a chunk_budget-bounded piece (budget M at the longest chain). Under bit 1 the status,
+// forced ids and whole blob equal the batched pass's (no hook, and bit 0) and the token-by-token reference
+// (the same tokens as explicit content, one per prefill call); 7 splits into seven threaded one-row passes,
+// 8 stays one serial pass of eight. Bit 0 keeps one pass at every M and never calls `run`.
+void Cell_Q6C_1() {
+	const MinWorkScope min_work(kSmallMinWork);
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	const RefSchema& r = f.R(kLongKey);
+	const uint32_t longest = Q6cLongestState(f);
+	CHECK_MSG(longest != UINT32_MAX && r.st[longest].chain.size() >= 9, "[Q6C.1] LONGKEY has no chain of 9 or more");
+	if (longest == UINT32_MAX || r.st[longest].chain.size() < 9) return;
+	for (size_t m : {size_t{1}, size_t{2}, size_t{7}, size_t{8}, size_t{9}}) {
+		for (int piece = 0; piece < 2; ++piece) {
+			const uint32_t at = piece ? longest : Q6cChainState(f, m);
+			const int32_t budget = piece ? int32_t(m) : 64;
+			CHECK_MSG(at != UINT32_MAX, "[Q6C.1 M %zu] LONGKEY has no chain of exactly %zu", m, m);
+			if (at == UINT32_MAX) continue;
+			const std::vector<int32_t> want(r.st[at].chain.begin(), r.st[at].chain.begin() + std::ptrdiff_t(m));
+			const char* how = piece ? "piece" : "span";
+			const SpanRun bit1 = Q6cSpan(f, at, budget, Q6cArm::kBit1);
+			const SpanRun plain = Q6cSpan(f, at, budget, Q6cArm::kNoHook);
+			const SpanRun bit0 = Q6cSpan(f, at, budget, Q6cArm::kBit0);
+			for (const SpanRun* x : {&bit1, &plain, &bit0}) {
+				const char* arm = x == &bit1 ? "bit 1" : x == &plain ? "no hook" : "bit 0";
+				CHECK_MSG(x->ok && x->j.st == SSLM_OK && x->j.count == int32_t(m) && x->j.forced == want,
+				          "[Q6C.1 M %zu %s, %s] status %d count %d forced %s; want %s", m, how, arm,
+				          static_cast<int>(x->j.st), x->j.count, Str(x->j.forced).c_str(), Str(want).c_str());
+			}
+			CHECK_MSG(bit1.blob == plain.blob && bit0.blob == plain.blob, "[Q6C.1 M %zu %s] the save blob: bit 1 %s, bit 0 "
+			          "%s the no-hook batched pass's", m, how, bit1.blob == plain.blob ? "equals" : "differs from",
+			          bit0.blob == plain.blob ? "equals" : "differs from");
+			// The token-by-token reference: main's explicit content prefill, one token per call.
+			{
+				Rig rig(f.m1->m);
+				sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
+				if (s && rig.ContentOk(s, want, 1)) {
+					CHECK_MSG(rig.Save(s) == bit1.blob, "[Q6C.1 M %zu %s] bit 1's blob differs from the token-by-token "
+					          "reference", m, how);
+				}
+			}
+			// The boundary.
+			CHECK_MSG(Q6cShapeIs(bit1.passes, m, true), "[Q6C.1 M %zu %s, bit 1] S-LAYERROWS %s; want %s", m, how,
+			          Q6cShape(bit1.passes).c_str(),
+			          (m >= 2 && m <= kQ6cSplitMax) ? "one-row passes, one per row" : "one batched pass of M rows");
+			CHECK_MSG((m <= kQ6cSplitMax) == (bit1.run_calls > 0), "[Q6C.1 M %zu %s, bit 1] %zu run calls; want %s", m,
+			          how, bit1.run_calls, m <= kQ6cSplitMax ? "some (threaded one-row passes)" : "none (one serial pass)");
+			CHECK_MSG(Q6cShapeIs(bit0.passes, m, false) && bit0.run_calls == 0, "[Q6C.1 M %zu %s, bit 0] S-LAYERROWS %s, "
+			          "%zu run calls; want one pass of M rows and none", m, how, Q6cShape(bit0.passes).c_str(),
+			          bit0.run_calls);
+			CHECK_MSG(Q6cShapeIs(plain.passes, m, false), "[Q6C.1 M %zu %s, no hook] S-LAYERROWS %s", m, how,
+			          Q6cShape(plain.passes).c_str());
+		}
+	}
+}
+
+// Q6C.2 [Q6 C] The §5.6 host loop under bit 1 at chunk_budget 1, 2, 3, 7, 8, 9 and 64, on LONGKEY (chains
+// of every length to 26, so most spans are cut by the budget) and on POTION (a pending token joins each
+// span): the stream and the final blob equal the no-hook run's at budget 64, the stream is the reference
+// rule's, every verb call's passes have the rule's shape for the rows it admitted, and no call runs more
+// rows than its budget (C11). Then a span cut by the holder's K/V budget (a partial admission, 5 of 9):
+// the limit status, count and blob equal the batched pass's, and the 5 admitted rows ran split.
+void Cell_Q6C_2() {
+	const MinWorkScope min_work(kSmallMinWork);
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	for (const char* schema : {kLongKey, kPotion}) {
+		std::vector<int32_t> plain;
+		std::vector<uint8_t> plain_blob;
+		{
+			Rig rig(f.m1->m);
+			sslm_seq s = nullptr;
+			const JfRun r = FreshRun(rig, f, schema, f.prompt_potion, GreedyOpts(rig), &s);
+			CHECK_MSG(r.dead_end, "[Q6C.2] %s without the hook: status %d", schema, static_cast<int>(r.end_status));
+			plain = r.stream;
+			if (s) plain_blob = rig.Save(s);
+		}
+		for (int32_t budget : {1, 2, 3, 7, 8, 9, 64}) {
+			Rig rig(f.m1->m);
+			CountingHook h;
+			h.max_tasks = 4;
+			if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) continue;
+			JfOpts o = GreedyOpts(rig, budget);
+			int bad_shape = 0, over_budget = 0, split_calls = 0;
+			std::string first_bad;
+			o.after = [&](sslm_seq&, const JfStep& st) {
+				if (st.kind == 0 && st.st == SSLM_OK) {
+					const size_t m = st.toks.size() + (st.embedded_pending ? 1 : 0);
+					const std::vector<sfd::LayerRowsEntry> passes = Q6cPasses();
+					uint64_t rows = 0;
+					for (const sfd::LayerRowsEntry& e : passes) rows += e.rows;
+					if (rows > uint64_t(budget)) ++over_budget;
+					if (m >= 1 && !Q6cShapeIs(passes, m, true)) {
+						if (bad_shape++ == 0) first_bad = "M " + std::to_string(m) + ": " + Q6cShape(passes);
+					}
+					if (m >= 2 && m <= kQ6cSplitMax) ++split_calls;
+				}
+				sfd::LayerRowsLogReset();
+			};
+			sslm_seq s = rig.NewSeq(schema);
+			if (!s || !rig.PromptOk(s, f.prompt_potion)) continue;
+			sfd::LayerRowsLogReset();
+			const JfRun r = RunJf(rig.m, s, o);
+			CheckStreamIsReference("Q6C.2", f, schema, r);
+			CHECK_MSG(r.stream == plain && !plain.empty() && rig.Save(s) == plain_blob, "[Q6C.2] %s budget %d under bit 1: "
+			          "stream %s, no hook %s; the blob %s", schema, budget, Str(r.stream).c_str(), Str(plain).c_str(),
+			          rig.Save(s) == plain_blob ? "equal" : "differs");
+			CHECK_MSG(over_budget == 0, "[Q6C.2] %s budget %d: %d verb calls ran more rows than the budget", schema, budget,
+			          over_budget);
+			CHECK_MSG(bad_shape == 0, "[Q6C.2] %s budget %d: %d verb calls do not have the rule's passes (first: %s)",
+			          schema, budget, bad_shape, first_bad.c_str());
+			if (budget >= 2) {
+				CHECK_MSG(split_calls > 0, "[Q6C.2] %s budget %d: no verb call admitted 2..7 rows; the arm shows nothing",
+				          schema, budget);
+			}
+		}
+	}
+	// The K/V budget cuts a 9-token span at 5.
+	const uint32_t at = Q6cChainState(f, 9);
+	CHECK_MSG(at != UINT32_MAX, "[Q6C.2] LONGKEY has no chain of exactly 9");
+	if (at == UINT32_MAX) return;
+	const SpanRun bit1 = Q6cSpan(f, at, 64, Q6cArm::kBit1, nullptr, 5);
+	const SpanRun plain = Q6cSpan(f, at, 64, Q6cArm::kNoHook, nullptr, 5);
+	CHECK_MSG(plain.ok && plain.j.st == SSLM_KV_BUDGET_EXCEEDED && plain.j.count == 5, "[Q6C.2 K/V budget] no hook: status "
+	          "%d count %d; want SSLM_KV_BUDGET_EXCEEDED and 5", static_cast<int>(plain.j.st), plain.j.count);
+	CHECK_MSG(bit1.ok && bit1.j.st == plain.j.st && bit1.j.count == plain.j.count && bit1.j.forced == plain.j.forced &&
+	              bit1.blob == plain.blob,
+	          "[Q6C.2 K/V budget] bit 1: status %d count %d, the blob %s; want the batched pass's", static_cast<int>(bit1.j.st),
+	          bit1.j.count, bit1.blob == plain.blob ? "equal" : "differs");
+	CHECK_MSG(Q6cShapeIs(bit1.passes, 5, true) && bit1.run_calls > 0, "[Q6C.2 K/V budget] bit 1: S-LAYERROWS %s, %zu run "
+	          "calls; want five threaded one-row passes", Q6cShape(bit1.passes).c_str(), bit1.run_calls);
+}
+
+// Q6C.3 [Q6 C] Damped greedy under bit 1: the anti-LM history and save/restore across split spans.
+// (a) The host loop at budgets 3 and 64, with a save and a restore after every call: the stream and the final
+// blob (the anti-LM order and history included) equal the uninterrupted no-hook run's. (b) One 9-token span
+// as three budget-3 calls (three splits), with a save and a restore between them: the blob equals one
+// no-hook call admitting all nine, and its history holds the nine forced tokens in order.
+void Cell_Q6C_3() {
+	const MinWorkScope min_work(kSmallMinWork);
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	for (const char* schema : {kPotion, kLongKey}) {
+		std::vector<int32_t> plain;
+		std::vector<uint8_t> plain_blob;
+		{
+			Rig rig(f.m1->m);
+			const sslm_decode_params p = rig.Damped();
+			JfOpts o = GreedyOpts(rig);
+			o.vparams = &p;
+			o.dparams = p;
+			sslm_seq s = nullptr;
+			const JfRun r = FreshRun(rig, f, schema, f.prompt_potion, o, &s);
+			CHECK_MSG(r.dead_end, "[Q6C.3 (a)] %s damped, no hook: status %d", schema, static_cast<int>(r.end_status));
+			plain = r.stream;
+			if (s) plain_blob = rig.Save(s);
+			CHECK_MSG(!ParseBlob(plain_blob).hist.empty(), "[Q6C.3 (a)] %s: the damped run has no anti-LM history",
+			          schema);
+		}
+		for (int32_t budget : {3, 64}) {
+			Rig rig(f.m1->m);
+			CountingHook h;
+			h.max_tasks = 4;
+			if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) continue;
+			const sslm_decode_params p = rig.Damped();
+			JfOpts o = GreedyOpts(rig, budget);
+			o.vparams = &p;
+			o.dparams = p;
+			int splits = 0;
+			o.after = [&](sslm_seq& q, const JfStep& st) {
+				if (st.kind == 0 && st.st == SSLM_OK) {
+					const size_t m = st.toks.size() + (st.embedded_pending ? 1 : 0);
+					if (m >= 2 && m <= kQ6cSplitMax && Q6cShapeIs(Q6cPasses(), m, true)) ++splits;
+				}
+				sfd::LayerRowsLogReset();
+				if (st.st != SSLM_OK) return;
+				const std::vector<uint8_t> blob = rig.Save(q);
+				sslm_seq fresh = rig.Restore(blob);
+				if (!fresh) return;
+				rig.Release(q);
+				q = fresh;
+			};
+			sslm_seq s = rig.NewSeq(schema);
+			if (!s || !rig.PromptOk(s, f.prompt_potion)) continue;
+			sfd::LayerRowsLogReset();
+			const JfRun r = RunJf(rig.m, s, o);
+			const std::vector<uint8_t> blob = rig.Save(s);
+			CHECK_MSG(r.dead_end && r.stream == plain && !plain.empty(), "[Q6C.3 (a)] %s budget %d, bit 1, save/restore "
+			          "after every call: stream %s, uninterrupted no hook %s", schema, budget, Str(r.stream).c_str(),
+			          Str(plain).c_str());
+			const Blob b = ParseBlob(blob), pb = ParseBlob(plain_blob);
+			CHECK_MSG(blob == plain_blob, "[Q6C.3 (a)] %s budget %d: the final blob differs (order %d / %d, history %s / %s)",
+			          schema, budget, b.order, pb.order, Str(b.hist).c_str(), Str(pb.hist).c_str());
+			CHECK_MSG(splits > 0, "[Q6C.3 (a)] %s budget %d: no verb call ran split", schema, budget);
+		}
+	}
+	// (b)
+	const uint32_t at = Q6cChainState(f, 9);
+	const RefSchema& r = f.R(kLongKey);
+	CHECK_MSG(at != UINT32_MAX, "[Q6C.3 (b)] LONGKEY has no chain of exactly 9");
+	if (at == UINT32_MAX) return;
+	std::vector<uint8_t> one;
+	{
+		Rig rig(f.m1->m);
+		const sslm_decode_params p = rig.Damped();
+		sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
+		if (!s) return;
+		const Jump j = JumpForward(rig.m, s, 64, &p, rig.W());
+		CHECK_MSG(j.st == SSLM_OK && j.forced == r.st[at].chain, "[Q6C.3 (b)] one no-hook call: status %d, %s",
+		          static_cast<int>(j.st), Str(j.forced).c_str());
+		one = rig.Save(s);
+	}
+	Rig rig(f.m1->m);
+	CountingHook h;
+	h.max_tasks = 4;
+	if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) return;
+	const sslm_decode_params p = rig.Damped();
+	sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
+	if (!s) return;
+	std::vector<int32_t> got;
+	int split_calls = 0;
+	for (int call = 0; call < 3; ++call) {
+		sfd::LayerRowsLogReset();
+		const Jump j = JumpForward(rig.m, s, 3, &p, rig.W());
+		if (j.st == SSLM_OK && j.count == 3 && Q6cShapeIs(Q6cPasses(), 3, true)) ++split_calls;
+		got.insert(got.end(), j.forced.begin(), j.forced.end());
+		if (call < 2) {
+			sslm_seq fresh = rig.Restore(rig.Save(s));
+			if (!fresh) return;
+			rig.Release(s);
+			s = fresh;
+		}
+	}
+	const std::vector<uint8_t> three = rig.Save(s);
+	const Blob b = ParseBlob(three);
+	CHECK_MSG(got == r.st[at].chain && three == one, "[Q6C.3 (b)] three budget-3 calls with save/restore: %s, the blob %s "
+	          "one no-hook call's", Str(got).c_str(), three == one ? "equals" : "differs from");
+	CHECK_MSG(b.ok && b.hist == r.st[at].chain, "[Q6C.3 (b)] the anti-LM history %s; want the nine forced tokens %s",
+	          Str(b.hist).c_str(), Str(r.st[at].chain).c_str());
+	CHECK_MSG(split_calls == 3, "[Q6C.3 (b)] %d of 3 calls ran as three threaded one-row passes", split_calls);
+}
+
+// Q6C.4 [Q6 C] A failure inside a split span. A hostile hook (kOmit) breaks exactly-once on the last `run`
+// call of a 3-row split under damped params, so rows 1 and 2 have run and written K/V and the third row
+// fails: the call returns SSLM_INVALID_ARGUMENT with nothing admitted, the anti-LM order and history and the
+// whole save blob are unchanged (the K/V rows past context_length are not in it, the saturation census is
+// restored), and a retry with an honest hook gives the blob of a call that never failed.
+void Cell_Q6C_4() {
+	const MinWorkScope min_work(kSmallMinWork);
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	const uint32_t at = Q6cChainState(f, 9);
+	CHECK_MSG(at != UINT32_MAX, "[Q6C.4] LONGKEY has no chain of exactly 9");
+	if (at == UINT32_MAX) return;
+	// The never-failed call, and the number of run calls it makes.
+	std::vector<uint8_t> ref_after;
+	size_t calls = 0;
+	{
+		Rig rig(f.m1->m);
+		CountingHook h;
+		h.max_tasks = 4;
+		if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) return;
+		const sslm_decode_params p = rig.Damped(2);
+		sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
+		if (!s) return;
+		h.Clear();
+		sfd::LayerRowsLogReset();
+		const Jump j = JumpForward(rig.m, s, 3, &p, rig.W());
+		calls = h.Counts().size();
+		CHECK_MSG(j.st == SSLM_OK && j.count == 3 && Q6cShapeIs(Q6cPasses(), 3, true) && calls >= 3,
+		          "[Q6C.4] the never-failed call: status %d count %d, S-LAYERROWS %s, %zu run calls; want three "
+		          "threaded one-row passes", static_cast<int>(j.st), j.count, Q6cShape(Q6cPasses()).c_str(), calls);
+		ref_after = rig.Save(s);
+	}
+	if (calls < 3) return;
+	Rig rig(f.m1->m);
+	CountingHook h;
+	h.max_tasks = 4;
+	h.hostile = Hostile::kOmit;
+	h.hostile_call = static_cast<int>(calls) - 1;
+	if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) return;
+	const sslm_decode_params p = rig.Damped(2);
+	sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
+	if (!s) return;
+	const std::vector<uint8_t> before = rig.Save(s);
+	h.Clear();
+	const Jump j = JumpForward(rig.m, s, 3, &p, rig.W());
+	CHECK_MSG(h.Counts().size() == calls && j.st == SSLM_INVALID_ARGUMENT && j.count == 0, "[Q6C.4] the hostile last run "
+	          "call: %zu run calls (want %zu), status %d count %d; want SSLM_INVALID_ARGUMENT and nothing admitted",
+	          h.Counts().size(), calls, static_cast<int>(j.st), j.count);
+	const std::vector<uint8_t> after = rig.Save(s);
+	const Blob b0 = ParseBlob(before), b1 = ParseBlob(after);
+	CHECK_MSG(after == before, "[Q6C.4] the failed call changed the save blob (order %d -> %d, history %s -> %s, "
+	          "context %lld -> %lld)", b0.order, b1.order, Str(b0.hist).c_str(), Str(b1.hist).c_str(),
+	          static_cast<long long>(b0.ctx), static_cast<long long>(b1.ctx));
+	h.hostile = Hostile::kNone;
+	const Jump retry = JumpForward(rig.m, s, 3, &p, rig.W());
+	CHECK_MSG(retry.st == SSLM_OK && retry.count == 3 && rig.Save(s) == ref_after, "[Q6C.4] the retry: status %d count %d, "
+	          "the blob %s the never-failed call's", static_cast<int>(retry.st), retry.count,
+	          rig.Save(s) == ref_after ? "equals" : "differs from");
+}
+
 // Prints the values cell 6.6 pins, computed by the reference replay on main (SUPERSLM_SFD_PRINT_GOLDENS=1).
 void PrintGoldens() {
 	const Sfd& f = GetSfd();
@@ -3884,6 +4282,11 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("10.2", Cell_10_2);
 	run("11.2", Cell_11_2);
 	run("11.3", Cell_11_3);
+	// §16 Q6 C (k = 7)
+	run("Q6C.1", Cell_Q6C_1);
+	run("Q6C.2", Cell_Q6C_2);
+	run("Q6C.3", Cell_Q6C_3);
+	run("Q6C.4", Cell_Q6C_4);
 	std::printf("schema fast-decode (M1, J1) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
 	checks += GChecks;
 	failures += GFailures;
