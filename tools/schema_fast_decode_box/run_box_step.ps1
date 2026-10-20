@@ -23,7 +23,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Step,
     [string]$Name = 'schema-fast-decode',
-    [string]$Ref = 'claude/project-thread-nu1czu',
+    [string]$Ref = 'origin/claude/project-thread-nu1czu',
     [string]$MainRef = 'v1.13.1',
     [string]$WorktreeRoot = 'D:\SuperSLM\.worktrees',
     [string]$Model = 'D:\hf_cache\superslm_artifacts\example\qwen2.5-0.5b-instruct-cap4096-aex.sslm',

@@ -84,7 +84,8 @@ endif()
 # defines the macro and so never even includes the seam header
 # (src/bad_alloc_wrap.h #ifdef-gates it out entirely -- Layer 1 stays
 # independently embeddable, D-SLM13).
-if(BUILD_TESTING)
+# Defined outside BUILD_TESTING: the EXCLUDE_FROM_ALL forced-tier and scalar test targets below
+# call it, and they are declared whatever BUILD_TESTING says.
 # Schema fast-decode plan (rev 1.2.1) §9, slices M1 and J1: the suite
 # (tests/test_schema_fast_decode.cpp) runs inside every full-suite binary, against the real M1/J1
 # symbols and the §11.0 seams the test libraries define (src/sslm_abi.cpp). The red round's
@@ -95,6 +96,7 @@ function(superslm_add_schema_fast_decode_cells _sfd_target)
 	# The source tree, for cell 9.2's reads of the ABI inventory and the project version.
 	target_compile_definitions(${_sfd_target} PRIVATE SFD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endfunction()
+if(BUILD_TESTING)
 add_library(superslm_test_injection STATIC ${SUPERSLM_CORE_SOURCES})
 target_include_directories(superslm_test_injection PUBLIC include)
 target_include_directories(superslm_test_injection PRIVATE tests)
