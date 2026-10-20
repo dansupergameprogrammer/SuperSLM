@@ -26,7 +26,9 @@ param(
     [string]$Ref = 'origin/claude/project-thread-nu1czu',
     [string]$MainRef = 'v1.13.1',
     [string]$WorktreeRoot = 'D:\SuperSLM\.worktrees',
-    [string]$Model = 'D:\hf_cache\superslm_artifacts\example\qwen2.5-0.5b-instruct-cap4096-aex.sslm',
+    # A-EX with the tokenizer and both schemas (potion_shop_order, prompt_result): the example's ExampleModel.sslm,
+    # sha256 9ccf7e37... The plain -aex.sslm has no tokenizer, and every step that tokenizes fails on it.
+    [string]$Model = 'D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-cap4096-aex-pr.sslm',
     [string]$OutDir = 'D:\_scratch\schema-fast-decode',
     [string]$BoxDir = '',
     [string]$Te368 = '',
@@ -36,6 +38,12 @@ param(
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
+# Launched from pwsh 7, Windows PowerShell 5.1 inherits pwsh's PSModulePath, and Get-FileHash then fails to load.
+# Under 5.1, use its own module path.
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $env:PSModulePath = (@([Environment]::GetFolderPath('MyDocuments') + '\WindowsPowerShell\Modules',
+        "$env:ProgramFiles\WindowsPowerShell\Modules", "$env:SystemRoot\system32\WindowsPowerShell\v1.0\Modules") -join ';')
+}
 
 # The frozen inputs (sha256). A mismatch refuses B1-B4: a changed file is a different population or
 # a different set of rules, never an edit to these.
