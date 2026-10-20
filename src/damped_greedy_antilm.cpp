@@ -111,19 +111,73 @@ int32_t AntiLmHistoryTokenAt(const AntiLmState* state, std::size_t index) {
 	return state->history_[index];
 }
 
+// Strong exception guarantee (schema fast-decode code review, re-check of finding 9). The former
+// body inserted a new context entry and only then allocated its counts table, so a std::bad_alloc
+// there left an entry with total == 0 (AntiLmPenalize then divided by it on the next damped
+// finish), and a throw at a later order left the earlier orders counted and the history short.
+// The update now runs in two phases:
+// 1. Every allocation the token needs, with nothing published: the history's capacity, room for
+//    one more context in each order whose context is new, that context's key and its counts table
+//    already holding {token: 1}, and room in each existing context's counts table. The growth
+//    checks are the ones the former body made, at the same points, so every table grows exactly
+//    when it did before.
+// 2. Publishing, which allocates nothing and cannot throw.
+// A throw in phase 1 leaves the state exactly as it was before this token.
+namespace {
+struct PreparedOrder {
+	std::vector<int32_t> key;          // a new context's key (phase 1 builds it)
+	AntiLmState::ContextEntry entry;   // a new context's entry, already holding {token: 1}
+	bool is_new = false;
+};
+constexpr int kInlinePreparedOrders = 8;  // no heap scratch at the orders hosts use
+}  // namespace
+
 void AntiLmUpdate(AntiLmState* state, int32_t token) {
 	const std::size_t hist_size = state->history_.size();
-	for (int order = 1; order <= state->max_order(); ++order) {
+	const int max_order = state->max_order();
+	PreparedOrder inline_prepared[kInlinePreparedOrders];
+	std::vector<PreparedOrder> heap_prepared;  // only above kInlinePreparedOrders; may throw
+	PreparedOrder* prepared = inline_prepared;
+	if (max_order > kInlinePreparedOrders) {
+		heap_prepared.resize(static_cast<std::size_t>(max_order));
+		prepared = heap_prepared.data();
+	}
+	// Phase 1: may throw; publishes nothing.
+	state->history_.reserve(hist_size + 1);
+	for (int order = 1; order <= max_order; ++order) {
 		const std::size_t ctx_len = static_cast<std::size_t>(order - 1);
 		if (ctx_len > hist_size) continue;  // not enough history yet to form this order's context
 		const ContextView ctx_view{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
 		                              ctx_len};
 		auto& table = state->tables_[static_cast<size_t>(order - 1)];
+		PreparedOrder& prep = prepared[order - 1];
 		AntiLmState::ContextEntry* existing = table.Find(ctx_view);
-		if (!existing) {
-			state->retained_bytes_ += kContextBaseOverhead + ctx_view.size * kContextPerTokenOverhead;
+		if (existing) {
+			existing->counts.ReserveForInsert();
+		} else {
+			table.ReserveForInsert();
+			prep.key.assign(ctx_view.data, ctx_view.data + ctx_view.size);
+			prep.entry.counts[token] = 1;
+			prep.entry.total = 1;
+			prep.is_new = true;
 		}
-		AntiLmState::ContextEntry& entry = existing ? *existing : table.FindOrEmplace(ctx_view);
+	}
+	// Phase 2: cannot throw (every table has room, every new entry is built, the history has
+	// capacity).
+	for (int order = 1; order <= max_order; ++order) {
+		const std::size_t ctx_len = static_cast<std::size_t>(order - 1);
+		if (ctx_len > hist_size) continue;
+		auto& table = state->tables_[static_cast<size_t>(order - 1)];
+		PreparedOrder& prep = prepared[order - 1];
+		if (prep.is_new) {
+			state->retained_bytes_ += kContextBaseOverhead + ctx_len * kContextPerTokenOverhead;
+			state->retained_bytes_ += kCandidateOverhead;
+			table.EmplaceReserved(std::move(prep.key), std::move(prep.entry));
+			continue;
+		}
+		const ContextView ctx_view{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
+		                              ctx_len};
+		AntiLmState::ContextEntry& entry = *table.Find(ctx_view);
 		if (!entry.counts.Find(token)) { state->retained_bytes_ += kCandidateOverhead; }
 		entry.counts[token] += 1;
 		entry.total += 1;
@@ -164,7 +218,10 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 		                      ctx_len};
 		const auto& table = state->tables_[static_cast<size_t>(order - 1)];
 		const AntiLmState::ContextEntry* entry = table.Find(ctx);
-		if (!entry) continue;  // context never observed -- order excluded, not zeroed
+		// Context never observed -- order excluded, not zeroed. An entry with no observation
+		// (total == 0) is the same case. AntiLmUpdate never publishes one; the check is a
+		// defence, so a damaged state can never reach the division below.
+		if (!entry || entry->total <= 0) continue;
 		++active_count;
 		raw_sum += Q15Pow(kBetaQ15, max_order - order);
 	}
@@ -184,7 +241,7 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 		                      ctx_len};
 		const auto& table = state->tables_[static_cast<size_t>(order - 1)];
 		const AntiLmState::ContextEntry* entry = table.Find(ctx);
-		if (!entry) continue;
+		if (!entry || entry->total <= 0) continue;  // as the first pass
 		++active_index;
 		const int64_t normalized_weight =
 		    (active_index == active_count)
