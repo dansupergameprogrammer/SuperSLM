@@ -93,6 +93,27 @@ inline void MaybeThrowInjectedTiledGemmAllocFault() {
 #endif
 }
 
+// Schema fast-decode plan (rev 1.2.1) §11.0: the three J1 slots (tests/support/bad_alloc_injection.h).
+// Each is consulted at one site in src/sslm_abi.cpp: the forced-next table build at model map, the
+// jump-forward verb's admission before its batched pass, and the verb's anti-LM create.
+inline void MaybeThrowInjectedForcedTableBuildAllocFault() {
+#ifdef SUPERSLM_ENABLE_BAD_ALLOC_INJECTION
+	superslm_test::MaybeThrowInjectedForcedTableBuildAllocFault();
+#endif
+}
+
+inline void MaybeThrowInjectedJumpForwardPassAllocFault() {
+#ifdef SUPERSLM_ENABLE_BAD_ALLOC_INJECTION
+	superslm_test::MaybeThrowInjectedJumpForwardPassAllocFault();
+#endif
+}
+
+inline void MaybeThrowInjectedAntiLmCreateAllocFault() {
+#ifdef SUPERSLM_ENABLE_BAD_ALLOC_INJECTION
+	superslm_test::MaybeThrowInjectedAntiLmCreateAllocFault();
+#endif
+}
+
 inline void MaybeThrowInjectedBadAllocFaultPostLoadRegion() {
 #ifdef SUPERSLM_ENABLE_BAD_ALLOC_INJECTION
 	superslm_test::MaybeThrowInjectedFaultPostLoadRegion();

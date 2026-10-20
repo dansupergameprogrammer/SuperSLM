@@ -1,6 +1,7 @@
 #include "superslm/tokenizer.h"
 
 #include "bad_alloc_wrap.h"
+#include "tokenizer_tables.h"
 
 #include <algorithm>
 #include <cstring>
@@ -621,7 +622,25 @@ struct TokenizerViewAccess {
 	static bool OpenImpl(const SslmArtifact& artifact, TokenizerView& out, std::string* err);
 	static std::vector<int32_t> EncodeImpl(const TokenizerView& self, std::string_view text);
 	static std::string DecodeImpl(const TokenizerView& self, const std::vector<int32_t>& ids);
+	static bool ReadTables(const TokenizerView& self, internal::TokenizerTables* out) noexcept;
 };
+
+// src/tokenizer_tables.h: the parsed byte tables, named for the forced-next table builder.
+bool TokenizerViewAccess::ReadTables(const TokenizerView& self, internal::TokenizerTables* out) noexcept {
+	if (!out || !self.impl_ || !self.impl_->ok) return false;
+	out->byte_to_id = self.impl_->byte_to_id;
+	out->vocab_offsets_le = self.impl_->vocab_offsets;
+	out->vocab_blob = self.impl_->vocab_blob;
+	out->vocab_count = self.impl_->vocab_count;
+	out->specials = &self.impl_->specials;
+	return true;
+}
+
+namespace internal {
+bool ReadTokenizerTables(const TokenizerView& view, TokenizerTables* out) noexcept {
+	return TokenizerViewAccess::ReadTables(view, out);
+}
+}  // namespace internal
 
 bool TokenizerView::Open(const SslmArtifact& artifact, TokenizerView& out, std::string* err) {
 	return internal::WrapBadAllocContract(
