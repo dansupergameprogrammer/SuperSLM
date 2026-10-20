@@ -1067,9 +1067,13 @@ python tools/sslm_attach_schema.py --base <model>.sslm --ckpt <tokenizer checkpo
 - Every section and header flag of the base is carried over unchanged. The command
   refuses a base that already has a `SchemaMasks` section, because no merge policy is
   defined.
-- The new artifact is checked by the independent verifier (`sslm_verify`, built by
-  `cmake --build build --target sslm_verify`) before success is reported.
-- A refusal exits non-zero, prints its reason, and writes nothing at `--out`.
+- The independent verifier (`sslm_verify`, built by
+  `cmake --build build --target sslm_verify`) checks the base before any schema is
+  compiled, and checks the new artifact before success is reported.
+- `--out` is never the base. An `--out` that already exists is refused unless `--force`
+  is given.
+- A refusal exits non-zero, prints its reason, and writes nothing at `--out`. A missing
+  or malformed schema file or `--limits-json` is a refusal too.
 
 The compilable subset is objects with required keys in `properties` order and
 `additionalProperties: false`, enums, booleans, free-text strings, and arrays.
@@ -1092,6 +1096,12 @@ names its limit.
 | `serialized_mask_bytes` | 134,217,728 | `serialized mask byte limit` |
 | `tracked_temporary_bytes` | 268,435,456 | `tracked temporary memory limit` |
 
+- The limits are per schema, like the runtime loader's own bounds. Each `--schema` is
+  compiled under its own limits, and the command sets no cap on the combined
+  `SchemaMasks` section of several schemas.
+- The limits apply to every schema, including one without an array. An array-free
+  schema that 1.13.1 compiled, such as a large `enum` or an object chain nested more
+  than 8 deep, is refused when it crosses a limit.
 - `--limits-json` takes a JSON object that replaces the named limits for that run.
 - The compiler also refuses a schema if the vocabulary leaves some reachable state
   unable to finish a document.
