@@ -84,3 +84,48 @@ L, in recording and readback), while the GPU work is about 0.27 ms per layer. So
 layers, sets most of a headless token's cost: a whole token as one 24-layer slice takes 10.9 ms of wall time against
 28.2 ms as six 4-layer slices, for the same 6.6-6.7 ms of GPU work. In a game at a frame cap, one slice per frame means
 the slice count also sets the frames per token; the in-game frame-time check measures that separately.
+
+## Jump-forward off against on, on the GPU, whole-token depth (`gpujf.*`)
+
+`tools/schema_fast_decode_gpu_jf_bench.cpp`: the example's extraction (potion_shop_order, the scene's default utterance,
+41 prompt tokens) through the GPU G5 bridges, 15 interleaved pairs after one warm-up, the first arm alternating.
+
+- **off:** `SslmGpuSeqDecodeStepForG5Bridge` once per token, the whole token in one slice, until the walk accepts.
+- **on:** the §5.6 host loop on the GPU. Whenever the walk state has a forced chain, the chain goes to the device in one
+  `SslmGpuSeqPrefillSchemaContentForG5Bridge` call (sub-chunks of at most 4 tokens), and the next decode step only
+  finishes. A produced token is walked but not yet run; when a chain follows it, it runs first through
+  `SslmGpuSeqPrefillPromptForG5Bridge`, because the schema-content bridge checks every token against the walk state and
+  takes no pre-walked prefix (the CPU verb's `prewalked_prefix` has no GPU counterpart), so the GPU cannot fuse a produced
+  token with the chain after it into one submission as the CPU verb does.
+- **The forced chain** is the library's own: the CPU model's forced-next table, read through the §11.0 seam
+  `superslm::test::sfd::ForcedTableEntry`, followed through the SCM1 transitions from the GPU sequence's walk state. The
+  CPU model is only read; no CPU decode runs. The seam build is a test build of the CPU library (its logging hooks run
+  only in CPU decode, which this bench never calls).
+- **Build:** the engine from `36fe4b37` (src and include are unchanged from there to the branch tip; the tip's test seam
+  header is ahead of the library and does not compile with the seams on) with CMake's core source list, the GPU sources
+  and this bench file; bench sha256 `4ce98f6b…`; shaders as above (`run-gpujf.ps1`).
+- **Timed:** generation only, from the first call after the prompt prefill to acceptance. gpu_busy is the sum of
+  `LastCallTiming().gpu_busy_ms` over the run's layer-loop submissions; the finish's logits are not in it. The model is
+  mapped with the default residency, so each finish computes the full-vocabulary logits row on the host.
+
+| | off | on |
+|---|---|---|
+| tokens, stop | 28, accepting | 21, accepting |
+| layer submissions | 27 | 10 |
+| query wall ms [interval] | 645.4 [644.4, 646.6] | 242.8 [242.3, 243.9] |
+| query gpu_busy ms | 176.6 | 110.2 |
+| per token: wall / gpu_busy ms | 23.05 / 6.31 | 11.56 / 5.25 |
+| digest (all 15 runs equal) | `7e46330608d11704` | `8ad5ea7961656cef` |
+
+off / on wall = 2.660 [2.646, 2.665].
+
+- **Tokens:** both digests equal the CPU arms' (off `7e463306…`, on `8ad5ea79…`, `../2026-10-20-q6c/`): the GPU path
+  produces the same tokens as the CPU in each mode, and on gives the same 21-token stream (jump-forward's standard
+  tokenization of the fixed text) as on the CPU.
+- **Where the time goes:** off spends about 23 ms per token for 6.3 ms of GPU work. The rest is the per-submit cost
+  (about 3.7 ms, GX.3 above) and the finish, which computes all 151,936 logit rows on the host at this residency (about
+  11 ms per token, B1's `finishrows` at V). On removes 17 submissions, and with them the finishes of the forced tokens.
+- **The GPU finish:** `SslmGpuSeqFinishTokenForG5Bridge` computes the full-vocabulary logits row (on the device with a
+  device head, otherwise on the host through `LogitsSiteParallel`) and only then applies the schema mask
+  (`ApplyMaskAndArgmax`). It does not take the masked finish's legal-rows-only path, so the GPU gets none of M1's saving
+  at a finish; with a device head (as the packaged example maps it) the host part of a finish is about 1.35 ms.
