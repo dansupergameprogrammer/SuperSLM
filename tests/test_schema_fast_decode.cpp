@@ -19,8 +19,8 @@
 // or the independent reference rule (fsfd_ref.txt, computed outside the engine from the compiler's
 // character DFA and a Python Encode over bytes). It is never the build under test's new path.
 //
-// Until M1 and J1 land, the surface these cells call is the red stubs of
-// tests/schema_fast_decode/sfd_red_stubs.cpp (sfd_api.h states the convention).
+// The surface these cells call is declared in tests/schema_fast_decode/sfd_api.h and defined by M1 and
+// J1 in the library (the red round's stubs were removed when the slices landed).
 
 #include <algorithm>
 #include <atomic>
@@ -1298,10 +1298,10 @@ std::vector<uint8_t> BuildAdapterBytes(const Sfd& f) {
 
 // 2.4 [M1] The predicate as a pure function: set at 131,071, clear at 131,072.
 void Cell_2_4() {
-	CHECK_MSG(superslm::LegalRowFinishExact(131071), "[2.4] the predicate is clear at hidden 131,071");
-	CHECK_MSG(!superslm::LegalRowFinishExact(131072), "[2.4] the predicate is set at hidden 131,072");
-	CHECK_MSG(superslm::LegalRowFinishExact(kHidden), "[2.4] the predicate is clear at F-SFD's hidden 64");
-	CHECK_MSG(superslm::LegalRowFinishExact(896), "[2.4] the predicate is clear at the 0.5B's hidden 896");
+	CHECK_MSG(superslm::LegalRowFinishExact(131071), "[2.4] the predicate is not set at hidden 131,071");
+	CHECK_MSG(!superslm::LegalRowFinishExact(131072), "[2.4] the predicate is set at hidden 131,072 (want clear)");
+	CHECK_MSG(superslm::LegalRowFinishExact(kHidden), "[2.4] the predicate is not set at F-SFD's hidden 64");
+	CHECK_MSG(superslm::LegalRowFinishExact(896), "[2.4] the predicate is not set at the 0.5B's hidden 896");
 }
 
 struct PureRig {
@@ -1995,8 +1995,8 @@ void Cell_2_1() {
 	for (uint32_t s = 0; s < 3; ++s) sfd::ForcedTableEntry(m->m, 0, s, &nf[s], &fl[s]);
 	CHECK_MSG(nf[0] == h.tok_brace && fl[0] == 1, "[2.1] state 0: next %d |F| %u, want '{' (%d) and 1", nf[0], fl[0],
 	          h.tok_brace);
-	CHECK_MSG(nf[1] == -1 && fl[1] == 0 && nf[2] == -1 && fl[2] == 0, "[2.1] the cycle's states are forced: (%d, %u), "
-	          "(%d, %u)", nf[1], fl[1], nf[2], fl[2]);
+	CHECK_MSG(nf[1] == -1 && fl[1] == 0 && nf[2] == -1 && fl[2] == 0, "[2.1] the cycle's states are not both unforced: "
+	          "(%d, %u), (%d, %u), want (-1, 0) twice", nf[1], fl[1], nf[2], fl[2]);
 	Rig rig(m->m);
 	sslm_seq s = rig.NewSeq("h_cycle");
 	if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
@@ -2005,7 +2005,8 @@ void Cell_2_1() {
 	const JfRun r = RunJf(rig.m, s, o);
 	CHECK_MSG(r.stream.size() == 2 && !r.stream.empty() && r.stream[0] == h.tok_brace && r.decodes == 1,
 	          "[2.1] the loop: stream %s after %d decodes; want '{' then one decode", Str(r.stream).c_str(), r.decodes);
-	// The decode's choice is pending: this call admits it (h = 1) and nothing forced follows on the cycle.
+	// The decode's choice is pending, but the cycle's states are unforced, so this call is a no-op (§5.3: an
+	// unforced state admits nothing and the pending token stays for decode_step); so is the next one.
 	(void)JumpForward(rig.m, s, 8, nullptr, rig.W());
 	const Blob b = rig.State(s);
 	const Jump j2 = JumpForward(rig.m, s, 8, nullptr, rig.W());
@@ -2557,6 +2558,171 @@ void Cell_5_1() {
 		CHECK_MSG(saw_below && saw_exact && saw_above, "[5.1 %s] the sweep missed a boundary row: h = k - 1 %d, h = k %d, "
 		          "h = k + 1 %d", hname, saw_below, saw_exact, saw_above);
 	}
+	// Fix round 3 (code review round 1, finding 4): h = 0 with NO pending token. A first verb call with one
+	// token of headroom admits the start chain's first forced token (a partial case, 1 <= h < k), so the
+	// sequence rests ready for logits with h = 0 and nothing pending. A second verb call admits nothing,
+	// returns the limit status and changes nothing. §5.5's partial rows apply ("the next decode_step runs the
+	// finish only, with no re-embed"): the finish needs no row, so the next decode returns SSLM_OK with a
+	// token and context_length does not rise. (§5.5's h = 0 row says the next decode returns "today's status
+	// for that limit"; with no pending token today's decode at a ready sequence is SSLM_OK. docs/api.md's
+	// "returns the same" limit status holds only when a token is pending.)
+	for (int holder = 0; holder < 2; ++holder) {
+		const sslm_status limit_st = holder == 0 ? SSLM_CONTEXT_CAP_EXCEEDED : SSLM_KV_BUDGET_EXCEEDED;
+		const char* hname = holder == 0 ? "cap holder" : "KV-budget holder";
+		Rig rig(f.m1->m);
+		std::vector<int32_t> prompt;
+		int32_t budget = 0;
+		if (holder == 0) {
+			for (size_t i = 0; i + 1 < size_t(kCap); ++i) prompt.push_back(f.prompt_potion[i % f.prompt_potion.size()]);
+		} else {
+			prompt = f.prompt_potion;
+			budget = static_cast<int32_t>(prompt.size()) + 1;
+		}
+		sslm_seq s = holder == 0 ? rig.NewSeq(kPotion) : rig.NewBudgeted(budget, kPotion);
+		if (!s || !rig.PromptOk(s, prompt)) continue;
+		const Jump j1 = JumpForward(rig.m, s, 64, nullptr, rig.W());
+		const Blob b1 = rig.State(s);
+		CHECK_MSG(j1.st == limit_st && j1.forced.size() == 1 && j1.forced[0] == r.st[r.start].chain[0] && b1.ready == 1,
+		          "[5.1 %s h 0, no pending] setup: status %d, forced %s, ready %u; want the limit status, the start "
+		          "chain's first token and ready for logits", hname, static_cast<int>(j1.st), Str(j1.forced).c_str(),
+		          b1.ready);
+		const std::vector<uint8_t> blob_before = rig.Save(s);
+		const Jump j2 = JumpForward(rig.m, s, 64, nullptr, rig.W());
+		CHECK_MSG(j2.st == limit_st && j2.count == 0 && rig.Save(s) == blob_before, "[5.1 %s h 0, no pending] status %d "
+		          "count %d; want the limit status, nothing admitted and nothing changed", hname, static_cast<int>(j2.st),
+		          j2.count);
+		int32_t t = -100;
+		const sslm_status ds = rig.Decode1(s, rig.Greedy(), rig.W(), &t);
+		const Blob b2 = rig.State(s);
+		CHECK_MSG(ds == SSLM_OK && t >= 0 && t < kV && b2.ctx == b1.ctx, "[5.1 %s h 0, no pending] the next decode: "
+		          "status %d token %d, context_length %lld -> %lld; want SSLM_OK, a token, and no rise", hname,
+		          static_cast<int>(ds), t, static_cast<long long>(b1.ctx), static_cast<long long>(b2.ctx));
+	}
+}
+
+// Fix round 3 (code review round 1, findings 1-3): a verb failure AFTER the anti-LM re-key. The slots of the
+// first arms (cells 5.2 and 8.6 (vi) below) fire before EnsureAntiLm touches the state, and on a sequence
+// with no prior state, so they cannot see a re-key that a later failure leaves behind. Here the sequence
+// first holds a damped state at order 3 with a one-token history (the verb at order 3, budget 1, admits the
+// start chain's first token); the failing call is the verb at damped order 2, budget 1, which re-keys
+// before its pass. The failure fires at one of:
+//   - the cell's own slot (kPassSlot for 5.2, kCreateSlot for 8.6 (vi)), now on the prior-state sequence;
+//   - the layer-site seam inside the batched pass (src/forward/parallel_split.h): a std::bad_alloc at the q
+//     projection of layer 0 and at the down projection of the last layer (after K/V landing), and a domain
+//     rejection at the gate projection of the last layer. These are the named equivalents of the
+//     allocations the review's probe failed (#27, #31, #40, all inside the pass after the re-key);
+//   - a hostile hook that omits a task (kOmit) under the lowered minimum-work seam, so the pass's one-row
+//     split reaches the hook and fails with SSLM_INVALID_ARGUMENT.
+// Plan §5.8 and cell 5.2: a failed call changes nothing (order, history and the whole save blob), and a
+// retry gives the same result as a sequence that never failed. The real allocation failure inside
+// AntiLmCreate (finding 2, a dangling pointer) needs a replaced global operator new, so it is swept in its
+// own executable, tests/schema_fast_decode/sfd_alloc_main.cpp; the save and release that follow every arm
+// here are what LSan/ASan read.
+enum class Rekey { kPassSlot, kCreateSlot, kQBadAlloc, kDownBadAlloc, kGateUpStatus, kHostileHook };
+
+const char* RekeyName(Rekey k) {
+	switch (k) {
+	case Rekey::kPassSlot: return "pass slot";
+	case Rekey::kCreateSlot: return "create slot";
+	case Rekey::kQBadAlloc: return "bad_alloc at layer 0 q";
+	case Rekey::kDownBadAlloc: return "bad_alloc at the last layer's down";
+	case Rekey::kGateUpStatus: return "domain rejection at the last layer's gate";
+	case Rekey::kHostileHook: return "hostile hook (omit)";
+	}
+	return "?";
+}
+
+void PriorStateFailure(const char* cell, Rekey fault) {
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	const char* name = RekeyName(fault);
+	// The reference: the same two calls with no failure.
+	std::vector<uint8_t> ref_after;
+	{
+		Rig ref(f.m1->m);
+		sslm_seq s = ref.NewSeq(kPotion);
+		if (!s || !ref.PromptOk(s, f.prompt_potion)) return;
+		const sslm_decode_params p3 = ref.Damped(3), p2 = ref.Damped(2);
+		const Jump a = JumpForward(ref.m, s, 1, &p3, ref.W());
+		const Jump b = JumpForward(ref.m, s, 1, &p2, ref.W());
+		CHECK_MSG(a.st == SSLM_OK && a.count == 1 && b.st == SSLM_OK && b.count == 1, "[%s, %s] the reference: verb@3 "
+		          "status %d count %d, verb@2 status %d count %d", cell, name, static_cast<int>(a.st), a.count,
+		          static_cast<int>(b.st), b.count);
+		ref_after = ref.Save(s);
+	}
+	Rig rig(f.m1->m);
+	sslm_seq s = rig.NewSeq(kPotion);
+	if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
+	const sslm_decode_params p3 = rig.Damped(3), p2 = rig.Damped(2);
+	const Jump setup = JumpForward(rig.m, s, 1, &p3, rig.W());
+	const std::vector<uint8_t> before = rig.Save(s);
+	const Blob b0 = ParseBlob(before);
+	CHECK_MSG(setup.st == SSLM_OK && setup.count == 1 && b0.order == 3 && b0.hist.size() == 1, "[%s, %s] setup: verb@3 "
+	          "status %d count %d, order %d, history %s", cell, name, static_cast<int>(setup.st), setup.count, b0.order,
+	          Str(b0.hist).c_str());
+	if (setup.st != SSLM_OK || b0.order != 3 || b0.hist.size() != 1) return;
+	sslm_status want = SSLM_ALLOCATION_FAILED;
+	CountingHook h;
+	h.max_tasks = 4;
+	h.hostile = Hostile::kOmit;
+	std::unique_ptr<MinWorkScope> min_work;
+	switch (fault) {
+	case Rekey::kPassSlot: superslm_test::g_inject_jump_forward_pass_alloc_failure = true; break;
+	case Rekey::kCreateSlot: superslm_test::g_inject_anti_lm_create_alloc_failure = true; break;
+	case Rekey::kQBadAlloc:
+		superslm::test::ArmLayerSiteFault(superslm::MatvecFaultSite::kQ, 0, superslm::MatvecFaultKind::kBadAlloc);
+		break;
+	case Rekey::kDownBadAlloc:
+		superslm::test::ArmLayerSiteFault(superslm::MatvecFaultSite::kDown, static_cast<uint32_t>(kLayers - 1),
+		                                  superslm::MatvecFaultKind::kBadAlloc);
+		break;
+	case Rekey::kGateUpStatus:
+		superslm::test::ArmLayerSiteFault(superslm::MatvecFaultSite::kGateUp, static_cast<uint32_t>(kLayers - 1),
+		                                  superslm::MatvecFaultKind::kNonPfiStatus);
+		want = SSLM_ARTIFACT_REJECTED;
+		break;
+	case Rekey::kHostileHook:
+		min_work = std::make_unique<MinWorkScope>(kSmallMinWork);
+		if (!Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) return;
+		want = SSLM_INVALID_ARGUMENT;
+		break;
+	}
+	const Jump j = JumpForward(rig.m, s, 1, &p2, rig.W());
+	bool fired = true;
+	switch (fault) {
+	case Rekey::kPassSlot:
+		fired = !superslm_test::g_inject_jump_forward_pass_alloc_failure;
+		superslm_test::g_inject_jump_forward_pass_alloc_failure = false;
+		break;
+	case Rekey::kCreateSlot:
+		fired = !superslm_test::g_inject_anti_lm_create_alloc_failure;
+		superslm_test::g_inject_anti_lm_create_alloc_failure = false;
+		break;
+	case Rekey::kQBadAlloc:
+	case Rekey::kDownBadAlloc:
+	case Rekey::kGateUpStatus: superslm::test::DisarmLayerSiteFault(); break;
+	case Rekey::kHostileHook:
+		fired = !h.Counts().empty();
+		Install(rig.W(), nullptr, 0);
+		min_work.reset();
+		break;
+	}
+	CHECK_MSG(fired && j.st == want && j.count == 0, "[%s, %s] verb@2 on an order-3 state: status %d count %d (fired %d), "
+	          "want status %d and nothing admitted", cell, name, static_cast<int>(j.st), j.count, fired,
+	          static_cast<int>(want));
+	const std::vector<uint8_t> after = rig.Save(s);
+	const Blob b1 = ParseBlob(after);
+	CHECK_MSG(b1.order == b0.order, "[%s, %s] the failed call changed the anti-LM order %d -> %d", cell, name, b0.order,
+	          b1.order);
+	CHECK_MSG(b1.hist == b0.hist, "[%s, %s] the failed call changed the anti-LM history %s -> %s", cell, name,
+	          Str(b0.hist).c_str(), Str(b1.hist).c_str());
+	CHECK_MSG(after == before, "[%s, %s] the failed call changed the save blob", cell, name);
+	const Jump retry = JumpForward(rig.m, s, 1, &p2, rig.W());
+	CHECK_MSG(retry.st == SSLM_OK && retry.count == 1 && rig.Save(s) == ref_after, "[%s, %s] the retry: status %d count "
+	          "%d, blob %s the never-failed sequence's", cell, name, static_cast<int>(retry.st), retry.count,
+	          rig.Save(s) == ref_after ? "equals" : "differs from");
+	(void)rig.Save(s);
+	rig.Release(s);
 }
 
 // 5.2 [J1] Allocation failure inside the batched pass: no state change, and a retry gives the same result.
@@ -2577,6 +2743,9 @@ void Cell_5_2() {
 	const Jump retry = JumpForward(rig.m, s, 64, nullptr, rig.W());
 	CHECK_MSG(retry.st == SSLM_OK && retry.forced == f.R(kPotion).st[0].chain, "[5.2] the retry: status %d forced %s",
 	          static_cast<int>(retry.st), Str(retry.forced).c_str());
+	// Fix round 3 (review finding 3): the same failure after the re-key, on a prior damped state.
+	for (Rekey k : {Rekey::kPassSlot, Rekey::kQBadAlloc, Rekey::kDownBadAlloc, Rekey::kGateUpStatus, Rekey::kHostileHook})
+		PriorStateFailure("5.2", k);
 }
 
 // 5.3 [J1] A verb call with layer_index != 0 is refused and changes nothing.
@@ -3046,6 +3215,10 @@ void Cell_8_6() {
 			          "consumed %d); want SSLM_ALLOCATION_FAILED and nothing admitted", static_cast<int>(j.st), consumed);
 		}
 	}
+	// (vi), fix round 3 (review findings 2-3): on a sequence that already holds a damped state at order 3,
+	// the create slot and the failures after the re-key. A real failing AntiLmCreate (the dangling pointer of
+	// finding 2) is swept by tests/schema_fast_decode/sfd_alloc_main.cpp.
+	for (Rekey k : {Rekey::kCreateSlot, Rekey::kQBadAlloc, Rekey::kDownBadAlloc}) PriorStateFailure("8.6 (vi)", k);
 	// (vii) Refusal parity with sslm_decode_step_v2's parameter validation.
 	{
 		std::unique_ptr<Mapped> nodgc = Map(VariantWithout(f, {kSecDgc1}, superslm::kDampedGreedyArtifactConstantsFlag));

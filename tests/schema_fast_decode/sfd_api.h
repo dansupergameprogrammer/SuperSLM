@@ -16,11 +16,9 @@
 //      the test libraries only, under SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS (CMakeLists.txt
 //      defines it on every library a suite binary links), and are absent from the production library.
 //
-// Until M1 and J1 land, tests/schema_fast_decode/sfd_red_stubs.cpp defines every symbol below as
-// "no behaviour" (a refusal, an empty log, nothing written through any pointer), behind the CMake
-// option SUPERSLM_SFD_RED_STUBS (default ON). The builder defines the real symbols in the library and
-// turns the option OFF in the same commit; a stub left ON beside a real definition is a duplicate
-// symbol, so the link refuses the pair (the paged-kv T0 convention, tests/paged-kv/pkv_r9_stubs.cpp).
+// M1 and J1 define every symbol below in the library. The red round's no-behaviour stubs
+// (sfd_red_stubs.cpp) and their CMake option SUPERSLM_SFD_RED_STUBS were removed when the slices
+// landed (CHANGELOG.md, CMakeLists.txt), so a missing definition is now a link error.
 #ifndef SUPERSLM_TESTS_SCHEMA_FAST_DECODE_SFD_API_H
 #define SUPERSLM_TESTS_SCHEMA_FAST_DECODE_SFD_API_H
 

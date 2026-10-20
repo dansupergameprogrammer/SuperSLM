@@ -168,8 +168,7 @@ inline void MaybeThrowInjectedTiledGemmAllocFault() {
 // Schema fast-decode plan (rev 1.2.1) §11.0, three single-shot slots for the J1 cells. Each is
 // consulted on the calling thread, at one site only, and disarms itself when it fires; armed, the
 // site throws std::bad_alloc exactly as a failed allocation there would. src/bad_alloc_wrap.h
-// carries the src-side wrappers the J1 build adds beside the others. Until J1 wires them in, nothing
-// consults them and the cells that arm them are red.
+// carries the src-side wrappers the J1 build adds beside the others; J1 consults all three.
 //   - forced-table build (cell 5.6): the forced-next table builder at CPU model map, before it
 //     allocates the per-schema table. The map then fails with SSLM_ALLOCATION_FAILED.
 //   - verb batched pass (cell 5.2): sslm_seq_jump_forward's admission, after every refusal check

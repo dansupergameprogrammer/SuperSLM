@@ -383,6 +383,17 @@ if(BUILD_TESTING)
 	else()
 		target_compile_options(superslm_decode_threading_alloc PRIVATE -Wall -Wextra -ffp-contract=off)
 	endif()
+	# Schema fast-decode cells 5.2 and 8.6 (vi), fix round 3: a real allocation failure at every allocation
+	# one sslm_seq_jump_forward call makes, after its anti-LM re-key, on a sequence with a prior damped
+	# state. Its own executable for the same reason (it replaces the global operator new).
+	add_executable(superslm_schema_fast_decode_alloc tests/schema_fast_decode/sfd_alloc_main.cpp)
+	target_link_libraries(superslm_schema_fast_decode_alloc PRIVATE superslm_test_injection)
+	add_test(NAME superslm_schema_fast_decode_alloc COMMAND superslm_schema_fast_decode_alloc)
+	if(MSVC)
+		target_compile_options(superslm_schema_fast_decode_alloc PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(superslm_schema_fast_decode_alloc PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
 endif()
 
 # T-2149 (Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md) / T-2158 red suite
