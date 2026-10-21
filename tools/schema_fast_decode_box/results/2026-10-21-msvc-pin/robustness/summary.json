@@ -1,0 +1,128 @@
+{
+    "rounds":  15,
+    "reference":  "2af41659",
+    "orders":  [
+                   "bfdec2a6,bfdec2a6+pin,83a82c20,83a82c20+pin,2af41659",
+                   "bfdec2a6+pin,83a82c20,83a82c20+pin,2af41659,bfdec2a6",
+                   "83a82c20,83a82c20+pin,2af41659,bfdec2a6,bfdec2a6+pin",
+                   "83a82c20+pin,2af41659,bfdec2a6,bfdec2a6+pin,83a82c20",
+                   "2af41659,bfdec2a6,bfdec2a6+pin,83a82c20,83a82c20+pin",
+                   "bfdec2a6,bfdec2a6+pin,83a82c20,83a82c20+pin,2af41659",
+                   "bfdec2a6+pin,83a82c20,83a82c20+pin,2af41659,bfdec2a6",
+                   "83a82c20,83a82c20+pin,2af41659,bfdec2a6,bfdec2a6+pin",
+                   "83a82c20+pin,2af41659,bfdec2a6,bfdec2a6+pin,83a82c20",
+                   "2af41659,bfdec2a6,bfdec2a6+pin,83a82c20,83a82c20+pin",
+                   "bfdec2a6,bfdec2a6+pin,83a82c20,83a82c20+pin,2af41659",
+                   "bfdec2a6+pin,83a82c20,83a82c20+pin,2af41659,bfdec2a6",
+                   "83a82c20,83a82c20+pin,2af41659,bfdec2a6,bfdec2a6+pin",
+                   "83a82c20+pin,2af41659,bfdec2a6,bfdec2a6+pin,83a82c20",
+                   "2af41659,bfdec2a6,bfdec2a6+pin,83a82c20,83a82c20+pin"
+               ],
+    "arms":  [
+                 {
+                     "label":  "2af41659",
+                     "commit":  "given",
+                     "build":  "existing",
+                     "bench_sha256":  "b1260b8faeedaaf82c313bcb26355a4765627d5eb3b07a32c25315e4674f3a37",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  144.5148,
+                                    "sign_lo":  144.4049,
+                                    "sign_hi":  144.7292
+                                },
+                     "ratio_arm_over_ref":  {
+                                                "n":  15,
+                                                "median":  1,
+                                                "sign_lo":  1,
+                                                "sign_hi":  1
+                                            },
+                     "digests":  [
+                                     "n/a"
+                                 ]
+                 },
+                 {
+                     "label":  "bfdec2a6",
+                     "commit":  "given",
+                     "build":  "existing",
+                     "bench_sha256":  "a8131f4eb108b55a045339512808f32a4d0e8edc43f7a358ffbe4bbd3a1c8a0f",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  185.4951,
+                                    "sign_lo":  185.1816,
+                                    "sign_hi":  185.7774
+                                },
+                     "ratio_arm_over_ref":  {
+                                                "n":  15,
+                                                "median":  1.2814,
+                                                "sign_lo":  1.2804,
+                                                "sign_hi":  1.2865
+                                            },
+                     "digests":  [
+                                     "n/a"
+                                 ]
+                 },
+                 {
+                     "label":  "bfdec2a6+pin",
+                     "commit":  "10e15fbaff71fee97a45a369dbc38c361b09a675",
+                     "build":  "fresh",
+                     "bench_sha256":  "e103bafe12a128e460fc78ddc09e996edf97726d2d988872092adf9ddecbb260",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  144.7711,
+                                    "sign_lo":  144.6771,
+                                    "sign_hi":  145.0211
+                                },
+                     "ratio_arm_over_ref":  {
+                                                "n":  15,
+                                                "median":  1.0023,
+                                                "sign_lo":  1.0007,
+                                                "sign_hi":  1.0026
+                                            },
+                     "digests":  [
+                                     "n/a"
+                                 ]
+                 },
+                 {
+                     "label":  "83a82c20",
+                     "commit":  "given",
+                     "build":  "existing",
+                     "bench_sha256":  "4271e1eaf51ffb28b41653f1e61778438b49f6627eabeeef8daa534d2fa4e283",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  185.077,
+                                    "sign_lo":  184.64,
+                                    "sign_hi":  185.4074
+                                },
+                     "ratio_arm_over_ref":  {
+                                                "n":  15,
+                                                "median":  1.2786,
+                                                "sign_lo":  1.2765,
+                                                "sign_hi":  1.2822
+                                            },
+                     "digests":  [
+                                     "n/a"
+                                 ]
+                 },
+                 {
+                     "label":  "83a82c20+pin",
+                     "commit":  "5e1a7de157bbe76100b002765eb99e377b22a6c9",
+                     "build":  "fresh library, decode-only bench",
+                     "bench_sha256":  "e95ffe12adaca14846c6afe5f059a2826d6ce2749d5e1d74cc3c281b5366524b",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  144.5213,
+                                    "sign_lo":  144.311,
+                                    "sign_hi":  144.6785
+                                },
+                     "ratio_arm_over_ref":  {
+                                                "n":  15,
+                                                "median":  1.0003,
+                                                "sign_lo":  0.9966,
+                                                "sign_hi":  1.0008
+                                            },
+                     "digests":  [
+                                     "n/a"
+                                 ]
+                 }
+             ]
+}

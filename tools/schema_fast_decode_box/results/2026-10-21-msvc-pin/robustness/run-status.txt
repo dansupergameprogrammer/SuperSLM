@@ -1,0 +1,13 @@
+[2026-10-20T20:32:21.7167817-07:00] start pid 14916 arms '2af41659=D:\SuperSLM\.worktrees\sfd-arm-2af41659\build-fresh\sslm_schema_fast_decode_bench.exe;bfdec2a6=D:\SuperSLM\.worktrees\sfd-arm-bfdec2a6\build-fresh\sslm_schema_fast_decode_bench.exe;bfdec2a6+pin=10e15fba;83a82c20=D:\SuperSLM\.worktrees\sfd-arm-83a82c20\build-fresh\sslm_schema_fast_decode_bench_do.exe;83a82c20+pin=5e1a7de1!do'
+[2026-10-20T20:32:39.6611210-07:00] arm 2af41659: given (existing) bench b1260b8faeedaaf82c313bcb26355a4765627d5eb3b07a32c25315e4674f3a37
+[2026-10-20T20:32:39.6631234-07:00] arm bfdec2a6: given (existing) bench a8131f4eb108b55a045339512808f32a4d0e8edc43f7a358ffbe4bbd3a1c8a0f
+[2026-10-20T20:32:39.6881222-07:00] arm bfdec2a6+pin: 10e15fbaff71fee97a45a369dbc38c361b09a675 (fresh) bench e103bafe12a128e460fc78ddc09e996edf97726d2d988872092adf9ddecbb260
+[2026-10-20T20:32:39.6911218-07:00] arm 83a82c20: given (existing) bench 4271e1eaf51ffb28b41653f1e61778438b49f6627eabeeef8daa534d2fa4e283
+[2026-10-20T20:32:39.7131231-07:00] arm 83a82c20+pin: 5e1a7de157bbe76100b002765eb99e377b22a6c9 (fresh library, decode-only bench) bench e95ffe12adaca14846c6afe5f059a2826d6ce2749d5e1d74cc3c281b5366524b
+[2026-10-20T20:32:40.2826881-07:00] model sha256 9ccf7e378bbe47aa0ffd3810aa82875926cbe51af1bdfa08393c3fae657463da
+[2026-10-20T20:35:51.9479493-07:00] 2af41659: gen 144.5148 [144.4049, 144.7292] ratio 2af41659/2af41659 1 [1, 1] digests n/a
+[2026-10-20T20:35:51.9509508-07:00] bfdec2a6: gen 185.4951 [185.1816, 185.7774] ratio bfdec2a6/2af41659 1.2814 [1.2804, 1.2865] digests n/a
+[2026-10-20T20:35:51.9569509-07:00] bfdec2a6+pin: gen 144.7711 [144.6771, 145.0211] ratio bfdec2a6+pin/2af41659 1.0023 [1.0007, 1.0026] digests n/a
+[2026-10-20T20:35:51.9629502-07:00] 83a82c20: gen 185.077 [184.64, 185.4074] ratio 83a82c20/2af41659 1.2786 [1.2765, 1.2822] digests n/a
+[2026-10-20T20:35:51.9699509-07:00] 83a82c20+pin: gen 144.5213 [144.311, 144.6785] ratio 83a82c20+pin/2af41659 1.0003 [0.9966, 1.0008] digests n/a
+[2026-10-20T20:35:51.9824676-07:00] end PASS
