@@ -13,6 +13,19 @@
 // token after earlier tokens landed returns SSLM_SEQUENCE_REJECTED with the prefix ready at full depth.
 // RED before the fix: that exit left the snapshot invalid too.
 //
+// Rev 1.18.3 (code review of the four precache changes, findings 1-3): three legs whose last call is not the
+// call that landed tokens. Restore derives the snapshot (valid iff L > 0) and the bind permission (iff L = 0)
+// from L alone, so the original must hold the same values whatever call history produced it:
+//   (A) a budget stop that lands tokens, then a retry that lands none: the retry's exit skips the refresh;
+//   (B) a successful prefill, then a call whose token is outside the vocabulary: the bridge clears the
+//       snapshot before the embed check refuses it;
+//   (D) an empty prefix given a zero-count prefill, which clears its bind permission; the restored copy at
+//       L = 0 has it again, so a begin_from child of each binds a schema differently.
+// Each grades only that the original and the restored copy behave the same, not which remedy makes them so.
+// RED at d42cec75 on all three. Mutant exit-refresh-only (apply_gpu_mutant.py, every failing exit of a ready
+// prefix refreshes the snapshot, nothing at freeze) turns A and B green and leaves D red: a fix confined to
+// the call's exits is caught.
+//
 // Run: pcg_cell_budget_snapshot.exe --fixture-dir=DIR (pkv_def).
 #include "pcg_helpers.h"
 
@@ -160,6 +173,111 @@ void CellSchemaRejectSnapshot(const Env& e) {
 	CHECK_MSG(!a.tokens.empty() && a.tokens == b.tokens, "schema reject: the two adopters' greedy tokens differ");
 }
 
+// Freeze, save and restore `p`; an adopter of each reads the snapshot and decodes, and the two must agree.
+void CompareAdopters(Rig& rig, const Env& e, SslmGpuPrefixHandle* p, int64_t len, int32_t last, const char* leg) {
+	CHECK_MSG(sslm_gpu_prefix_freeze(rig.ctx, p) == GS::SSLM_OK, "%s: freeze", leg);
+	GS sst = GS::SSLM_DEVICE_LOST;
+	const std::vector<uint8_t> blob = SavePrefix(e, p, &sst);
+	CHECK_MSG(sst == GS::SSLM_OK && !blob.empty(), "%s: save %s", leg, Name(sst));
+	if (blob.empty()) return;
+	const RestoredPrefix r = RestorePrefix(rig, blob);
+	CHECK_MSG(r.status == GS::SSLM_OK && r.p, "%s: restore %s", leg, Name(r.status));
+	if (!r.p) return;
+	uint32_t hidden = 0;
+	CHECK(sslm_gpu_model_hidden_size(rig.model, &hidden) == GS::SSLM_OK && hidden > 0);
+	const AdopterView a = Observe(rig, p, len, last, hidden);
+	const AdopterView b = Observe(rig, r.p, len, last, hidden);
+	std::printf("%s: L=%lld; original adopter read %s, restored adopter read %s\n", leg, static_cast<long long>(len),
+	            Name(a.read), Name(b.read));
+	CHECK_MSG(a.read == b.read, "%s: adopters of the original (%s) and of the restored prefix (%s) read the snapshot differently",
+	          leg, Name(a.read), Name(b.read));
+	if (a.read == GS::SSLM_OK && b.read == GS::SSLM_OK) {
+		CHECK_MSG(a.codes == b.codes && a.m == b.m && a.e == b.e, "%s: the two adopters' snapshot codes or scale differ", leg);
+	}
+	CHECK_MSG(!a.tokens.empty() && a.tokens == b.tokens, "%s: the two adopters' greedy tokens differ", leg);
+}
+
+// (A) A budget stop that lands tokens, then one retry that lands none (the shape of a chunked prefill loop).
+void CellBudgetRetrySnapshot(const Env& e) {
+	Rig rig(e, 32);
+	if (!rig.pool) return;
+	const std::vector<int32_t> t = PrefixTokens(30, 47);
+	SslmGpuPrefixHandle* raw = nullptr;
+	GS st = sslm_gpu_prefix_begin(rig.ctx, rig.model, rig.pool, 20, &raw);
+	CHECK_MSG(st == GS::SSLM_OK, "A: prefix_begin(20): %s", StatusName(st));
+	if (st != GS::SSLM_OK) return;
+	SslmGpuPrefixHandle* p = rig.Prefix(raw);
+	int32_t c1 = 0, c2 = 0;
+	st = sslm_gpu_prefix_prefill(rig.ctx, p, t.data(), 30, 0, e.full_budget * 30u, &c1);
+	CHECK_MSG(st == GS::SSLM_GPU_KV_BUDGET_EXCEEDED && c1 == 20, "A: call 1 must land 20 and stop at the budget: %s, consumed %d",
+	          StatusName(st), c1);
+	if (c1 <= 0) return;
+	st = sslm_gpu_prefix_prefill(rig.ctx, p, t.data() + c1, 1, 0, e.full_budget, &c2);
+	CHECK_MSG(st == GS::SSLM_GPU_KV_BUDGET_EXCEEDED && c2 == 0, "A: the retry must land none and stop at the budget: %s, consumed %d",
+	          StatusName(st), c2);
+	CompareAdopters(rig, e, p, c1, t[static_cast<size_t>(c1) - 1], "A budget retry");
+}
+
+// (B) A successful prompt prefill, then a call whose only token is outside the vocabulary.
+void CellEmbedRejectSnapshot(const Env& e) {
+	Rig rig(e, 32);
+	if (!rig.pool) return;
+	const std::vector<int32_t> t = PrefixTokens(10, 5);
+	SslmGpuPrefixHandle* raw = nullptr;
+	GS st = sslm_gpu_prefix_begin(rig.ctx, rig.model, rig.pool, 64, &raw);
+	CHECK_MSG(st == GS::SSLM_OK, "B: prefix_begin: %s", StatusName(st));
+	if (st != GS::SSLM_OK) return;
+	SslmGpuPrefixHandle* p = rig.Prefix(raw);
+	int32_t c1 = 0, c2 = 0;
+	st = sslm_gpu_prefix_prefill(rig.ctx, p, t.data(), 10, 0, e.full_budget * 10u, &c1);
+	CHECK_MSG(st == GS::SSLM_OK && c1 == 10, "B: call 1 must land all 10: %s, consumed %d", StatusName(st), c1);
+	if (c1 != 10) return;
+	const uint32_t vocab = e.fx.view.config.vocab_size;
+	const int32_t bad = static_cast<int32_t>(vocab);
+	st = sslm_gpu_prefix_prefill(rig.ctx, p, &bad, 1, 0, e.full_budget, &c2);
+	CHECK_MSG(st != GS::SSLM_OK && c2 == 0, "B: token %d (the vocabulary is %u) must be refused with none landed: %s, consumed %d",
+	          bad, vocab, StatusName(st), c2);
+	std::printf("B embed reject: call 2 (token %d) %s\n", bad, Name(st));
+	CompareAdopters(rig, e, p, c1, t[9], "B embed reject");
+}
+
+// (D) An empty prefix given a zero-count prefill, frozen, saved and restored at L = 0. A begin_from child of
+// the original and one of the restored copy each bind schema 0, and must get the same answer.
+void CellBindPermissionHistory(const Env& e) {
+	Rig rig(e, 32);
+	if (!rig.pool) return;
+	SslmGpuPrefixHandle* raw = nullptr;
+	GS st = sslm_gpu_prefix_begin(rig.ctx, rig.model, rig.pool, 64, &raw);
+	CHECK_MSG(st == GS::SSLM_OK, "D: prefix_begin: %s", StatusName(st));
+	if (st != GS::SSLM_OK) return;
+	SslmGpuPrefixHandle* p = rig.Prefix(raw);
+	const int32_t unused = 0;
+	int32_t c = -1;
+	st = sslm_gpu_prefix_prefill(rig.ctx, p, &unused, 0, 0, e.full_budget, &c);
+	CHECK_MSG(st == GS::SSLM_OK && c == 0, "D: the zero-count prefill: %s, consumed %d", StatusName(st), c);
+	CHECK_MSG(sslm_gpu_prefix_freeze(rig.ctx, p) == GS::SSLM_OK, "D: freeze");
+	GS sst = GS::SSLM_DEVICE_LOST;
+	const std::vector<uint8_t> blob = SavePrefix(e, p, &sst);
+	CHECK_MSG(sst == GS::SSLM_OK && !blob.empty(), "D: save %s", Name(sst));
+	if (blob.empty()) return;
+	const RestoredPrefix r = RestorePrefix(rig, blob);
+	CHECK_MSG(r.status == GS::SSLM_OK && r.p, "D: restore %s", Name(r.status));
+	if (!r.p) return;
+	SslmGpuPrefixHandle* k1 = nullptr;
+	SslmGpuPrefixHandle* k2 = nullptr;
+	const GS b1 = sslm_gpu_prefix_begin_from(rig.ctx, p, 16, &k1);
+	const GS b2 = sslm_gpu_prefix_begin_from(rig.ctx, r.p, 16, &k2);
+	k1 = rig.Prefix(k1);
+	k2 = rig.Prefix(k2);
+	CHECK_MSG(b1 == GS::SSLM_OK && b2 == GS::SSLM_OK, "D: begin_from: original %s, restored %s", Name(b1), Name(b2));
+	if (!k1 || !k2) return;
+	const GS s1 = sslm_gpu_prefix_set_schema(rig.ctx, k1, 0);
+	const GS s2 = sslm_gpu_prefix_set_schema(rig.ctx, k2, 0);
+	std::printf("D bind permission: child of original set_schema %s, child of restored set_schema %s\n", Name(s1), Name(s2));
+	CHECK_MSG(s1 == s2, "D: children of the original (%s) and of the restored prefix (%s) bind a schema differently",
+	          Name(s1), Name(s2));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -169,6 +287,9 @@ int main(int argc, char** argv) {
 		if (e.Open(FixturePath(argc, argv))) {
 			CellBudgetSnapshot(e);
 			CellSchemaRejectSnapshot(e);
+			CellBudgetRetrySnapshot(e);
+			CellEmbedRejectSnapshot(e);
+			CellBindPermissionHistory(e);
 		}
 	}
 	return FinishSuite("pcg_cell_budget_snapshot");

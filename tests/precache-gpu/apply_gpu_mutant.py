@@ -11,6 +11,9 @@ tests/paged-kv-gpu/build_paged_kv_gpu_mingw.sh (or the .bat), run it, then resto
   no-entry-guard   the restore without EntrySubmitGuard           -> pcg_cell_busy (3.4) goes red
   upload-skip      the restore writes the host mirror, no upload   -> pcg_cell_pool (1.8) goes red
   share-skip-f     the hint shared without the row comparison (f)  -> pcg_cell_pool (2.6/5.10) goes red
+  exit-refresh-only the snapshot refresh widened to every failing exit of a ready prefix, with no state
+                   normalised at freeze (a fix confined to the call's exits) -> pcg_cell_budget_snapshot (6.8)
+                   stays red on leg D (bind permission), while legs A and B go green
 """
 import sys
 
@@ -35,10 +38,15 @@ SHARE_F = """	if (share) {  // (f)
 		for (size_t r = 0; share && r < runs; ++r) {
 			const uint8_t* run_src = rows + r * static_cast<size_t>(L) * D;"""
 
+REFRESH_GATE = """	const bool stop = st == SSLM_GPU_KV_BUDGET_EXCEEDED || (schema_kind && st == SSLM_SEQUENCE_REJECTED);
+	if (!stop || landed <= 0 || !seq->ready_for_logits) return;"""
+
 M = {
     "no-entry-guard": [(GUARD, "\t// MUTANT no-entry-guard\n\tconst uint8_t* p = static_cast<const uint8_t*>(blob);")],
     "upload-skip": [(UPLOAD, "\t(void)dev;  // MUTANT upload-skip\n\t// The prefix as saved:")],
     "share-skip-f": [(SHARE_F, SHARE_F.replace("if (share) {  // (f)", "if (false) {  // MUTANT share-skip-f"))],
+    "exit-refresh-only": [(REFRESH_GATE, "\t(void)schema_kind;\n\t(void)landed;  // MUTANT exit-refresh-only\n"
+                           "\tif (st == SSLM_OK || !seq->ready_for_logits) return;")],
 }
 
 
