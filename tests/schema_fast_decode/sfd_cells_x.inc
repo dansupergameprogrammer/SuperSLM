@@ -1712,6 +1712,7 @@ void Cell_X_5_2() {
 // One-shot: the next decode equals off's never-failed decode. Persistent: the next decode returns the status
 // off returns at that position with an equal blob (§4.5), and with the failure gone the retry equals off.
 // (ii), an allocation failure in the no-workspace damped path, is in the allocation sweep (5.X3 (ii)).
+void XCell53Rekey(const Sfd& f);  // the persistent arms across an anti-LM change, below
 void Cell_X_5_3() {
 	if (!XLive("5.X3")) return;
 	const Sfd& f = GetSfd();
@@ -1833,6 +1834,131 @@ void Cell_X_5_3() {
 				if (path == 0) Install(rr.env->rig->W(), nullptr, 0);
 				rr.env->rig->Release(s);
 			}
+		}
+	}
+	XCell53Rekey(f);
+}
+
+// 5.X3, the persistent arms across an anti-LM change (code review TF/J1-X round 1, finding 1). A finish that fails
+// persistently from exact's check row 0, with the verb's damped params naming (a) a different order than the live
+// state's, or (b) a sequence's first damped call after greedy decodes. Off makes the same decodes without the verb:
+// under TF its failed decode installs nothing (C16), so right after the failed decode both arms must rest with equal
+// blobs (C12), and the retry at the original order, the failure gone, must agree token for token and blob for blob.
+// `hostile`: the finish fails through a hook that omits a task (bits 0: only the finish reads it, the batched layer
+// pass); else through S-FINISHEXIT's damped-refused exit from finish 0. `draft` null: the forced chain (NULL draft).
+void XRekeyArm(const Sfd& f, const XSpec& sp, size_t p, const std::vector<int32_t>* draft, int32_t to_order,
+               bool hostile, const char* leg) {
+	const std::string tag = std::string("5.X3 persistent, ") + leg + ", " + sp.Name() + ", at " + std::to_string(p) +
+	                        ", verb at " + (to_order ? "damped@" + std::to_string(to_order) : std::string("greedy"));
+	const XOff off = RunOff(f, sp);
+	CHECK_MSG(off.ok && p < off.obs.size(), "[%s] setup: off has %zu decodes", tag.c_str(), off.obs.size());
+	if (!off.ok || p >= off.obs.size()) return;
+	XRestoreRig ro(f, sp), rx(f, sp);
+	if (!ro.ok() || !rx.ok()) {
+		CHECK_MSG(false, "[%s] setup: the rigs did not build", tag.c_str());
+		return;
+	}
+	CountingHook ho, hx;
+	ho.max_tasks = hx.max_tasks = 4;
+	sslm_seq so = ro.At(off, p), sx = rx.At(off, p);
+	if (!so || !sx) {
+		CHECK_MSG(false, "[%s] setup: restoring off's blob failed", tag.c_str());
+		if (so) ro.env->rig->Release(so);
+		if (sx) rx.env->rig->Release(sx);
+		return;
+	}
+	int32_t chain = 0, acc = 0;
+	sslm_seq_forced_tokens(rx.env->m, sx, nullptr, 0, &chain, &acc);
+	CHECK_MSG(draft || chain >= 1, "[%s] setup: no forced chain after the pending token (%d)", tag.c_str(), chain);
+	auto arm = [&](bool on) {
+		if (hostile) {
+			for (CountingHook* h : {&ho, &hx}) {
+				h->Clear();
+				h->hostile = on ? Hostile::kOmit : Hostile::kNone;
+				h->hostile_call = 0;
+				h->hostile_persistent = on;
+			}
+			if (on) {
+				Install(ro.env->rig->W(), &ho, 0);
+				Install(rx.env->rig->W(), &hx, 0);
+			} else {
+				Install(ro.env->rig->W(), nullptr, 0);
+				Install(rx.env->rig->W(), nullptr, 0);
+			}
+		} else if (on) {
+			sfd::ArmFinishExit(sfd::FinishExit::kDampedRefused, 0);
+		} else {
+			sfd::DisarmFinishExit();
+		}
+	};
+	const sslm_decode_params vto = XParams(*rx.env->rig, to_order);
+	const sslm_decode_params vfrom = XParams(*rx.env->rig, sp.order);
+	// The exact arm's verb, with the failure armed from its first finish (check row 0).
+	arm(true);
+	const sslm_jump_options o = XExact(draft);
+	const int32_t budget = draft ? int32_t(draft->size()) + 1 : 8;
+	const Jump j = XJump(rx.env->m, sx, budget, to_order ? &vto : nullptr, &o, rx.env->W(sp));
+	CHECK_MSG(j.st == SSLM_OK && j.count == 0, "[%s] the verb: status %d count %d; want OK with nothing confirmed (the "
+	          "check failed at row 0)", tag.c_str(), static_cast<int>(j.st), j.count);
+	if (!hostile) {  // re-arm so the next decode's finish is finish 0 again, in both arms alike
+		sfd::DisarmFinishExit();
+		sfd::ArmFinishExit(sfd::FinishExit::kDampedRefused, 0);
+	} else {
+		ho.Clear();
+		hx.Clear();
+	}
+	// Both arms: the failing decode at the verb's params. Off installs nothing (TF); exact must rest the same.
+	int32_t to = -100, tx = -100;
+	const sslm_status sto = ro.env->rig->Decode1(so, vto, ro.env->W(sp), &to);
+	const sslm_status stx = rx.env->rig->Decode1(sx, vto, rx.env->W(sp), &tx);
+	const XObs fo = XObserve(*ro.env->rig, so, static_cast<int>(sto), to);
+	const XObs fx = XObserve(*rx.env->rig, sx, static_cast<int>(stx), tx);
+	CHECK_MSG(sto != SSLM_OK, "[%s] setup: off's decode did not fail (status %d)", tag.c_str(), static_cast<int>(sto));
+	const std::string fd = XDiff(fx, fo, kXCmpTok | kXCmpBlob);
+	CHECK_MSG(fd.empty(), "[%s] right after the failed decode, exact against off: %s", tag.c_str(), fd.c_str());
+	// The failure gone, the retry at the original order, to the end of the stream (or 24 decodes).
+	arm(false);
+	for (int i = 0; i < 24; ++i) {
+		int32_t uo = -100, ux = -100;
+		const sslm_status ao = ro.env->rig->Decode1(so, vfrom, ro.env->W(sp), &uo);
+		const sslm_status ax = rx.env->rig->Decode1(sx, vfrom, rx.env->W(sp), &ux);
+		const std::string rd = XDiff(XObserve(*rx.env->rig, sx, static_cast<int>(ax), ux),
+		                             XObserve(*ro.env->rig, so, static_cast<int>(ao), uo), kXCmpTok | kXCmpBlob);
+		CHECK_MSG(rd.empty(), "[%s] retry decode %d at the original order, exact against off: %s", tag.c_str(), i,
+		          rd.c_str());
+		if (!rd.empty() || ao != SSLM_OK || uo < 0) break;
+	}
+	arm(false);
+	ro.env->rig->Release(so);
+	rx.env->rig->Release(sx);
+}
+
+void XCell53Rekey(const Sfd& f) {
+	// The review's failing input (rekey.cpp): potion, its prompt, a workspace, 3 damped decodes at order 2, a hook
+	// that fails the finish, the verb at damped order 3 with a NULL draft, budget 8 (batched: bits 0).
+	static const std::vector<int32_t> kReviewPrompt = {11, 523, 77, 1960, 300, 42};
+	{
+		XSpec sp;
+		sp.prompt = &kReviewPrompt;
+		sp.order = 2;
+		XRekeyArm(f, sp, 2, nullptr, 3, true, "(a) order change, the review's input, batched");
+	}
+	for (int split = 0; split < 2; ++split) {
+		for (int c = 0; c < 2; ++c) {  // (a) order 2 -> 3; (b) greedy -> first damped call at order 2
+			XSpec sp;
+			sp.order = c == 0 ? 2 : 0;
+			sp.hook = split ? 1 : 0;  // hook 1: bit 1 at max_tasks 4, Q6 C's one-row split for M in [2, 7]
+			const XOff off = RunOff(f, sp);
+			const std::vector<size_t> ps = XForcedPositions(f, sp.schema, off, 4);
+			CHECK_MSG(!ps.empty(), "[5.X3 persistent %s] no position with a forced run of 4", sp.Name().c_str());
+			if (ps.empty()) continue;
+			std::mt19937 g(1);
+			const std::vector<int32_t> d = XMakeDraft(f, sp.schema, off, ps[0], XDraft::kPerfect, 0, 4, g, nullptr);
+			CHECK_MSG(d.size() >= 1 && d.size() + 1 <= kQ6cSplitMax, "[5.X3 persistent %s] the draft has %zu tokens",
+			          sp.Name().c_str(), d.size());
+			const std::string leg = std::string(c == 0 ? "(a) order change" : "(b) first damped call") +
+			                        (split ? ", split" : ", batched");
+			XRekeyArm(f, sp, ps[0], &d, c == 0 ? 3 : 2, false, leg.c_str());
 		}
 	}
 }
