@@ -70,6 +70,8 @@
 #error "SUPERSLM_MUTANT_PKV_MR_OPT is 7.9-MR-OPT's mutant: only the superslm_mr_opt target builds it"
 #endif
 #include "superslm/sslm_abi.h"
+#include "superslm/sslm_version.h"
+#include "superslm/sha256.h"
 
 #include <algorithm>
 #include <array>
@@ -98,6 +100,7 @@
 #include "superslm/sslm_phaseD.h"         // T-2199 Phase D: ValidateDampedGreedyParams
 #include "forward/parallel_split.h"       // ParallelForHookValid, SaturationCounters (decode threading)
 #include "kv_pages.h"                     // Paged-KV plan §3.3: the page module (C3), legacy holders (C4)
+#include "spx1_format.h"                  // precached prefixes: the SPX1 writer and reader both backends use
 
 #include "bad_alloc_wrap.h"  // N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3):
                               // superslm::internal::MaybeThrowInjectedBadAllocFault(), the same
@@ -118,6 +121,9 @@ sslm_status MapForwardStatus(superslm::SslmForwardStatus st);
 // well below this value, so it is never a legitimate state id (design Sec13.4).
 namespace {
 constexpr uint32_t kDfaWalkStateUnused = 0xFFFFFFFFu;
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+extern std::atomic<uint64_t> g_prefix_prefill_calls;
+#endif
 }  // namespace
 
 // -----------------------------------------------------------------------------------------
@@ -2568,6 +2574,9 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
                                             const int32_t* tokens, int32_t count,
                                             int32_t chunk_budget, sslm_span_kind kind,
                                             sslm_workspace ws, int32_t* consumed) {
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	g_prefix_prefill_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
 	// S7 fix round 2: ws is now genuinely read (see PrefillWholeTokens' own comment) -- no longer
 	// merely accepted for call-shape parity.
 	if (!consumed) return SSLM_INVALID_ARGUMENT;
@@ -3821,6 +3830,42 @@ constexpr size_t kSeqBlobV5FixedHeaderBytes = 156;
 // 'SSB6': the 'SSB5' fixed header plus kv_mode, budget and origin at 156, 160 and 164.
 constexpr size_t kSeqBlobV6FixedHeaderBytes = 172;
 
+// The restore fault belongs to the test-injection library and to its calling thread.
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+struct PrefixRestoreFault {
+	int position = 0;
+	int page_status = 0;
+	bool fired = false;
+	uint32_t free_pages = 0, shared = 0, mapped = 0, reserve = 0;
+};
+thread_local PrefixRestoreFault g_prefix_restore_fault;
+std::atomic<uint64_t> g_prefix_prefill_calls{0};
+void FirePrefixRestoreFault(int position, sslm_kv_pool_s* pool,
+                            superslm::kv_pages::PageHolder* holder) {
+	if (g_prefix_restore_fault.position != position) return;
+	g_prefix_restore_fault.position = 0;
+	g_prefix_restore_fault.fired = true;
+	g_prefix_restore_fault.free_pages = superslm::kv_pages::PoolFreePages(pool->pages);
+	g_prefix_restore_fault.shared = holder->shared;
+	g_prefix_restore_fault.mapped = holder->mapped;
+	g_prefix_restore_fault.reserve = static_cast<uint32_t>(holder->reserve.size());
+}
+#endif
+
+void GatherPrefixRows(const sslm_prefix_s* prefix, const superslm::SslmModelConfig& c, uint8_t* dst) {
+	const int64_t length = prefix->state.context_length;
+	const int64_t B = prefix->pool->page_positions;
+	const size_t D = c.head_dim;
+	for (size_t run = 0; run < KvRuns(c); ++run) {
+		uint8_t* out = dst + run * static_cast<size_t>(length) * D;
+		for (int64_t position = 0; position < length; position += B) {
+			const size_t bytes = static_cast<size_t>(std::min<int64_t>(B, length - position)) * D;
+			std::memcpy(out + static_cast<size_t>(position) * D,
+			            HolderRow(prefix->pool, prefix->kv, run, position, D), bytes);
+		}
+	}
+}
+
 }  // namespace
 
 extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
@@ -3976,6 +4021,46 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	return SSLM_OK;
 }
 
+extern "C" sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t* n) {
+	if (!n || !prefix || !prefix->frozen || prefix->state.layer_index != 0) return SSLM_INVALID_ARGUMENT;
+	const auto& c = prefix->model->view.config;
+	const int64_t length = prefix->state.context_length;
+	if (length < 0 || length > static_cast<int64_t>(c.context_cap)) return SSLM_INVALID_ARGUMENT;
+	const size_t residual = static_cast<size_t>(c.hidden_size);
+	size_t required = 0;
+	if (!superslm::spx1::BlobSize(KvRuns(c), static_cast<size_t>(c.head_dim), residual,
+	                              static_cast<uint64_t>(length), &required)) return SSLM_INVALID_ARGUMENT;
+	if (!buf || *n < required) {
+		*n = required;
+		return SSLM_BUFFER_TOO_SMALL;
+	}
+	auto* p = static_cast<uint8_t*>(buf);
+	superslm::spx1::Header h;
+	h.backend = superslm::spx1::kBackendCpu;
+	const auto model_hash = prefix->model->view.RawIntegrityHash();
+	std::memcpy(h.model_hash.data(), model_hash.data(), 32);
+	h.kv_precision = static_cast<uint32_t>(c.kv_precision);
+	h.schema_hash = prefix->bound_schema ?
+	                prefix->model->schemas.ByIndex(prefix->bound_schema->index)->name_hash : 0;
+	h.walk = prefix->dfa_walk_state;
+	h.current_token = prefix->current_token;
+	h.length = length;
+	h.origin = prefix->kv_origin;
+	h.scale_m = prefix->state.hidden_scale.m;
+	h.scale_e = prefix->state.hidden_scale.e;
+	h.kv_saturation_count = prefix->state.kv_saturation_count;
+	h.kv_landing_saturation_count = prefix->state.kv_landing_saturation_count;
+	h.k_channel_landing_saturation_count = prefix->state.k_channel_landing_saturation_count;
+	h.rope_q_saturation_count = prefix->state.rope_q_saturation_count;
+	h.rope_k_saturation_count = prefix->state.rope_k_saturation_count;
+	superslm::spx1::WriteHeader(p, h);
+	if (residual) std::memcpy(superslm::spx1::Residual(p), prefix->hidden_codes_storage.data(), residual);
+	GatherPrefixRows(prefix, c, superslm::spx1::Rows(p, residual));
+	superslm::spx1::Seal(p, required);
+	*n = required;
+	return SSLM_OK;
+}
+
 namespace {
 
 // §3.7's re-sharing conditions (b)-(f) for a budget blob ((a) is the caller's): the handle is
@@ -4008,6 +4093,120 @@ bool SharingHandleMatches(const sslm_prefix_s* handle, const sslm_model_s* model
 }
 
 }  // namespace
+
+extern "C" sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool, const void* buf, size_t n,
+                                            sslm_prefix parent_or_null, sslm_prefix* out,
+                                            uint32_t* out_shared_pages) {
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (out_shared_pages) *out_shared_pages = 0;
+	if (!model || !pool || !*pool || !buf || (*pool)->model != model) return SSLM_INVALID_ARGUMENT;
+	const auto& c = model->view.config;
+	const auto model_hash = model->view.RawIntegrityHash();
+	superslm::spx1::Expect expect;
+	expect.backend = superslm::spx1::kBackendCpu;
+	expect.model_hash = model_hash.data();
+	expect.kv_precision = static_cast<uint32_t>(c.kv_precision);
+	expect.schemas = &model->schemas;
+	expect.context_cap = static_cast<int64_t>(c.context_cap);
+	expect.vocab_size = c.vocab_size;
+	expect.runs = KvRuns(c);
+	expect.head_dim = static_cast<size_t>(c.head_dim);
+	expect.hidden_size = static_cast<size_t>(c.hidden_size);
+	superslm::spx1::Fields f;
+	switch (superslm::spx1::Read(static_cast<const uint8_t*>(buf), n, expect, &f)) {
+		case superslm::spx1::Verdict::kOk: break;
+		case superslm::spx1::Verdict::kProducer: return SSLM_RESTORE_PRODUCER_MISMATCH;
+		case superslm::spx1::Verdict::kModel: return SSLM_RESTORE_MODEL_MISMATCH;
+		case superslm::spx1::Verdict::kKvPrecision: return SSLM_RESTORE_KV_MISMATCH;
+		case superslm::spx1::Verdict::kSchema: return SSLM_RESTORE_SCHEMA_MISMATCH;
+		default: return SSLM_INVALID_ARGUMENT;  // size, magic, digest, backend, a domain
+	}
+	const int64_t length = f.header.length;
+	const int64_t origin = f.header.origin;
+	const int32_t token = f.header.current_token;
+	const uint32_t walk = f.header.walk;
+	const int64_t m = f.header.scale_m;
+	const int64_t e = f.header.scale_e;
+	const sslm_schema schema = f.schema_index >= 0 ? &model->schema_handles[static_cast<size_t>(f.schema_index)] : nullptr;
+	auto* pool_ptr = *pool;
+	const size_t residual = static_cast<size_t>(c.hidden_size);
+	const uint8_t* rows = f.rows;
+	// The optional sharing hint, evaluated after every field is validated and before any draw. A
+	// nested blob (origin > 0) shares the hint's floor(origin/B) full pages only when the hint is
+	// frozen, of this model and this pool, holds exactly `origin` positions, and its rows over those
+	// pages equal the blob's; anything else is a private restore with SSLM_OK. B is the restore
+	// pool's page size in every operand: the share count, the compared span and the scatter start.
+	// The rows from s*B on (the parent's partial tail page included) always come from the blob.
+	const int64_t B = pool_ptr->page_positions;
+	uint32_t share = 0;
+	if (parent_or_null && origin > 0 &&
+	    SharingHandleMatches(parent_or_null, model, pool_ptr, origin, rows, length)) {
+		share = static_cast<uint32_t>(origin / B);
+	}
+	const uint32_t pages = static_cast<uint32_t>((length + B - 1) / B);
+	// Draw first, under its own pool-mutex section, so a refusal here has drawn nothing and taken
+	// no refcount; then share, under a second section, before any private page is mapped.
+	superslm::kv_pages::PageHolder* holder = nullptr;
+	const sslm_status draw = CreateHolder(pool_ptr, pages - share, &holder);
+	if (draw != SSLM_OK) return draw;
+	if (share > 0) {
+		superslm::kv_pages::PageStatus shared_st = superslm::kv_pages::PageStatus::kOk;
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+		if (g_prefix_restore_fault.position == 1) {
+			FirePrefixRestoreFault(1, pool_ptr, holder);
+			shared_st = g_prefix_restore_fault.page_status == 2 ?
+			            superslm::kv_pages::PageStatus::kRefcountUnderflow :
+			            superslm::kv_pages::PageStatus::kInvalidArgument;
+		} else
+#endif
+		shared_st = superslm::kv_pages::HolderShareLeading(holder, parent_or_null->kv, share);
+		if (shared_st != superslm::kv_pages::PageStatus::kOk) {
+			ReleaseHolder(pool_ptr, holder);
+			return MapPageStatus(shared_st);
+		}
+	}
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	if (g_prefix_restore_fault.position == 2) {
+		superslm::kv_pages::HolderReturnReserve(holder, nullptr);
+		FirePrefixRestoreFault(2, pool_ptr, holder);
+	}
+#endif
+	const sslm_status mapped = MapPagesFor(pool_ptr, holder, length);
+	if (mapped != SSLM_OK) {
+		ReleaseHolder(pool_ptr, holder);
+		return mapped;
+	}
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+	if (g_prefix_restore_fault.position == 3) {
+		FirePrefixRestoreFault(3, pool_ptr, holder);
+		ReleaseHolder(pool_ptr, holder);
+		return SSLM_ALLOCATION_FAILED;
+	}
+#endif
+	sslm_prefix_s* prefix = nullptr;
+	const sslm_status allocated = FinishPrefix(model, pool_ptr, holder, KvHolderMode::kBudget,
+	                                            static_cast<int32_t>(c.context_cap), origin, false, &prefix);
+	if (allocated != SSLM_OK) return allocated;  // FinishPrefix releases the holder on refusal.
+	if (residual) std::memcpy(prefix->hidden_codes_storage.data(), f.residual, residual);
+	prefix->state.hidden_codes = prefix->hidden_codes_storage.data();
+	prefix->state.hidden_scale = superslm::CarriedScale{m, e};
+	prefix->state.layer_index = 0;
+	prefix->state.context_length = length;
+	prefix->state.kv_saturation_count = f.header.kv_saturation_count;
+	prefix->state.kv_landing_saturation_count = f.header.kv_landing_saturation_count;
+	prefix->state.k_channel_landing_saturation_count = f.header.k_channel_landing_saturation_count;
+	prefix->state.rope_q_saturation_count = f.header.rope_q_saturation_count;
+	prefix->state.rope_k_saturation_count = f.header.rope_k_saturation_count;
+	prefix->current_token = token;
+	prefix->bound_schema = schema;
+	prefix->dfa_walk_state = walk;
+	prefix->frozen = true;
+	ScatterRows(pool_ptr, holder, c, rows, length, static_cast<int64_t>(share) * B, length);
+	*out = prefix;
+	if (out_shared_pages) *out_shared_pages = share;
+	return SSLM_OK;
+}
 
 // Paged-KV plan §3.6/§3.7 (C5): sslm_seq_restore is this verb with a null prefix. `handle` is a
 // sharing hint, never a requirement: a null or non-matching handle gives a private restore,
@@ -4932,6 +5131,36 @@ extern "C" sslm_status sslm_pkv_test_only_drain_reserve(sslm_seq seq) {
 	std::lock_guard<std::mutex> lock(seq->lifecycle_mutex);
 	return MapPageStatus(superslm::kv_pages::HolderReturnReserve(seq->kv, nullptr));
 }
+
+#ifdef SUPERSLM_ENABLE_KV_PAGES_TEST_SEAMS
+extern "C" void sslm_pc_test_only_restore_fault_arm(int position, int page_status) {
+	g_prefix_restore_fault = {};
+	g_prefix_restore_fault.position = position;
+	g_prefix_restore_fault.page_status = page_status;
+}
+extern "C" void sslm_pc_test_only_restore_fault_disarm() { g_prefix_restore_fault = {}; }
+extern "C" int sslm_pc_test_only_restore_fault_read(uint32_t* free_pages, uint32_t* shared,
+                                                     uint32_t* mapped, uint32_t* reserve) {
+	if (free_pages) *free_pages = g_prefix_restore_fault.free_pages;
+	if (shared) *shared = g_prefix_restore_fault.shared;
+	if (mapped) *mapped = g_prefix_restore_fault.mapped;
+	if (reserve) *reserve = g_prefix_restore_fault.reserve;
+	return g_prefix_restore_fault.fired ? 1 : 0;
+}
+extern "C" sslm_status sslm_pc_test_only_set_prefix_layer(sslm_prefix prefix, uint32_t layer) {
+	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	prefix->state.layer_index = layer;
+	return SSLM_OK;
+}
+extern "C" uint64_t sslm_pc_test_only_prefix_prefill_calls() {
+	return g_prefix_prefill_calls.load(std::memory_order_relaxed);
+}
+extern "C" sslm_status sslm_pc_test_only_set_current_token(sslm_prefix prefix, int32_t token) {
+	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	prefix->current_token = token;
+	return SSLM_OK;
+}
+#endif
 
 // The save-speed fix's streaming threshold (GatherFlatBlock): from the next save on, a whole_reserve
 // holder's SSB5 block is written with streaming stores when it is `bytes` or larger; 0 restores

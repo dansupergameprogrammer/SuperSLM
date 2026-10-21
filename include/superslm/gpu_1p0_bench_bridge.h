@@ -41,6 +41,10 @@ SslmGpuStatus sslm_gpu_test_only_arm_view_fault(SslmGpuSequenceHandle* seq, uint
 // integer; Ok when its last submission was not refused before recording.
 SslmGpuStatus sslm_gpu_test_only_last_ladder_status(const SslmGpuSequenceHandle* seq,
                                                     int32_t* out_forward_status) noexcept;
+// Precached prefixes (1.16.0, unreleased): table entry i (< mapped) of a GPU prefix's internal holder, as
+// sslm_gpu_test_only_seq_table_entry reads a pooled sequence's.
+SslmGpuStatus sslm_gpu_test_only_prefix_table_entry(const SslmGpuPrefixHandle* prefix, uint32_t i, uint32_t* out_page,
+                                                    uint32_t* out_mapped) noexcept;
 
 #if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
 enum class SslmGpuApiFailureInjectionPoint { BeforeHandler, AfterHandler };

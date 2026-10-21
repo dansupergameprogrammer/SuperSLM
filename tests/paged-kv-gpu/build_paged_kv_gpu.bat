@@ -12,6 +12,9 @@ rem   --shaders  default <repo>\out\shaders (build.bat's), else <repo>\build\Rel
 rem   --gpu-dir  a whole copy of src\gpu: how a mutant engine is built (3.12's and 11.4's commissioning runs)
 rem   --old-tree the v1.12.0 checkout (5d5ca58) for 9.8's leg 2; --old-cpu-lib its CPU library
 rem              (default <old-tree>\build\Release\superslm.lib)
+rem   --capture910-tree  the v1.13.1 checkout (d697927) for precache cell 9.10's capture leg (pcg_cell_9_10_capture.exe,
+rem              built against that tree); --capture910-cpu-lib its CPU library (default <tree>\build\Release\superslm.lib)
+rem   TARGET e5  the precached-prefixes E5 GPU cell (pcg_cell_9_10); capture910: 9.10's capture leg only
 rem   --state-tracking  build engine and cells with /DSUPERSLM_GPU_STATE_TRACKING (src\gpu\gpu_resource_state_tracker.h,
 rem              as build_paged_kv_gpu_mingw.sh --state-tracking): "# GPU STATE VIOLATION" lines and an exit summary.
 rem              Default --out becomes <repo>\build\pkvg-track, so tracking and plain objects never mix.
@@ -41,6 +44,8 @@ set SHADERS=
 set GPUDIR=%ENG%\src\gpu
 set OLDTREE=
 set OLDCPULIB=
+set CAP910TREE=
+set CAP910CPULIB=
 set TARGETS=
 set TRACK=
 set OUTGIVEN=
@@ -54,6 +59,8 @@ if "!ARG:~0,10!"=="--shaders=" ( set "SHADERS=!ARG:~10!" & set "TAKEN=1" )
 if "!ARG:~0,10!"=="--gpu-dir=" ( set "GPUDIR=!ARG:~10!" & set "TAKEN=1" )
 if "!ARG:~0,11!"=="--old-tree=" ( set "OLDTREE=!ARG:~11!" & set "TAKEN=1" )
 if "!ARG:~0,14!"=="--old-cpu-lib=" ( set "OLDCPULIB=!ARG:~14!" & set "TAKEN=1" )
+if "!ARG:~0,18!"=="--capture910-tree=" ( set "CAP910TREE=!ARG:~18!" & set "TAKEN=1" )
+if "!ARG:~0,21!"=="--capture910-cpu-lib=" ( set "CAP910CPULIB=!ARG:~21!" & set "TAKEN=1" )
 if not defined TAKEN set "TARGETS=!TARGETS! %~1"
 shift
 goto :parse_args
@@ -79,13 +86,14 @@ set NRED=0
 set NCOMPILE=0
 
 if "%TARGETS%"==" oldreader" goto :only_old
+if "%TARGETS%"==" capture910" goto :only_old
 
 echo ===== engine: CPU sources (build.bat's list) =====
 cl /c %CLF% /Fo"%OUT%\cpu\\" "%ENG%\src\artifact.cpp" "%ENG%\src\sha256.cpp" "%ENG%\src\tokenizer.cpp" ^
     "%ENG%\src\model.cpp" "%ENG%\src\intmath.cpp" "%ENG%\src\silu_lut.cpp" "%ENG%\src\matmul.cpp" ^
     "%ENG%\src\proof_manifest.cpp" "%ENG%\src\trace_hook.cpp" "%ENG%\src\forward\checked_chain_funnel.cpp" ^
     "%ENG%\src\forward\forward_sites.cpp" "%ENG%\src\forward\parallel_split.cpp" "%ENG%\src\gpu\gpu_inflight_registry.cpp" "%ENG%\src\decode_digest.cpp" ^
-    "%ENG%\src\kv_pages.cpp" "%ENG%\src\sslm_abi.cpp" "%ENG%\src\damped_greedy_antilm.cpp" "%ENG%\src\damped_greedy_topk.cpp" ^
+    "%ENG%\src\kv_pages.cpp" "%ENG%\src\spx1_format.cpp" "%ENG%\src\sslm_abi.cpp" "%ENG%\src\damped_greedy_antilm.cpp" "%ENG%\src\damped_greedy_topk.cpp" ^
     "%ENG%\src\damped_greedy_phaseD.cpp" "%ENG%\src\damped_greedy_phaseD_loop.cpp" > "%OUT%\cpu\build.log" 2>&1
 if errorlevel 1 ( type "%OUT%\cpu\build.log" & echo ENGINE CPU BUILD FAILED & exit /b 3 )
 call :mklib cpu
@@ -147,8 +155,17 @@ call :exe g1e_cell_10_3 plain G6 "g1e_cell_10_3" ""
 call :exe g1e_cell_10_5 plain G6 "g1e_cell_10_5" ""
 call :exe g1e_cell_10_7 plain G6 "g1e_cell_10_7" ""
 call :exe pkvg_g6_decode_timing plain G6 "pkvg_g6_decode_timing" ""
+call :exe pcg_cell_format plain F2 "..\precache-gpu\pcg_cell_format" ""
+call :exe pcg_cell_pool plain F2 "..\precache-gpu\pcg_cell_pool" ""
+call :exe pcg_cell_busy plain F2 "..\precache-gpu\pcg_cell_busy" ""
+call :exe pcg_cell_faults alloc F2 "..\precache-gpu\pcg_cell_faults" ""
+call :exe pcg_cell_schema plain F2 "..\precache-gpu\pcg_cell_schema" ""
+call :exe pcg_cell_budget_snapshot plain F2 "..\precache-gpu\pcg_cell_budget_snapshot" ""
+call :exe pcg_cell_restore_derived plain F2 "..\precache-gpu\pcg_cell_restore_derived" ""
+call :exe pcg_cell_9_10 plain E5 "..\precache-gpu\pcg_cell_9_10" ""
 :only_old
 if defined OLDTREE call :oldreader
+if defined CAP910TREE call :capture910
 echo PKVG BUILD: %NLINKED% linked, %NRED% red by link, %NCOMPILE% red by compile or unexpected link failure
 exit /b 0
 
@@ -200,19 +217,21 @@ set "DFLAG="
 if not "%D%"=="" set "TAG=%D:#=_%"
 if not "%D%"=="" set "D=%D:#==%"
 if not "%D%"=="" set "DFLAG=/D%D%"
+rem A source outside this folder (..\precache-gpu\NAME) keeps its object and log in ODIR under its file name.
+for %%F in ("%SRC%") do set "OBJN=%%~nF"
 set "ODIR=%OUT%\cells\%CFG%_%TAG%"
 if not exist "%ODIR%" mkdir "%ODIR%"
-if exist "%ODIR%\%SRC%.obj" goto :cell_have
-cl /c %CLF% !DEF_%CFG%! %DFLAG% /Fo"%ODIR%\%SRC%.obj" "%HEREDIR%%SRC%.cpp" > "%ODIR%\%SRC%.log" 2>&1
+if exist "%ODIR%\%OBJN%.obj" goto :cell_have
+cl /c %CLF% !DEF_%CFG%! %DFLAG% /Fo"%ODIR%\%OBJN%.obj" "%HEREDIR%%SRC%.cpp" > "%ODIR%\%OBJN%.log" 2>&1
 if errorlevel 1 (
     echo [%STEP%] %EXE%: RED BY COMPILE in %SRC%.cpp
-    findstr /R /C:"error C[0-9]*" "%ODIR%\%SRC%.log"
+    findstr /R /C:"error C[0-9]*" "%ODIR%\%OBJN%.log"
     set /a NCOMPILE+=1
     set CELLFAIL=1
     exit /b 0
 )
 :cell_have
-set OBJS=%OBJS% "%ODIR%\%SRC%.obj"
+set OBJS=%OBJS% "%ODIR%\%OBJN%.obj"
 exit /b 0
 
 rem ---- :gpulib CONFIG: every GPU source of build.bat's list, with the configuration's definitions ----------------
@@ -257,4 +276,41 @@ for %%P in ("%OLDTREE%\out\shaders" "%OLDTREE%\build\Release\shaders") do (
     )
 )
 echo    LINKED (v1.12.0): %OUT%\old\g1e_old_reader_9_8.exe   (pkvg_suite --old-bin=%OUT%\old)
+exit /b 0
+
+rem ---- precache 9.10's capture leg, against the v1.13.1 tree (d697927): its own GPU sources, its own CPU library and its
+rem own tests\paged-kv-gpu helpers, so every saved state is built by 1.13.1's code (plan 9.10, PC-13) ---------------------
+:capture910
+echo ===== pcg_cell_9_10_capture against %CAP910TREE% =====
+rem Suite audit G6: the capture writes commit=d697927... from a constant, so the tree it is built from is checked
+rem here, as 9.9's script checks v1.13.1's commit. A capture built against any other tree (the tree under work
+rem among them, which would make the oracle the code it grades) is refused and counted as a build failure.
+set CAP910WANT=d697927f6d5ce5fa73ecbb8660020a425518b923
+set CAP910HEAD=
+for /f "usebackq delims=" %%H in (`git -C "%CAP910TREE%" rev-parse HEAD 2^>nul`) do set CAP910HEAD=%%H
+if /I not "%CAP910HEAD%"=="%CAP910WANT%" ( echo REFUSED: --capture910-tree %CAP910TREE% is at "%CAP910HEAD%", not v1.13.1 %CAP910WANT% & set /a NCOMPILE+=1 & exit /b 0 )
+git -C "%CAP910TREE%" diff --quiet HEAD -- include src tests 2>nul
+if errorlevel 1 ( echo REFUSED: --capture910-tree %CAP910TREE% has local changes under include, src or tests & set /a NCOMPILE+=1 & exit /b 0 )
+if not exist "%OUT%\v1131" mkdir "%OUT%\v1131"
+if not defined CAP910CPULIB set CAP910CPULIB=%CAP910TREE%\build\Release\superslm.lib
+if not exist "%CAP910CPULIB%" ( echo NO v1.13.1 CPU LIBRARY AT %CAP910CPULIB% & set /a NCOMPILE+=1 & exit /b 0 )
+set CCLF=/nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /MD /I"%CAP910TREE%\include" /I"%CAP910TREE%\src" ^
+ /I"%CAP910TREE%\src\gpu" /I"%CAP910TREE%\tests" /I"%CAP910TREE%\tests\paged-kv" /I"%CAP910TREE%\tests\paged-kv-gpu" ^
+ /I"%CAP910TREE%\tests\t2791-gpu-prefill-read-red-suite" /I"%CAP910TREE%\tests\te425-gpu-alloc-status-red-suite"
+for %%S in ("%CAP910TREE%\src\gpu\superslm_gpu.cpp" "%CAP910TREE%\src\gpu\gpu_1p0.cpp") do (
+    cl /c %CCLF% /Fo"%OUT%\v1131\\" "%%~S" > "%OUT%\v1131\%%~nS.log" 2>&1
+    if errorlevel 1 ( type "%OUT%\v1131\%%~nS.log" & echo v1.13.1 GPU BUILD FAILED & set /a NCOMPILE+=1 & exit /b 0 )
+)
+cl /c %CCLF% /DPCG_910_CAPTURE /Fo"%OUT%\v1131\pcg_cell_9_10_capture.obj" "%HEREDIR%..\precache-gpu\pcg_cell_9_10.cpp" > "%OUT%\v1131\capture.log" 2>&1
+if errorlevel 1 ( type "%OUT%\v1131\capture.log" & set /a NCOMPILE+=1 & exit /b 0 )
+link /nologo /OUT:"%OUT%\v1131\pcg_cell_9_10_capture.exe" "%OUT%\v1131\pcg_cell_9_10_capture.obj" "%OUT%\v1131\superslm_gpu.obj" ^
+    "%OUT%\v1131\gpu_1p0.obj" "%CAP910CPULIB%" d3d12.lib dxgi.lib dxguid.lib shlwapi.lib >> "%OUT%\v1131\capture.log" 2>&1
+    if errorlevel 1 ( type "%OUT%\v1131\capture.log" & set /a NCOMPILE+=1 & exit /b 0 )
+for %%P in ("%CAP910TREE%\out\shaders" "%CAP910TREE%\build\Release\shaders") do (
+    if exist "%%~P\*.cso" if not exist "%OUT%\v1131\shaders\*.cso" (
+        mkdir "%OUT%\v1131\shaders" 2>nul
+        xcopy /Y /Q "%%~P\*.cso" "%OUT%\v1131\shaders\" >nul
+    )
+)
+echo    LINKED (v1.13.1): %OUT%\v1131\pcg_cell_9_10_capture.exe   (--fixture-dir=DIR --out=DIR, on each certified GPU)
 exit /b 0

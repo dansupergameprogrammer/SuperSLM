@@ -111,6 +111,16 @@ def _serialize_scm1(named_schemas: list[tuple[str, "SC.MaskPages"]], vocab_size:
     descriptors, name blob, then four per-schema data blocks (mask pages, CSR state-offset
     array, accepting-state array, flattened transition array), reproducing MaskPages' own
     construction verbatim as the wire format (no repacking)."""
+    seen_hashes = {}
+    for name, _ in named_schemas:
+        name_hash = 0xcbf29ce484222325
+        for byte in name.encode("utf-8"):
+            name_hash = ((name_hash ^ byte) * 0x100000001b3) & 0xffffffffffffffff
+        if name_hash == 0:
+            raise ValueError(f"ZeroSchemaNameHash: {name}")
+        if name_hash in seen_hashes:
+            raise ValueError(f"DuplicateSchemaNameHash: {seen_hashes[name_hash]}, {name}")
+        seen_hashes[name_hash] = name
     schema_count = len(named_schemas)
     name_blob = b"".join(name.encode("utf-8") for name, _ in named_schemas)
     name_offsets = []

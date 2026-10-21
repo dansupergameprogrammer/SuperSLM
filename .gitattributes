@@ -48,3 +48,7 @@ tests/matmul_tiled_golden_pin.h   text eol=lf
 # The pre-SLM5 GPU base the T-2899 suite compiles (five files of commit ccf87c1, hashed by their manifest): byte-exact on
 # every platform, so a checkout and `git archive` keep the bytes the manifest's SHA-256 values describe.
 tests/t2899-schema-deadend-red-suite/pristine_pre_slm5/** -text
+
+# The C verb list that build_x2.ps1 compares with the headers' C verbs, and the other t2807 scripts read line by
+# line: LF on every checkout, so a Windows checkout's lines carry no '\r' (MSVC ctest 2026-10-21).
+tests/t2807-api-slot/c_abi_verbs.txt text eol=lf

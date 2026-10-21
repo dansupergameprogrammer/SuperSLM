@@ -77,6 +77,10 @@ struct RunState {
 	int checks = 0;
 	int failures = 0;
 	int cell_failures = 0;
+	// When set, Fail also appends each failure's complete stderr line, without its newline. The
+	// precache runner's per-case checkpoint journal records them (tests/precache/precache_checkpoint.h).
+	// A MUTED failure (below) is not a failure and is never journalled.
+	std::vector<std::string>* failure_lines = nullptr;
 	// A vitality member runs a cell's checks against a deliberate mutant with `muted` set: each failing check is
 	// counted in muted_failures and printed as MUTED, not FAIL, and the member grades the count itself.
 	int muted = 0;
@@ -99,6 +103,22 @@ inline void Fail(const char* file, int line, const char* fmt, ...) {
 	std::fprintf(to, "%s [%s] %s:%d: ", s.muted ? "MUTED" : "FAIL", s.cell, file, line);
 	va_list ap;
 	va_start(ap, fmt);
+	if (s.failure_lines && !s.muted) {
+		std::string text = std::string("FAIL [") + s.cell + "] " + file + ":" + std::to_string(line) + ": ";
+		va_list measure;
+		va_copy(measure, ap);
+		const int n = std::vsnprintf(nullptr, 0, fmt, measure);
+		va_end(measure);
+		if (n > 0) {
+			std::string message(static_cast<size_t>(n), '\0');
+			va_list format;
+			va_copy(format, ap);
+			std::vsnprintf(message.data(), static_cast<size_t>(n) + 1, fmt, format);
+			va_end(format);
+			text += message;
+		}
+		s.failure_lines->push_back(std::move(text));
+	}
 	std::vfprintf(to, fmt, ap);
 	va_end(ap);
 	std::fputc('\n', to);

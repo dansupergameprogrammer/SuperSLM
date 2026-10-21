@@ -298,7 +298,11 @@ enum class SslmGpuStatus : uint32_t {
     /* sslm_gpu_seq_adopt_prefix: the sequence's schema binding does not match the prefix's (the
      * CPU's SSLM_PREFIX_SCHEMA_MISMATCH rule). Every check runs before any state change, so the
      * sequence keeps its binding and its bind eligibility. */
-    SSLM_GPU_PREFIX_SCHEMA_MISMATCH
+    SSLM_GPU_PREFIX_SCHEMA_MISMATCH,
+    /* sslm_gpu_prefix_restore (1.16.0, unreleased): the 'SPX1' blob was written by another engine version or on
+     * another adapter (its VendorId or DeviceId differs from this context's). Appended LAST, as every
+     * GPU status before it; nothing changes and nothing is drawn. Exported, and unreleased until 1.16.0. */
+    SSLM_RESTORE_PRODUCER_MISMATCH
 };
 
 /* Output handles: sslm_gpu_context_create, sslm_gpu_model_map, sslm_gpu_adapter_map,
@@ -971,6 +975,11 @@ SslmGpuStatus sslm_gpu_prefix_set_schema(SslmGpuContext* ctx, SslmGpuPrefixHandl
 SslmGpuStatus sslm_gpu_prefix_prefill(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix,
                                       const int32_t* tokens, int32_t count, int32_t kind,
                                       uint32_t dispatch_budget, int32_t* consumed) noexcept;
+/* Freezes the prefix (later calls: SSLM_OK, no effect). The first freeze also sets what a restore of its save
+ * derives from its length L, whatever the prefill calls before it returned: the prefill snapshot an adopter reads
+ * through sslm_gpu_seq_read_prefill_final_hidden is the residual, present iff L > 0 (and the prefix is ready),
+ * and the bind permission a begin_from child inherits is granted iff L == 0. So the original and a saved and
+ * restored copy give their adopters and children the same snapshot and the same permission. */
 SslmGpuStatus sslm_gpu_prefix_freeze(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix) noexcept;
 SslmGpuStatus sslm_gpu_prefix_release(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix) noexcept;
 
@@ -1026,5 +1035,53 @@ SslmGpuStatus sslm_gpu_test_only_peek_pool_mirror_bytes(const SslmGpuKvPoolHandl
 /* TEST ONLY. Waits on `seq`'s in-flight fence without finishing it: `seq` stays Submitted, with
  * its counts raised, and nothing is left executing. Submits nothing. */
 SslmGpuStatus sslm_gpu_test_only_wait_in_flight(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept;
+
+/* ============================================================================
+ * Precached prefixes (1.16.0, unreleased): save and restore a frozen GPU prefix as an 'SPX1' blob, the CPU's
+ * sslm_prefix_save/sslm_prefix_restore format (superslm/sslm_abi_functions.inc), written with
+ * backend 1 and the producing adapter's PCI vendor and device ids.
+ * Exported, and unreleased until 1.16.0.
+ * ============================================================================
+ *
+ * sslm_gpu_prefix_save writes the frozen `prefix` (its rows [0, L) gathered from the pool's host
+ * mirror in canonical layout, its residual, scale, the five saturation counts, its last prefilled
+ * token, schema binding as the bound schema's name hash, walk state and origin), the engine version
+ * (superslm/sslm_version.h) and the context's adapter vendor and device ids, then the SHA-256
+ * digest. Two-call sizing: a null `out_blob` or `*out_blob_size` below the exact size returns
+ * SSLM_OUTPUT_BUFFER_TOO_SMALL with `*out_blob_size` set to that size and nothing written; success
+ * writes exactly `*out_blob_size` bytes. A null `out_blob_size`, context or prefix, or a prefix of
+ * another context: SSLM_SEQUENCE_KV_BUFFER_MISMATCH. A prefix that is not frozen, or not at a token
+ * boundary: SSLM_GPU_PREFIX_REJECTED. It submits nothing and is not refused Busy.
+ *
+ * sslm_gpu_prefix_restore rebuilds a frozen prefix in `pool` from such a blob. Checked in this
+ * order, the first failing check decides, and each refusal changes nothing and leaves `*out_prefix`
+ * null: (1) a null `out_prefix`, context, model, pool or blob, or a model or pool of another context
+ * or a pool of another model: SSLM_SEQUENCE_KV_BUFFER_MISMATCH; (2) SSLM_BUSY while any sequence in
+ * the process is Submitted (SSLM_DEVICE_LOST while the submission device holds a stranded
+ * submission); (3) a size below 184 or a magic other than 'SPX1', (4) a digest that does not match,
+ * (5) a backend other than 1: SSLM_SEQUENCE_KV_BUFFER_MISMATCH; (6) another engine version, or
+ * another adapter vendor or device than this context's: SSLM_RESTORE_PRODUCER_MISMATCH; (7) another
+ * model: SSLM_RESTORE_MODEL_MISMATCH; (8) another kv_precision, (9) a schema the model does not
+ * resolve or a walk state out of its range, (10) a length, size, origin, token or scale out of
+ * domain: SSLM_SEQUENCE_KV_BUFFER_MISMATCH; (11) fewer than ceil(L/B) - s free pages:
+ * SSLM_GPU_KV_POOL_EXHAUSTED with nothing drawn; (12) the device statuses of the page table's
+ * buffer (allocated with the draw) and of the upload (SSLM_GPU_ALLOCATION_FAILED, SSLM_DEVICE_LOST),
+ * every drawn page and shared refcount returned.
+ * The share runs after the draw, in its own pool-mutex section; if the page allocator refuses it
+ * (an internal fault), the draw is returned and the status is SSLM_SEQUENCE_KV_BUFFER_MISMATCH.
+ * `parent_or_null` is a sharing hint, never a requirement and never a checked argument: when it is
+ * frozen, of `model` and `pool`, its length is the blob's origin and its host-mirror rows
+ * [0, s * B) equal the blob's, its s = floor(origin / B) full pages are shared and only the rest are
+ * drawn and uploaded; otherwise the restore is private (s = 0), which needs ceil(L/B) free pages.
+ * `*out_shared_pages` (optional) receives s. B is the restore pool's page size. A blob restores only
+ * on the backend, engine version, adapter vendor and device that wrote it. The digest is an
+ * integrity check, not authentication. Releasing a prefix while it is saved or read as a hint is
+ * caller UB. The restore submits the pool upload on the process's device, so it is serialized as the
+ * other submitting prefix verbs are. */
+SslmGpuStatus sslm_gpu_prefix_save(SslmGpuContext* ctx, const SslmGpuPrefixHandle* prefix, void* out_blob,
+                                   size_t* out_blob_size) noexcept;
+SslmGpuStatus sslm_gpu_prefix_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model, SslmGpuKvPoolHandle* pool,
+                                      const void* blob, size_t blob_size, SslmGpuPrefixHandle* parent_or_null,
+                                      SslmGpuPrefixHandle** out_prefix, uint32_t* out_shared_pages) noexcept;
 
 #endif /* SSLM_GPU_1P0_H */
