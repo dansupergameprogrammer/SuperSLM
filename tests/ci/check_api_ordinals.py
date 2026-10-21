@@ -1,9 +1,11 @@
 """Require every status ordinal docs/api.md states to be that status's ordinal (precache plan cell 7.17).
 
-A statement is one line of docs/api.md that pairs one backticked status name of the
-SSLM_STATUS_ENUM_LIST X-macro with the word "ordinal" and the integer immediately following it
-("ordinals 24 to 29" is a range, not a statement, and is not read). Each stated integer must equal the
-name's position in the X-macro. SSLM_RESTORE_PRODUCER_MISMATCH must be stated, at 30. A name with
+Every "ordinal N" in docs/api.md is read (rev 1.18.4, suite audit G11): the integer immediately
+following the word "ordinal" ("ordinals 24 to 29" is a range, not a statement, and is not read). It
+pairs with the one backticked status name of the SSLM_STATUS_ENUM_LIST X-macro on its own line; a line
+with no such name pairs with the first one on the next line of the same paragraph; with none on either
+line the statement is unpaired and the check refuses. Each stated integer must equal the name's
+position in the X-macro. SSLM_RESTORE_PRODUCER_MISMATCH must be stated, at 30. A name with
 fewer statements than its recorded floor refuses, so a statement reworded past the locator drops out
 loudly instead of letting the check pass on fewer statements.
 
@@ -16,7 +18,8 @@ import re
 import sys
 
 # Recorded floors (plan 7.17): the statements counted at the anchor, plus the new status once.
-FLOORS = {"SSLM_KV_BUDGET_EXCEEDED": 2, "SSLM_RESTORE_PRODUCER_MISMATCH": 1}
+# Rev 1.18.4 (G11): the new status's floor is 2, its paired sentence and its own-line statement.
+FLOORS = {"SSLM_KV_BUDGET_EXCEEDED": 2, "SSLM_RESTORE_PRODUCER_MISMATCH": 2}
 # The new status and the ordinal the release states it at.
 REQUIRED = {"SSLM_RESTORE_PRODUCER_MISMATCH": 30}
 
@@ -48,13 +51,20 @@ def x_macro_ordinals(header: Path) -> dict:
 
 def statements(doc: Path, ordinals: dict) -> list:
     found = []
-    for number, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+    lines = doc.read_text(encoding="utf-8").splitlines()
+    for number, line in enumerate(lines, 1):
         stated = _ORDINAL.findall(line)
         if not stated:
             continue
         names = sorted({n for n in _BACKTICKED.findall(line) if n in ordinals})
         if not names:
-            continue
+            # The next line of the same paragraph: its first backticked status name.
+            following = lines[number] if number < len(lines) else ""
+            nxt = [n for n in _BACKTICKED.findall(following) if n in ordinals] if following.strip() else []
+            if not nxt:
+                raise ValueError(f"{doc}:{number}: \"ordinal {stated[0]}\" with no backticked status name on "
+                                 f"its line or the next line of its paragraph: an unpaired statement")
+            names = [nxt[0]]
         if len(names) != 1 or len(stated) != 1:
             raise ValueError(f"{doc}:{number}: a line pairing {len(names)} status names with "
                              f"{len(stated)} ordinals is not one statement; split it")

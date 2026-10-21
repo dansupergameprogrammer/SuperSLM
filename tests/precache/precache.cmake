@@ -77,6 +77,9 @@ if(Python3_Interpreter_FOUND)
     # Plan 7.17 (E5): every docs/api.md status ordinal is that status's ordinal; the new status at 30.
     add_test(NAME superslm_precache_api_ordinals
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/check_api_ordinals.py)
+    # Rev 1.18.4 (suite audit G11): the widened locator's must-accept and must-rejects.
+    add_test(NAME superslm_precache_api_ordinals_locator
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/test_check_api_ordinals.py)
     # Plan 7.22 (M1, E5, the 1.15.0 release): the GPU twins labelled unreleased until 1.16.0.
     add_test(NAME superslm_precache_gpu_prefix_labels
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/check_gpu_prefix_labels.py)

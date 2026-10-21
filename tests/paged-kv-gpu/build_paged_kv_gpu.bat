@@ -161,6 +161,7 @@ call :exe pcg_cell_busy plain F2 "..\precache-gpu\pcg_cell_busy" ""
 call :exe pcg_cell_faults alloc F2 "..\precache-gpu\pcg_cell_faults" ""
 call :exe pcg_cell_schema plain F2 "..\precache-gpu\pcg_cell_schema" ""
 call :exe pcg_cell_budget_snapshot plain F2 "..\precache-gpu\pcg_cell_budget_snapshot" ""
+call :exe pcg_cell_restore_derived plain F2 "..\precache-gpu\pcg_cell_restore_derived" ""
 call :exe pcg_cell_9_10 plain E5 "..\precache-gpu\pcg_cell_9_10" ""
 :only_old
 if defined OLDTREE call :oldreader
@@ -281,6 +282,15 @@ rem ---- precache 9.10's capture leg, against the v1.13.1 tree (d697927): its ow
 rem own tests\paged-kv-gpu helpers, so every saved state is built by 1.13.1's code (plan 9.10, PC-13) ---------------------
 :capture910
 echo ===== pcg_cell_9_10_capture against %CAP910TREE% =====
+rem Suite audit G6: the capture writes commit=d697927... from a constant, so the tree it is built from is checked
+rem here, as 9.9's script checks v1.13.1's commit. A capture built against any other tree (the tree under work
+rem among them, which would make the oracle the code it grades) is refused and counted as a build failure.
+set CAP910WANT=d697927f6d5ce5fa73ecbb8660020a425518b923
+set CAP910HEAD=
+for /f "usebackq delims=" %%H in (`git -C "%CAP910TREE%" rev-parse HEAD 2^>nul`) do set CAP910HEAD=%%H
+if /I not "%CAP910HEAD%"=="%CAP910WANT%" ( echo REFUSED: --capture910-tree %CAP910TREE% is at "%CAP910HEAD%", not v1.13.1 %CAP910WANT% & set /a NCOMPILE+=1 & exit /b 0 )
+git -C "%CAP910TREE%" diff --quiet HEAD -- include src tests 2>nul
+if errorlevel 1 ( echo REFUSED: --capture910-tree %CAP910TREE% has local changes under include, src or tests & set /a NCOMPILE+=1 & exit /b 0 )
 if not exist "%OUT%\v1131" mkdir "%OUT%\v1131"
 if not defined CAP910CPULIB set CAP910CPULIB=%CAP910TREE%\build\Release\superslm.lib
 if not exist "%CAP910CPULIB%" ( echo NO v1.13.1 CPU LIBRARY AT %CAP910CPULIB% & set /a NCOMPILE+=1 & exit /b 0 )

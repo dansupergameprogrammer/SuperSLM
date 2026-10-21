@@ -22,9 +22,11 @@
 //   (D) an empty prefix given a zero-count prefill, which clears its bind permission; the restored copy at
 //       L = 0 has it again, so a begin_from child of each binds a schema differently.
 // Each grades only that the original and the restored copy behave the same, not which remedy makes them so.
-// RED at d42cec75 on all three. Mutant exit-refresh-only (apply_gpu_mutant.py, every failing exit of a ready
-// prefix refreshes the snapshot, nothing at freeze) turns A and B green and leaves D red: a fix confined to
-// the call's exits is caught.
+// RED at d42cec75 on all three; green at ac2fc2c7 (the freeze normalises the snapshot and the bind permission
+// from L, as restore does). Mutant freeze-set-removed (apply_gpu_mutant.py, plan §15.22: the freeze-time
+// setting removed) is red on A, B and D, since the per-exit refresh went with the fix. (Before the fix the
+// mutant exit-refresh-only, every failing exit refreshing and nothing at freeze, was red on D only; it was
+// retired with its anchor in ac2fc2c7.)
 //
 // Run: pcg_cell_budget_snapshot.exe --fixture-dir=DIR (pkv_def).
 #include "pcg_helpers.h"

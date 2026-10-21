@@ -1,4 +1,5 @@
 #include "precache_provenance.h"
+#include "forward/parallel_split.h"  // the matvec minimum-work seam (superslm_test_injection)
 #include <chrono>
 #include <cmath>
 #include <numeric>
@@ -500,6 +501,17 @@ void Hook(void* user,int32_t n,sslm_task_fn task,void* ctx) {
     worker.join();
 }
 
+// 6.6 [E4], pinned leg: multithreaded decode (the parallel-for hook, with SSLM_PARALLEL_FOR_MATVEC) over a restored
+// prefix equals single-threaded decode from the same restore. The hook splits only the token finish's logits rows and
+// the one-row projections (include/superslm/parallel_for.h:10-18); K/V reads are never split, so a K/V addressing
+// defect is common-mode here and is graded by 10.1, 10.2 and the rule-B leg's re-save identity instead (plan rev
+// 1.18.4, suite audit G9: rev 1.14's K/V mutant is withdrawn).
+// Mutant (rev 1.18.4): the last matvec task's row range ends one row short (src/forward/parallel_split.cpp,
+// MatvecTask) -> that row keeps its stale value on the parallel path only -> the tokens differ -> red. At pkv_def's
+// geometry (hidden 192, intermediate 512) no projection group reaches two tasks at the shipping minimum of 256 KiB
+// of weight per task, so the leg lowers that minimum through the test seam for its parallel decodes; otherwise the
+// projections would run serially on both paths and the mutant would be invisible (executed: green under the mutant
+// without the seam).
 void Parallel66() {
     const Fixture& fx=GetFixture("pkv_def");
     if(!fx.ok) return;
@@ -527,6 +539,12 @@ void Parallel66() {
     Status(sslm_workspace_set_parallel_for(ws,&hook),SSLM_OK,"6.6 hook install");
     sslm_decode_params p{};
     p.layer_budget=int32_t(fx.geo.layers);
+    // Every projection group of pkv_def splits into the hook's 4 tasks: the smallest (k, v: 192 x 96 bytes) is
+    // 18 KiB, so a 4 KiB minimum caps none of them.
+    struct MinWork {
+        MinWork() { superslm::test::SetMinRowBytesPerTask(4096); }
+        ~MinWork() { superslm::test::ResetMinRowBytesPerTask(); }
+    } min_work;
     for(int i=0;i<32;++i) {
         sslm_seq a[1]={serial},c[1]={parallel};
         int32_t ta=-1,tc=-1;
@@ -534,8 +552,9 @@ void Parallel66() {
         Status(sslm_decode_step(fx.model,c,1,&p,ws,&tc),SSLM_OK,"6.6 parallel decode");
         PKV_CHECK_MSG(ta>=0 && ta==tc,"6.6 restored parallel token differs at %d",i);
     }
-    PKV_CHECK_MSG(counts.calls>0 && counts.tasks>0,
-                  "6.6 installed parallel hook never ran (calls=%d, tasks=%d)",
+    // The finish alone makes one call per token; the projections' calls are what make the matvec mutant visible.
+    PKV_CHECK_MSG(counts.calls>32 && counts.tasks>0,
+                  "6.6 installed parallel hook never split a projection (calls=%d over 32 tokens, tasks=%d)",
                   int(counts.calls),int(counts.tasks));
     Status(sslm_workspace_destroy(ws),SSLM_OK,"6.6 workspace destroy");
 }
@@ -545,8 +564,11 @@ PKV_CELL("6.6/E4", "E1", Parallel66);
 // so it is the pinned leg. This one runs on the real 0.5B artifact at its rule B (128), mapped on its own and asserting
 // its B before anything else: a prefix of L = 300 >= 2B (three pages, the last partial) is built by prefill in a
 // rule-B page pool and saved; two identical restores are made from the blob; 32 tokens are decoded multithreaded from
-// one and serially from the other, and must be equal. Mutant: a parallel-path K/V read that addresses pages at a B
-// other than the pool's (16, as every pinned leg runs) -> red here while the pinned leg stays green.
+// one and serially from the other, and must be equal. Its added value is the hook at real geometry, where the
+// projections split at the shipping minimum work. Mutant (rev 1.18.4, suite audit G9; rev 1.14's K/V mutant is
+// withdrawn, the hook never splits a K/V read): the last matvec task's row range ends one row short -> the parallel
+// tokens differ -> red, as on the pinned leg. K/V addressing at rule B is graded by 10.1, 10.2 and this leg's restore
+// and re-save identity.
 // Box input: SUPERSLM_PRECACHE_REAL_MODEL (the real 0.5B artifact). Without it the leg does not run, as 10.1 does not.
 void Parallel66RuleB() {
     const auto model_path=Env("SUPERSLM_PRECACHE_REAL_MODEL");

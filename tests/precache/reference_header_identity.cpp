@@ -34,6 +34,30 @@ int main() {
         std::fputs("reference header accepted duplicate or unknown identity field\n",stderr);
         return 1;
     }
-    std::puts("reference header: exact must-accept; four misnamed, duplicate and unknown must-reject");
+    // A reference row's selectors (adopter, decode_mode, adopter_mode) and its tokens are read through pc::Field,
+    // which must take a key only as a whole whitespace-separated key=value token (plan §7, the carried F10-F13
+    // portions: every identity field through the exact parse). Must-accept: the exact row. Must-reject: a key
+    // reached as the suffix of another key, and a key given twice.
+    const std::string row="adopter=1 decode_mode=greedy adopter_mode=legacy tokens=1,2,3";
+    if(pc::Field(row,"adopter")!="1" || pc::Field(row,"decode_mode")!="greedy" ||
+       pc::Field(row,"adopter_mode")!="legacy" || pc::Field(row,"tokens")!="1,2,3") {
+        std::fputs("reference row must-accept failed\n",stderr);
+        return 1;
+    }
+    const std::string suffix="not_adopter=0 adopter=1 x_decode_mode=damped decode_mode=greedy "
+                             "adopter_mode=legacy prefix_tokens=9 tokens=1,2,3";
+    if(pc::Field(suffix,"adopter")!="1" || pc::Field(suffix,"decode_mode")!="greedy" ||
+       pc::Field(suffix,"tokens")!="1,2,3" || !pc::Field("not_adopter=0","adopter").empty()) {
+        std::fprintf(stderr,"reference row read a key as the suffix of another key (adopter '%s', decode_mode '%s', "
+                     "tokens '%s')\n",pc::Field(suffix,"adopter").c_str(),pc::Field(suffix,"decode_mode").c_str(),
+                     pc::Field(suffix,"tokens").c_str());
+        return 1;
+    }
+    if(!pc::Field("adopter=0 adopter=1 decode_mode=greedy","adopter").empty()) {
+        std::fputs("reference row accepted a duplicate key\n",stderr);
+        return 1;
+    }
+    std::puts("reference header: exact must-accept; four misnamed, duplicate and unknown must-reject; "
+              "reference row: exact must-accept; suffix-key and duplicate-key must-reject");
     return 0;
 }
