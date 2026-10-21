@@ -1,0 +1,78 @@
+{
+    "step":  "b7c",
+    "rounds":  15,
+    "rows":  [
+                 {
+                     "row":  "off",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  896.5964,
+                                    "sign_lo":  896.1552,
+                                    "sign_hi":  897.8477
+                                },
+                     "off_over_row":  {
+                                          "n":  15,
+                                          "median":  1,
+                                          "sign_lo":  1,
+                                          "sign_hi":  1
+                                      },
+                     "digests":  [
+                                     "7e46330608d11704"
+                                 ]
+                 },
+                 {
+                     "row":  "on",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  453.0005,
+                                    "sign_lo":  452.561,
+                                    "sign_hi":  453.7433
+                                },
+                     "off_over_row":  {
+                                          "n":  15,
+                                          "median":  1.9801,
+                                          "sign_lo":  1.9784,
+                                          "sign_hi":  1.9809
+                                      },
+                     "digests":  [
+                                     "8ad5ea7961656cef"
+                                 ]
+                 },
+                 {
+                     "row":  "on:exact",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  1112.0089,
+                                    "sign_lo":  1110.3039,
+                                    "sign_hi":  1112.7336
+                                },
+                     "off_over_row":  {
+                                          "n":  15,
+                                          "median":  0.8064,
+                                          "sign_lo":  0.8058,
+                                          "sign_hi":  0.8087
+                                      },
+                     "digests":  [
+                                     "7e46330608d11704"
+                                 ]
+                 },
+                 {
+                     "row":  "on:exact:learned",
+                     "gen_ms":  {
+                                    "n":  15,
+                                    "median":  604.2941,
+                                    "sign_lo":  603.4462,
+                                    "sign_hi":  605.7856
+                                },
+                     "off_over_row":  {
+                                          "n":  15,
+                                          "median":  1.4831,
+                                          "sign_lo":  1.4811,
+                                          "sign_hi":  1.4865
+                                      },
+                     "digests":  [
+                                     "7e46330608d11704"
+                                 ]
+                 }
+             ]
+}

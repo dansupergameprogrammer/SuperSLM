@@ -75,6 +75,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <new>
 #include <sstream>
 #include <string>
@@ -87,6 +88,10 @@
 #if !defined(SFD_BENCH_DECODE_ONLY)
 #include "superslm/forward_sites.h"
 #include "superslm/model.h"
+#include "superslm/schema_masks.h"
+#if defined(SFD_BENCH_DRAFT_TABLE_BUILDER)
+#include "schema_fast_decode/sfd_api.h"  // ForcedTableEntry: the library's forced flag per state (the §11.0 read seam)
+#endif
 #include "superslm/sslm_damped_greedy.h"
 #endif
 
@@ -586,19 +591,153 @@ Arm RunOff(Engine& e, const char* schema, const std::vector<int32_t>& prompt, in
 	return a;
 }
 
+// Exact mode's draft (the arms `on:exact`, `on:exact:learned`, `on:exact:wrong`).
+enum class DraftKind { kCanonical, kLearned, kWrong };
+
 #if !defined(SFD_BENCH_DECODE_ONLY)
+// ---- Exact mode's draft sources (plan rev 1.3.4 §5.10.5, the B7 steps) -------------------------------------
+// The host tracks the schema walk itself (the public ABI has no walk-state query): from state 0 at the first
+// generated token, one SCM1 transition per token the run appends. The drafts:
+//   learned  the frozen D2 table (drafttable, below): from the state after the pending token, the table's most
+//            frequent token at each state while the running product of those tokens' shares stays >= 0.5;
+//            stop at a state the table never saw or the library marks unforced, and clip to the span budget.
+//            Nothing stored for the state: an empty draft (no verb call), never the canonical chain.
+//   wrong    a legal token other than off's at each forced state with two or more legal tokens, stopping at a
+//            state with one legal token (or an unforced one). Off's stream comes from one unmeasured off run in
+//            the same process; after the first substitution the draft follows its own path, any legal token.
+struct SchemaWalker {
+	superslm::SslmModelView view;
+	superslm::SchemaMasksTable table;
+	const superslm::SchemaEntry* entry = nullptr;
+	size_t index = 0;
+	bool Open(const Engine& e, const char* schema) {
+		std::string err;
+		if (superslm::SslmModel::Load(e.bytes, e.size, view, &err) != superslm::SslmModelStatus::Ok) return false;
+		const superslm::SslmSectionView* scm = view.Section(superslm::SslmSectionType::SchemaMasks);
+		if (!scm || !superslm::SchemaMasksTable::Parse(scm->data, scm->byte_size, view.config.vocab_size, table, &err)) return false;
+		entry = table.ByName(schema, &index);
+		return entry != nullptr;
+	}
+	bool Step(uint32_t state, int32_t tok, uint32_t* next) const {
+		return tok >= 0 && table.Transition(*entry, state, static_cast<uint32_t>(tok), next);
+	}
+	// The state's legal tokens, in CSR order (ascending ids), with their next states.
+	void Legal(uint32_t state, std::vector<std::pair<int32_t, uint32_t>>* out) const {
+		using superslm::schema_masks_detail::ReadLE32;
+		out->clear();
+		const uint32_t b = ReadLE32(entry->state_offsets_le + static_cast<size_t>(state) * 4);
+		const uint32_t en = ReadLE32(entry->state_offsets_le + static_cast<size_t>(state + 1) * 4);
+		for (uint32_t i = b; i < en; ++i)
+			out->push_back({static_cast<int32_t>(ReadLE32(entry->transitions_le + static_cast<size_t>(i) * 8)),
+			                ReadLE32(entry->transitions_le + static_cast<size_t>(i) * 8 + 4)});
+	}
+};
+struct DraftTable {
+	std::vector<uint8_t> forced;                                     // per state: the library's forced flag
+	std::vector<std::vector<std::pair<int32_t, int64_t>>> counts;  // per state: (token, count)
+	bool Load(const char* path) {
+		std::ifstream in(path);
+		std::string line;
+		if (!in || !std::getline(in, line) || line.rfind("SFD-DRAFT-TABLE/1 ", 0) != 0) return false;
+		while (std::getline(in, line)) {
+			std::istringstream ls(line);
+			std::string tag;
+			ls >> tag;
+			if (tag == "states") {
+				size_t n = 0;
+				ls >> n;
+				forced.assign(n, 0);
+				counts.assign(n, {});
+			} else if (tag == "forced") {
+				size_t st = 0;
+				while (ls >> st)
+					if (st < forced.size()) forced[st] = 1;
+			} else if (tag == "S") {
+				size_t st = 0;
+				ls >> st;
+				std::string tc;
+				while (ls >> tc) {
+					const size_t c = tc.find(':');
+					if (st < counts.size() && c != std::string::npos)
+						counts[st].push_back({std::atoi(tc.substr(0, c).c_str()), std::atoll(tc.substr(c + 1).c_str())});
+				}
+			}
+		}
+		return !forced.empty();
+	}
+};
+struct DraftCtx {
+	const SchemaWalker* walker = nullptr;
+	const DraftTable* table = nullptr;
+	const std::vector<int32_t>* off_stream = nullptr;
+};
+DraftCtx g_draft;
+
+// The draft from walk state `w`, the run's next stream position being `pos`, at most `cap` tokens.
+std::vector<int32_t> MakeDraft(DraftKind kind, uint32_t w, size_t pos, int32_t cap) {
+	std::vector<int32_t> d;
+	const SchemaWalker& wk = *g_draft.walker;
+	if (kind == DraftKind::kLearned) {
+		const DraftTable& t = *g_draft.table;
+		double product = 1.0;
+		uint32_t s = w;
+		while (static_cast<int32_t>(d.size()) < cap && s < t.counts.size() && t.forced[s] && !t.counts[s].empty()) {
+			int64_t total = 0, best = -1;
+			int32_t tok = -1;
+			for (const auto& tc : t.counts[s]) {
+				total += tc.second;
+				if (tc.second > best) best = tc.second, tok = tc.first;
+			}
+			product *= static_cast<double>(best) / static_cast<double>(total);
+			if (product < 0.5) break;
+			uint32_t nx = 0;
+			if (!wk.Step(s, tok, &nx)) break;
+			d.push_back(tok);
+			s = nx;
+		}
+	} else if (kind == DraftKind::kWrong) {
+		const DraftTable& t = *g_draft.table;
+		const std::vector<int32_t>& off = *g_draft.off_stream;
+		std::vector<std::pair<int32_t, uint32_t>> legal;
+		uint32_t s = w;
+		bool diverged = false;
+		while (static_cast<int32_t>(d.size()) < cap && s < t.forced.size() && t.forced[s]) {
+			wk.Legal(s, &legal);
+			if (legal.size() < 2) break;
+			const size_t at = pos + d.size();
+			const int32_t avoid = !diverged && at < off.size() ? off[at] : -1;
+			size_t pick = 0;
+			while (pick < legal.size() && legal[pick].first == avoid) ++pick;
+			if (pick == legal.size()) break;
+			d.push_back(legal[pick].first);
+			diverged = diverged || legal[pick].first != avoid;
+			s = legal[pick].second;
+		}
+	}
+	return d;
+}
+
 // Jump-forward on: the §5.6 host loop.
-// `exact`: the verb in exact mode (sslm_jump_options, SSLM_JUMP_EXACT, the canonical chain as the draft). It
-// needs no host loop of its own (docs/api.md, exact mode): this loop calls it after each decode step, while a
-// token is pending, and it keeps only the drafted tokens the model would itself produce.
+// `exact`: the verb in exact mode (sslm_jump_options, SSLM_JUMP_EXACT). It needs no host loop of its own
+// (docs/api.md, exact mode): this loop calls it after each decode step, while a token is pending, and it keeps
+// only the drafted tokens the model would itself produce. `draft` picks the draft: the canonical chain (a NULL
+// draft), the learned table, or the always-wrong draft (above).
 Arm RunOn(Engine& e, const char* schema, const std::vector<int32_t>& prompt, int32_t budget, int max_new,
-          bool stop_on_accept = false, bool exact = false) {
+          bool stop_on_accept = false, bool exact = false, DraftKind draft = DraftKind::kCanonical) {
 	Arm a;
 	sslm_jump_options exact_opts{};
 	exact_opts.struct_size = sizeof(sslm_jump_options);
 	exact_opts.mode = SSLM_JUMP_EXACT;
 	exact_opts.draft = nullptr;
 	exact_opts.draft_count = 0;
+	const bool host_draft = exact && draft != DraftKind::kCanonical;
+	uint32_t walk = 0;  // the schema walk after the stream so far (tracked only for a host-made draft)
+	bool walk_ok = true;
+	auto advance = [&](int32_t tok) {
+		uint32_t nx = 0;
+		if (host_draft && walk_ok) walk_ok = g_draft.walker->Step(walk, tok, &nx), walk = nx;
+	};
+	std::vector<int32_t> draft_buf;
 	const auto p0 = Clock::now();
 	sslm_seq s = e.Start(schema, prompt);
 	a.prefill_ms = MsSince(p0);
@@ -613,6 +752,15 @@ Arm RunOn(Engine& e, const char* schema, const std::vector<int32_t>& prompt, int
 			int32_t forced = 0;
 			const int32_t room = std::min<int32_t>(budget, static_cast<int32_t>(max_new - a.stream.size()) + (pending ? 1 : 0));
 			if (room < 1 || static_cast<int>(a.stream.size()) >= max_new) break;  // the cap is reached
+			if (host_draft) {
+				// The draft starts at the walk state after the pending token; with no pending token, or an empty
+				// draft, the verb would do nothing, so the decode step takes it from here.
+				if (!pending || !walk_ok) break;
+				draft_buf = MakeDraft(draft, walk, a.stream.size(), room - 1);
+				if (draft_buf.empty()) break;
+				exact_opts.draft = draft_buf.data();
+				exact_opts.draft_count = static_cast<int32_t>(draft_buf.size());
+			}
 			const auto v0 = Clock::now();
 			const sslm_status st = sslm_seq_jump_forward(e.model, s, room, nullptr, exact ? &exact_opts : nullptr, e.ws, buf.data(),
 			                                             budget, &forced);
@@ -634,6 +782,7 @@ Arm RunOn(Engine& e, const char* schema, const std::vector<int32_t>& prompt, int
 			}
 			pending = false;
 			a.stream.insert(a.stream.end(), buf.begin(), buf.begin() + forced);
+			for (int32_t i = 0; i < forced; ++i) advance(buf[static_cast<size_t>(i)]);
 			// Drain until the walk reports no forced token: a call that admitted only the pending token (a
 			// chunk budget of 1) has not drained the chain; one that admitted nothing cannot progress.
 			if (m == 0) break;
@@ -661,6 +810,7 @@ Arm RunOn(Engine& e, const char* schema, const std::vector<int32_t>& prompt, int
 				break;
 			}
 			a.stream.push_back(t);
+			advance(t);
 			pending = true;
 			if (stop_on_accept && e.Accepting(s)) {
 				a.stop = "accepting";
@@ -748,6 +898,7 @@ struct ArmSpec {
 	std::string name;
 	bool on = false;
 	bool exact = false;  // `on:exact`: jump-forward on in exact mode
+	DraftKind draft = DraftKind::kCanonical;  // `on:exact:learned`, `on:exact:wrong` (both need --draft-table)
 	int32_t budget = 64;
 	int repeat = 1;
 };
@@ -758,6 +909,8 @@ bool ParseArmSpec(const std::string& t, int32_t default_budget, ArmSpec* out) {
 	if (t == "off2") return out->repeat = 2, true;
 	if (t == "on") return out->on = true, true;
 	if (t == "on:exact") return out->on = true, out->exact = true, true;
+	if (t == "on:exact:learned") return out->on = true, out->exact = true, out->draft = DraftKind::kLearned, true;
+	if (t == "on:exact:wrong") return out->on = true, out->exact = true, out->draft = DraftKind::kWrong, true;
 	if (t.compare(0, 3, "on:") == 0 && t.size() > 3) {
 		out->on = true;
 		out->budget = std::atoi(t.c_str() + 3);
@@ -864,10 +1017,35 @@ int Extract(Engine& e, int argc, char** argv) {
 		if (comma == std::string::npos) break;
 		at = comma + 1;
 	}
-	if (specs.empty() || specs.size() > 2 || pairs < 1 || warmup < 0) {
-		std::fprintf(stderr, "--pair takes one or two arms; --pairs >= 1\n");
+	if (specs.empty() || specs.size() > 4 || pairs < 1 || warmup < 0) {
+		std::fprintf(stderr, "--pair takes one to four arms (more than two run in the order listed, with no ratio); --pairs >= 1\n");
 		return 2;
 	}
+#if !defined(SFD_BENCH_DECODE_ONLY)
+	// A host-made draft (learned or wrong) needs the walk, the frozen table and, for wrong, off's stream.
+	static SchemaWalker walker;
+	static DraftTable table;
+	static std::vector<int32_t> off_stream;
+	bool need_table = false, need_off = false;
+	for (const ArmSpec& sp : specs) {
+		need_table = need_table || sp.draft != DraftKind::kCanonical;
+		need_off = need_off || sp.draft == DraftKind::kWrong;
+	}
+	if (need_table) {
+		const char* path = Arg(argc, argv, 4, "--draft-table", nullptr);
+		if (!path || !table.Load(path) || !walker.Open(e, schema) || table.forced.size() != walker.entry->state_count) {
+			std::fprintf(stderr, "on:exact:learned and on:exact:wrong need --draft-table PATH, a table for this schema\n");
+			return 2;
+		}
+		g_draft.walker = &walker;
+		g_draft.table = &table;
+		std::printf("draft_table %s states %zu\n", path, table.forced.size());
+	}
+	if (need_off) {
+		off_stream = RunOff(e, schema, prompt, max_new).stream;  // unmeasured: off's tokens for the wrong draft
+		g_draft.off_stream = &off_stream;
+	}
+#endif
 	std::vector<ArmRecord> rec(specs.size());
 	for (size_t k = 0; k < specs.size(); ++k) rec[k].label = specs[k].name;
 	if (specs.size() == 2 && specs[0].name == specs[1].name) rec[0].label += "#A", rec[1].label += "#B";
@@ -884,7 +1062,8 @@ int Extract(Engine& e, int argc, char** argv) {
 			bool repeat_equal = true;
 			for (int r = 0; r < sp.repeat; ++r) {
 #if !defined(SFD_BENCH_DECODE_ONLY)
-				a = sp.on ? RunOn(e, schema, prompt, sp.budget, max_new, /*stop_on_accept=*/false, sp.exact) : RunOff(e, schema, prompt, max_new);
+				a = sp.on ? RunOn(e, schema, prompt, sp.budget, max_new, /*stop_on_accept=*/false, sp.exact, sp.draft)
+				          : RunOff(e, schema, prompt, max_new);
 #else
 				a = RunOff(e, schema, prompt, max_new);
 #endif
@@ -1607,6 +1786,91 @@ int SummarizeMode(int argc, char** argv) {
 
 }  // namespace
 
+#if defined(SFD_BENCH_DRAFT_TABLE_BUILDER)
+// `drafttable SCHEMA --streams FILE --out PATH`: the D2 table, built offline (plan rev 1.3.4 §5.10.5, B7). FILE is a
+// quality-mode result (readings.quality_off.arms.off.items[].stream, or arms.off.items[].stream): each off stream is
+// walked through the schema from state 0, counting the model's token at every state. Every state's forced flag is
+// the library's own (next_forced >= 0, through the read seam), so the timed bench, built without seams, can stop a
+// learned draft at an unforced state. This build is a test build of the library; it times nothing.
+int DraftTableBuild(Engine& e, int argc, char** argv) {
+	const char* schema = argv[3];
+	const char* streams = Arg(argc, argv, 4, "--streams", nullptr);
+	const char* out_path = Arg(argc, argv, 4, "--out", nullptr);
+	if (!streams || !out_path) {
+		std::fprintf(stderr, "drafttable SCHEMA --streams FILE --out PATH\n");
+		return 2;
+	}
+	SchemaWalker wk;
+	if (!wk.Open(e, schema)) {
+		std::fprintf(stderr, "schema %s not in the artifact\n", schema);
+		return 2;
+	}
+	std::ifstream in(streams, std::ios::binary);
+	const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	JVal root;
+	if (!ParseJson(text, &root)) {
+		std::fprintf(stderr, "cannot parse %s\n", streams);
+		return 2;
+	}
+	const JVal* arms = root.Get("arms");
+	if (const JVal* r = root.Get("readings"))
+		if (const JVal* q = r->Get("quality_off")) arms = q->Get("arms");
+	const JVal* off = arms ? arms->Get("off") : nullptr;
+	const JVal* items = off ? off->Get("items") : nullptr;
+	if (!items || items->kind != JVal::kArr) {
+		std::fprintf(stderr, "no arms.off.items in %s\n", streams);
+		return 2;
+	}
+	const uint32_t n_states = wk.entry->state_count;
+	std::vector<std::vector<std::pair<int32_t, int64_t>>> counts(n_states);
+	size_t walked = 0, tokens = 0, cut = 0;
+	for (const JVal& item : items->arr) {
+		const JVal* st = item.Get("stream");
+		if (!st || st->kind != JVal::kArr) continue;
+		++walked;
+		uint32_t s = 0;
+		for (const JVal& t : st->arr) {
+			const int32_t tok = static_cast<int32_t>(t.num);
+			auto& c = counts[s];
+			auto it = std::find_if(c.begin(), c.end(), [&](const std::pair<int32_t, int64_t>& p) { return p.first == tok; });
+			if (it == c.end()) c.push_back({tok, 1}); else ++it->second;
+			++tokens;
+			uint32_t nx = 0;
+			if (!wk.Step(s, tok, &nx)) { ++cut; break; }
+			s = nx;
+		}
+	}
+	std::vector<uint32_t> forced;
+	for (uint32_t s = 0; s < n_states; ++s) {
+		int32_t nf = -1;
+		uint32_t f_len = 0;
+		if (superslm::test::sfd::ForcedTableEntry(e.model, static_cast<int32_t>(wk.index), s, &nf, &f_len) != SSLM_OK) {
+			std::fprintf(stderr, "ForcedTableEntry failed at state %u\n", s);
+			return 3;
+		}
+		if (nf >= 0) forced.push_back(s);
+	}
+	std::ofstream o(out_path, std::ios::binary);
+	o << "SFD-DRAFT-TABLE/1 schema " << schema << " streams " << walked << " tokens " << tokens << "\n";
+	o << "states " << n_states << "\n";
+	o << "forced";
+	for (uint32_t s : forced) o << ' ' << s;
+	o << "\n";
+	size_t seen = 0;
+	for (uint32_t s = 0; s < n_states; ++s) {
+		if (counts[s].empty()) continue;
+		++seen;
+		std::sort(counts[s].begin(), counts[s].end());
+		o << "S " << s;
+		for (const auto& tc : counts[s]) o << ' ' << tc.first << ':' << tc.second;
+		o << "\n";
+	}
+	std::printf("drafttable %s: %zu streams, %zu tokens, %zu states seen of %u, %zu forced states, %zu streams cut\n", out_path,
+	            walked, tokens, seen, n_states, forced.size(), cut);
+	return 0;
+}
+#endif
+
 int main(int argc, char** argv) {
 	if (argc < 3) {
 		std::fprintf(stderr,
@@ -1636,6 +1900,9 @@ int main(int argc, char** argv) {
 	if (mode == "spans") return Spans(e, argc, argv);
 	if (mode == "finish") return Finish(e, argc, argv);
 	if (mode == "quality") return Quality(e, argc, argv);
+#endif
+#if defined(SFD_BENCH_DRAFT_TABLE_BUILDER)
+	if (mode == "drafttable") return DraftTableBuild(e, argc, argv);
 #endif
 	std::fprintf(stderr, "unknown mode %s (or not in this build)\n", mode.c_str());
 	return 2;

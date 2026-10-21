@@ -1,0 +1,196 @@
+{
+    "step":  "b7e",
+    "prompts":  20,
+    "per_prompt_ratio":  {
+                             "n":  20,
+                             "median":  1.4184,
+                             "sign_lo":  1.2748,
+                             "sign_hi":  1.4736
+                         },
+    "total_off_ms":  16676.15,
+    "total_exact_ms":  12878.12,
+    "total_ratio":  1.2949,
+    "all_same":  true,
+    "rows":  [
+                 {
+                     "id":  "B4b-01",
+                     "off_ms":  853.6763,
+                     "exact_ms":  604.1717,
+                     "ratio":  1.4130,
+                     "off_digest":  "620ab625ca3c0c9c",
+                     "exact_digest":  "620ab625ca3c0c9c",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-02",
+                     "off_ms":  827.3181,
+                     "exact_ms":  553.5123,
+                     "ratio":  1.4925,
+                     "off_digest":  "cc6307c8c2fd7704",
+                     "exact_digest":  "cc6307c8c2fd7704",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-03",
+                     "off_ms":  759.8823,
+                     "exact_ms":  594.2635,
+                     "ratio":  1.2785,
+                     "off_digest":  "2f7a7883b8f5b251",
+                     "exact_digest":  "2f7a7883b8f5b251",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-04",
+                     "off_ms":  821.8311,
+                     "exact_ms":  633.8945,
+                     "ratio":  1.2976,
+                     "off_digest":  "a203c18f6d4641c8",
+                     "exact_digest":  "a203c18f6d4641c8",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-05",
+                     "off_ms":  699.5954,
+                     "exact_ms":  558.1710,
+                     "ratio":  1.2510,
+                     "off_digest":  "b880bc422e8a5332",
+                     "exact_digest":  "b880bc422e8a5332",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-06",
+                     "off_ms":  760.8619,
+                     "exact_ms":  519.3876,
+                     "ratio":  1.4664,
+                     "off_digest":  "c12f9124da896c91",
+                     "exact_digest":  "c12f9124da896c91",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-07",
+                     "off_ms":  893.2231,
+                     "exact_ms":  854.9060,
+                     "ratio":  1.0449,
+                     "off_digest":  "337cd28738ccc077",
+                     "exact_digest":  "337cd28738ccc077",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-08",
+                     "off_ms":  830.6533,
+                     "exact_ms":  584.3283,
+                     "ratio":  1.4298,
+                     "off_digest":  "a8d1fc65275d0fe1",
+                     "exact_digest":  "a8d1fc65275d0fe1",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-09",
+                     "off_ms":  1015.2330,
+                     "exact_ms":  1231.6121,
+                     "ratio":  0.8237,
+                     "off_digest":  "e6c3a263b72bf7f2",
+                     "exact_digest":  "e6c3a263b72bf7f2",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-10",
+                     "off_ms":  874.5786,
+                     "exact_ms":  605.5913,
+                     "ratio":  1.4455,
+                     "off_digest":  "277ca4270d219601",
+                     "exact_digest":  "277ca4270d219601",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-11",
+                     "off_ms":  797.8475,
+                     "exact_ms":  561.9255,
+                     "ratio":  1.4237,
+                     "off_digest":  "b0d249880fdfc995",
+                     "exact_digest":  "b0d249880fdfc995",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-12",
+                     "off_ms":  949.9944,
+                     "exact_ms":  640.9610,
+                     "ratio":  1.4823,
+                     "off_digest":  "1c2e478b986f35eb",
+                     "exact_digest":  "1c2e478b986f35eb",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-13",
+                     "off_ms":  790.9091,
+                     "exact_ms":  536.2811,
+                     "ratio":  1.4738,
+                     "off_digest":  "5e02bed23c93d8b7",
+                     "exact_digest":  "5e02bed23c93d8b7",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-14",
+                     "off_ms":  948.5633,
+                     "exact_ms":  944.3562,
+                     "ratio":  1.0048,
+                     "off_digest":  "31a9ccc15994bd8a",
+                     "exact_digest":  "31a9ccc15994bd8a",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-15",
+                     "off_ms":  794.8226,
+                     "exact_ms":  532.5513,
+                     "ratio":  1.4902,
+                     "off_digest":  "a5f80283c11be2a4",
+                     "exact_digest":  "a5f80283c11be2a4",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-16",
+                     "off_ms":  887.3323,
+                     "exact_ms":  602.4516,
+                     "ratio":  1.4735,
+                     "off_digest":  "ef44eecb5ebc149c",
+                     "exact_digest":  "ef44eecb5ebc149c",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-17",
+                     "off_ms":  763.3653,
+                     "exact_ms":  580.7731,
+                     "ratio":  1.3157,
+                     "off_digest":  "7485269298a73b78",
+                     "exact_digest":  "7485269298a73b78",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-18",
+                     "off_ms":  761.9161,
+                     "exact_ms":  597.4345,
+                     "ratio":  1.2748,
+                     "off_digest":  "053b6349c348b49f",
+                     "exact_digest":  "053b6349c348b49f",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-19",
+                     "off_ms":  854.6388,
+                     "exact_ms":  605.4948,
+                     "ratio":  1.4118,
+                     "off_digest":  "b36b0f288313b1f7",
+                     "exact_digest":  "b36b0f288313b1f7",
+                     "same":  true
+                 },
+                 {
+                     "id":  "B4b-20",
+                     "off_ms":  789.9101,
+                     "exact_ms":  536.0531,
+                     "ratio":  1.4736,
+                     "off_digest":  "260a53753bec39a1",
+                     "exact_digest":  "260a53753bec39a1",
+                     "same":  true
+                 }
+             ]
+}
