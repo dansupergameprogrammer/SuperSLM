@@ -588,9 +588,17 @@ Arm RunOff(Engine& e, const char* schema, const std::vector<int32_t>& prompt, in
 
 #if !defined(SFD_BENCH_DECODE_ONLY)
 // Jump-forward on: the §5.6 host loop.
+// `exact`: the verb in exact mode (sslm_jump_options, SSLM_JUMP_EXACT, the canonical chain as the draft). It
+// needs no host loop of its own (docs/api.md, exact mode): this loop calls it after each decode step, while a
+// token is pending, and it keeps only the drafted tokens the model would itself produce.
 Arm RunOn(Engine& e, const char* schema, const std::vector<int32_t>& prompt, int32_t budget, int max_new,
-          bool stop_on_accept = false) {
+          bool stop_on_accept = false, bool exact = false) {
 	Arm a;
+	sslm_jump_options exact_opts{};
+	exact_opts.struct_size = sizeof(sslm_jump_options);
+	exact_opts.mode = SSLM_JUMP_EXACT;
+	exact_opts.draft = nullptr;
+	exact_opts.draft_count = 0;
 	const auto p0 = Clock::now();
 	sslm_seq s = e.Start(schema, prompt);
 	a.prefill_ms = MsSince(p0);
@@ -606,7 +614,8 @@ Arm RunOn(Engine& e, const char* schema, const std::vector<int32_t>& prompt, int
 			const int32_t room = std::min<int32_t>(budget, static_cast<int32_t>(max_new - a.stream.size()) + (pending ? 1 : 0));
 			if (room < 1 || static_cast<int>(a.stream.size()) >= max_new) break;  // the cap is reached
 			const auto v0 = Clock::now();
-			const sslm_status st = sslm_seq_jump_forward(e.model, s, room, nullptr, /*opts=*/nullptr, e.ws, buf.data(), budget, &forced);
+			const sslm_status st = sslm_seq_jump_forward(e.model, s, room, nullptr, exact ? &exact_opts : nullptr, e.ws, buf.data(),
+			                                             budget, &forced);
 			const double v_ms = MsSince(v0);
 			if (st != SSLM_OK) {
 				std::fprintf(stderr, "jump_forward status %d\n", static_cast<int>(st));
@@ -738,6 +747,7 @@ std::string JDump(const JVal& v) {
 struct ArmSpec {
 	std::string name;
 	bool on = false;
+	bool exact = false;  // `on:exact`: jump-forward on in exact mode
 	int32_t budget = 64;
 	int repeat = 1;
 };
@@ -747,6 +757,7 @@ bool ParseArmSpec(const std::string& t, int32_t default_budget, ArmSpec* out) {
 	if (t == "off") return true;
 	if (t == "off2") return out->repeat = 2, true;
 	if (t == "on") return out->on = true, true;
+	if (t == "on:exact") return out->on = true, out->exact = true, true;
 	if (t.compare(0, 3, "on:") == 0 && t.size() > 3) {
 		out->on = true;
 		out->budget = std::atoi(t.c_str() + 3);
@@ -873,7 +884,7 @@ int Extract(Engine& e, int argc, char** argv) {
 			bool repeat_equal = true;
 			for (int r = 0; r < sp.repeat; ++r) {
 #if !defined(SFD_BENCH_DECODE_ONLY)
-				a = sp.on ? RunOn(e, schema, prompt, sp.budget, max_new) : RunOff(e, schema, prompt, max_new);
+				a = sp.on ? RunOn(e, schema, prompt, sp.budget, max_new, /*stop_on_accept=*/false, sp.exact) : RunOff(e, schema, prompt, max_new);
 #else
 				a = RunOff(e, schema, prompt, max_new);
 #endif
