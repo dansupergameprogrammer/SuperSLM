@@ -1,0 +1,11 @@
+bench D:\SuperSLM\.worktrees\sfd-arm-aa0bc94c\build-fresh\sslm_schema_fast_decode_bench.exe
+ 0002:00000000 00000010H .sslmgem$a              CODE
+ 0002:00000010 00003160H .sslmgem$m              CODE
+ 0002:00003170 0000000cH .sslmgem$x              CODE
+?ActiveGemmTier@detail@superslm@@YA?AW4GemmTier@12@XZ        0000000140073d20 mod64=32
+?GemmInt8AccumulateCols@detail@superslm@@YAXPEBC0_K1111PEA_J 0000000140074680 mod64=0
+?DotRowAvx2@?A0xf2649f3c@superslm@@YA_JPEBC0_K@Z             0000000140073f50 mod64=16
+?TiledGemmAvx2@?A0xf2649f3c@superslm@@YAXPEBF_KPEBC11111PEA_ 00000001400753a0 mod64=32
+ 0002:00000000 00000010H .sslmgem$a              CODE
+ 0002:00000010 00003160H .sslmgem$m              CODE
+ 0002:00003170 0000000cH .sslmgem$x              CODE
