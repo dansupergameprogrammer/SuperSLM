@@ -1124,7 +1124,7 @@ void ArmGpuPoolZeroFillCloseFaultForTest(uint32_t consecutive_failures) noexcept
 // pool mutex, so that sequence's release meets a refcount underflow (cell 11.3's class). False when
 // `seq` is not pooled or its holder has no reserve page.
 bool ZeroGpuPooledSeqReservePageRefcountForTest(SslmGpuSequenceHandle* seq) noexcept;
-// Precached prefixes (1.15.0): the GPU prefix restore's fault slot, the CPU restore-site slot's
+// Precached prefixes (1.16.0, unreleased): the GPU prefix restore's fault slot, the CPU restore-site slot's
 // twin. One-shot, on the calling thread. `position` 1 (share): the share refuses before any count
 // changes, as kv_pages' share refusal `share_refusal` (2 an invalid argument, 3 a refcount underflow);
 // 2 (map): the holder's reserve is returned before the map, so the map finds it short; 3
