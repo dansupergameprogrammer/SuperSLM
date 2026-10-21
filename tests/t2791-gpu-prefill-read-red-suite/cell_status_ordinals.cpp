@@ -61,7 +61,7 @@ PIN(SSLM_GPU_HOLDER_MODE_MISMATCH, 27);
 PIN(SSLM_GPU_PREFIX_REJECTED, 28);
 PIN(SSLM_GPU_PREFIX_SCHEMA_MISMATCH, 29);
 
-// Precached prefixes (1.15.0): the producer refusal, appended last.
+// Precached prefixes (1.16.0, unreleased): the producer refusal, appended last.
 PIN(SSLM_RESTORE_PRODUCER_MISMATCH, 30);
 
 // "Last": a switch over every named enumerator with no default compiles warning-free under

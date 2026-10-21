@@ -299,9 +299,9 @@ enum class SslmGpuStatus : uint32_t {
      * CPU's SSLM_PREFIX_SCHEMA_MISMATCH rule). Every check runs before any state change, so the
      * sequence keeps its binding and its bind eligibility. */
     SSLM_GPU_PREFIX_SCHEMA_MISMATCH,
-    /* sslm_gpu_prefix_restore (1.15.0): the 'SPX1' blob was written by another engine version or on
+    /* sslm_gpu_prefix_restore (1.16.0, unreleased): the 'SPX1' blob was written by another engine version or on
      * another adapter (its VendorId or DeviceId differs from this context's). Appended LAST, as every
-     * GPU status before it; nothing changes and nothing is drawn. */
+     * GPU status before it; nothing changes and nothing is drawn. Exported, and unreleased until 1.16.0. */
     SSLM_RESTORE_PRODUCER_MISMATCH
 };
 
@@ -1026,9 +1026,10 @@ SslmGpuStatus sslm_gpu_test_only_peek_pool_mirror_bytes(const SslmGpuKvPoolHandl
 SslmGpuStatus sslm_gpu_test_only_wait_in_flight(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept;
 
 /* ============================================================================
- * Precached prefixes (1.15.0): save and restore a frozen GPU prefix as an 'SPX1' blob, the CPU's
+ * Precached prefixes (1.16.0, unreleased): save and restore a frozen GPU prefix as an 'SPX1' blob, the CPU's
  * sslm_prefix_save/sslm_prefix_restore format (superslm/sslm_abi_functions.inc), written with
  * backend 1 and the producing adapter's PCI vendor and device ids.
+ * Exported, and unreleased until 1.16.0.
  * ============================================================================
  *
  * sslm_gpu_prefix_save writes the frozen `prefix` (its rows [0, L) gathered from the pool's host
