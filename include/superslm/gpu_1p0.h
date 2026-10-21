@@ -961,14 +961,15 @@ SslmGpuStatus sslm_gpu_prefix_set_schema(SslmGpuContext* ctx, SslmGpuPrefixHandl
 /* Prefills `count` tokens into the prefix through the prompt (`kind` 0, SSLM_SPAN_PROMPT's value)
  * or schema-content (`kind` 1, SSLM_SPAN_SCHEMA_CONTENT's value) prefill bridge, adapter unbound:
  * prefixes are base-only. `*consumed` counts the admitted tokens, as the bridges' partial
- * consumption. After freeze: SSLM_GPU_PREFIX_REJECTED. A call that lands tokens and then returns
- * SSLM_GPU_KV_BUDGET_EXCEEDED, or (kind 1) lands tokens and then returns SSLM_SEQUENCE_REJECTED because the
- * schema's DFA rejected the next one, also refreshes the prefix's prefill snapshot (the one an adopter reads
- * through sslm_gpu_seq_read_prefill_final_hidden), as a successful prefill does, so a saved and
- * restored copy gives its adopters the same snapshot. */
+ * consumption. After freeze: SSLM_GPU_PREFIX_REJECTED. */
 SslmGpuStatus sslm_gpu_prefix_prefill(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix,
                                       const int32_t* tokens, int32_t count, int32_t kind,
                                       uint32_t dispatch_budget, int32_t* consumed) noexcept;
+/* Freezes the prefix (later calls: SSLM_OK, no effect). The first freeze also sets what a restore of its save
+ * derives from its length L, whatever the prefill calls before it returned: the prefill snapshot an adopter reads
+ * through sslm_gpu_seq_read_prefill_final_hidden is the residual, present iff L > 0 (and the prefix is ready),
+ * and the bind permission a begin_from child inherits is granted iff L == 0. So the original and a saved and
+ * restored copy give their adopters and children the same snapshot and the same permission. */
 SslmGpuStatus sslm_gpu_prefix_freeze(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix) noexcept;
 SslmGpuStatus sslm_gpu_prefix_release(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix) noexcept;
 
