@@ -52,6 +52,10 @@ foreach(t superslm_precache_unpinned superslm_precache_unpinned_getfixture_recei
     endif()
 endforeach()
 target_compile_definitions(superslm_precache_unpinned PRIVATE PKV_FIXTURE_B_FROM_RULE=1)
+# Plan 9.9 [E5] (rev 1.18.1): 1.13.1's sequence saves on the release tree, at pkv_def's production rule B (the
+# capture's). Only in the unpinned target: the receipt target's pinned GetFixture would restore at B = 16.
+target_sources(superslm_precache_unpinned PRIVATE ${PC_DIR}/unpinned/e5_unpinned.cpp)
+target_compile_definitions(superslm_precache_unpinned PRIVATE PC_REFERENCE_DIR="${PC_DIR}/reference")
 target_compile_definitions(superslm_precache_unpinned_getfixture_receipt PRIVATE
     PKV_PIN_GENERATED_FIXTURES=1 PC_UNPINNED_RECEIPT_VIA_GETFIXTURE=1)
 find_package(Python3 COMPONENTS Interpreter)
@@ -70,6 +74,12 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/test_check_spx1_oracle.py)
     add_test(NAME superslm_precache_status_mirrors
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/check_prefix_status_mirrors.py)
+    # Plan 7.17 (E5): every docs/api.md status ordinal is that status's ordinal; the new status at 30.
+    add_test(NAME superslm_precache_api_ordinals
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/check_api_ordinals.py)
+    # Plan 7.22 (M1, E5, the 1.15.0 release): the GPU twins labelled unreleased until 1.16.0.
+    add_test(NAME superslm_precache_gpu_prefix_labels
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ci/check_gpu_prefix_labels.py)
     add_test(NAME superslm_precache_reference_header_identity
         COMMAND $<TARGET_FILE:superslm_precache_reference_header>)
     add_test(NAME superslm_precache_compiler_job_identity

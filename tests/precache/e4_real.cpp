@@ -9,6 +9,82 @@ namespace {
 using namespace pc;
 namespace fs=std::filesystem;
 
+// ---- the rule B for the real cells (plan rev 1.13-1.18.3, §7 10.1 "Geometry", §9 E4) ----------------------------
+// The real cells run at the rule B, unpinned: 10.x is the feature oracle and must run the page size a shipped game
+// runs. The rule is written here (S30 (a); paged-KV §3.1), never read back from the engine as its own oracle:
+// S = 4 KiB when D <= 64 and cap <= 4,096, else 8 KiB; B is the smallest power of two >= 16 with B * D * elem >= S,
+// clamped to the cap. The real artifacts' K/V is int8 (elem 1).
+int64_t E4RuleB(uint64_t D,uint64_t cap,uint64_t elem) {
+    const uint64_t S=(D<=64 && cap<=4096) ? 4096 : 8192;
+    uint64_t B=16;
+    while(B*D*elem<S) B*=2;
+    return static_cast<int64_t>(B>cap ? cap : B);
+}
+// The plan's figures (§7 10.1): 128 at 0.5B, 64 at 1.5B. A third operand beside the rule and the engine.
+constexpr int64_t kPlanB0p5=128;
+constexpr int64_t kPlanB1p5=64;
+
+// §7 10.1 (rev 1.14 S3; rev 1.15 R1): this binary is superslm_precache_e1, compiled with PKV_PIN_GENERATED_FIXTURES
+// and without PKV_FIXTURE_B_FROM_RULE, so Fixture::B() reads 16 unless `pinned` is set. Each real fixture is built by
+// hand, so its test-side `pinned` is set to the test-written rule B (Fixture::B() only; no engine call), and before
+// any other check the engine's B, the helpers' B and the plan's figure must equal the rule, and the page bytes must
+// be B * bytes_per_token (the re-derived geometry assertion; at 3b6631f it required 16 * bytes_per_token).
+bool RequireRealRuleB(Fixture& fx,int64_t plan_b,const char* cell) {
+    const int64_t rule=E4RuleB(fx.geo.head_dim,static_cast<uint64_t>(fx.geo.context_cap),1);
+    fx.pinned=rule;
+    const int64_t engine=sslm_kv_page_positions(fx.model);
+    PKV_CHECK_MSG(engine==rule,"%s: sslm_kv_page_positions reads %lld; the test-written rule B is %lld",cell,
+                  static_cast<long long>(engine),static_cast<long long>(rule));
+    PKV_CHECK_MSG(fx.B()==rule,"%s: the test-side helpers read B = %lld, not the rule's %lld",cell,
+                  static_cast<long long>(fx.B()),static_cast<long long>(rule));
+    PKV_CHECK_MSG(rule==plan_b,"%s: the rule gives B = %lld; the plan's figure is %lld",cell,
+                  static_cast<long long>(rule),static_cast<long long>(plan_b));
+    const bool geometry=sslm_kv_block_size(fx.model)==size_t(fx.geo.context_cap)*fx.BytesPerToken() &&
+                        sslm_kv_page_size(fx.model)==size_t(rule)*fx.BytesPerToken();
+    PKV_CHECK_MSG(geometry,"%s: real artifact geometry differs from the rule: page %zu bytes, expected B * "
+                  "bytes_per_token = %zu",cell,sslm_kv_page_size(fx.model),size_t(rule)*fx.BytesPerToken());
+    std::printf("%s: rule B = %lld (engine %lld, helpers %lld), cap %lld, cap_pages %lld, page %zu bytes\n",cell,
+                static_cast<long long>(rule),static_cast<long long>(engine),static_cast<long long>(fx.B()),
+                static_cast<long long>(fx.geo.context_cap),static_cast<long long>(fx.CapPages()),
+                sslm_kv_page_size(fx.model));
+    return engine==rule && fx.B()==rule && rule==plan_b && geometry;
+}
+
+// 10.2's draw (rev 1.14 S2, rev 1.16 L3): a rebuildable state for the two-sided fill probe -- a fresh page pool of
+// `pages`, the world restored into it from its blob, then (when `child` is set) the persona child restored against
+// that world as its hint. Handles are released before the pool is destroyed.
+struct WorldChildState : ProbeState {
+    std::unique_ptr<PagePool> pool;
+    Handles h;
+    sslm_kv_pool* Pool() override { return &pool->pool; }
+    ~WorldChildState() override { h.ReleaseAll(); }
+};
+
+bool ChildDrawReads(const Fixture& fx,const std::vector<uint8_t>& world_blob,const std::vector<uint8_t>& child_blob,
+                    int64_t world_pages,int64_t drawn,const char* what) {
+    const uint32_t N=uint32_t(world_pages+drawn+4);  // both readings stay >= 2 above the probe's floor
+    auto build=[&](bool child) {
+        return [&fx,&world_blob,&child_blob,N,child]() -> std::unique_ptr<ProbeState> {
+            auto s=std::make_unique<WorldChildState>();
+            s->pool=std::make_unique<PagePool>(fx.model,N);
+            Status(s->pool->status,SSLM_OK,"10.2 fill-probe page pool");
+            if(s->pool->status!=SSLM_OK) return s;
+            sslm_prefix w=nullptr;
+            if(!Restored(fx,&s->pool->pool,world_blob,nullptr,s->h,&w)) return s;
+            if(child) {
+                sslm_prefix c=nullptr;
+                Restored(fx,&s->pool->pool,child_blob,w,s->h,&c);
+            }
+            return s;
+        };
+    };
+    const bool before=ProbeExactlyFree(fx,build(false),int64_t(N)-world_pages);
+    const bool after=ProbeExactlyFree(fx,build(true),int64_t(N)-world_pages-drawn);
+    PKV_CHECK_MSG(before && after,"%s: the child's restore does not draw exactly %lld pages (fill probe: before %d, "
+                  "after %d)",what,static_cast<long long>(drawn),before,after);
+    return before && after;
+}
+
 std::vector<int32_t> Ids(const fs::path& path) {
     std::ifstream f(path);
     PKV_CHECK_MSG(bool(f),"real prompt IDs missing: %s",path.string().c_str());
@@ -57,9 +133,8 @@ void Real101() {
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
     fx.geo={24,2,64,32768}; fx.vocab=151936;
-    PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(fx.geo.context_cap)*fx.BytesPerToken() &&
-                  sslm_kv_page_size(fx.model)==size_t(16)*fx.BytesPerToken(),
-                  "10.1 real 0.5B artifact geometry differs from receipt");
+    if(!RequireRealRuleB(fx,kPlanB0p5,"10.1 real 0.5B")) return;
+    // Pools at the rule B (rev 1.14 S2): CapPages() and R() read fx.B(), the rule.
     // One flat prefix is live at a time. The legacy adopter reserves all
     // cap/B pages before adoption; add the largest prompt's R(L) and R(80).
     int64_t largest_prefix=0;
@@ -178,9 +253,7 @@ void Timing103() {
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
     fx.geo={24,2,64,32768}; fx.vocab=151936;
-    PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(fx.geo.context_cap)*fx.BytesPerToken() &&
-                  sslm_kv_page_size(fx.model)==size_t(16)*fx.BytesPerToken(),
-                  "10.3 real 0.5B artifact geometry differs from receipt");
+    if(!RequireRealRuleB(fx,kPlanB0p5,"10.3 real 0.5B")) return;
     PagePool pool(fx.model,300);
     const auto receipt_path=Env("SUPERSLM_PRECACHE_TIMING_RECEIPT");
     const auto instrument_path=Env("SUPERSLM_PRECACHE_TIMING_INSTRUMENT");
@@ -198,7 +271,10 @@ void Timing103() {
         field("must_reject")=="PASS" && field("threshold")=="1000" &&
         field("box_id")==box && field("threads")==threads &&
         field("threads")=="1" &&
-        field("geometry")=="0p5:24x2x64x32768;1p5:28x2x128x32768;B=16" &&
+        // Rev 1.14-1.18.x: the instrument is commissioned for the rule-B page sizes 10.3 times (768 KiB at 0.5B,
+        // 896 KiB at 1.5B), so the receipt names each geometry with its rule B, computed here, not B = 16.
+        field("geometry")==std::string("0p5:24x2x64x32768:B=")+std::to_string(E4RuleB(64,32768,1))+
+                           ";1p5:28x2x128x32768:B="+std::to_string(E4RuleB(128,32768,1)) &&
         field("model_sha256")==Sha(model.bytes.p,model.size) &&
         field("prompt_manifest_sha256")==ShaFile(prompt_manifest) &&
         field("instrument_sha256")==ShaFile(instrument_path) &&
@@ -251,8 +327,8 @@ void Timing103() {
         for(double value:logs) squared+=(value-mean)*(value-mean);
         const double half=kStudent95*std::sqrt(squared/(kPairs-1)/kPairs);
         const double lower=std::exp(mean-half),upper=std::exp(mean+half);
-        std::printf("10.3 receipt=%s box=%s threads=%s geometry=0p5 B=16 %s pairs=%d bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f ratio95=[%.1f,%.1f]\n",
-                    receipt_sha.c_str(),box.c_str(),threads.c_str(),name,kPairs,bytes,
+        std::printf("10.3 receipt=%s box=%s threads=%s geometry=0p5 B=%lld %s pairs=%d bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f ratio95=[%.1f,%.1f]\n",
+                    receipt_sha.c_str(),box.c_str(),threads.c_str(),static_cast<long long>(fx.B()),name,kPairs,bytes,
                     prefill_sum/kPairs,restore_sum/kPairs,lower,upper);
         PKV_CHECK_MSG(lower>=1000,
                       "10.3 %s threshold unresolved or missed: 95%% ratio interval [%.1f,%.1f]",
@@ -266,9 +342,7 @@ void Timing103() {
     Fixture wf;
     wf.model=worst.model; worst.model=nullptr;
     wf.geo={28,2,128,32768}; wf.vocab=151936;
-    PKV_CHECK_MSG(sslm_kv_block_size(wf.model)==size_t(wf.geo.context_cap)*wf.BytesPerToken() &&
-                  sslm_kv_page_size(wf.model)==size_t(16)*wf.BytesPerToken(),
-                  "10.3 real 1.5B artifact geometry differs from receipt");
+    if(!RequireRealRuleB(wf,kPlanB1p5,"10.3 real 1.5B")) return;
     PagePool worst_pool(wf.model,uint32_t(wf.CapPages()+4));
     Status(worst_pool.status,SSLM_OK,"10.3 cap-length pool");
     if(worst_pool.status!=SSLM_OK) return;
@@ -301,8 +375,8 @@ void Timing103() {
     cap_restore_ms/=3.0;
     const double cap_prefill_ms=std::chrono::duration<double,std::milli>(cap_prefill_end-cap_start).count();
     const double mib=double(cap_blob.size())/(1024.0*1024.0);
-    std::printf("10.3 receipt=%s box=%s threads=%s worst cap=32768 geometry=1p5 28x2x128 B=16 bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f MiB=%.3f MiB/s=%.1f\n",
-                receipt_sha.c_str(),box.c_str(),threads.c_str(),cap_blob.size(),
+    std::printf("10.3 receipt=%s box=%s threads=%s worst cap=32768 geometry=1p5 28x2x128 B=%lld bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f MiB=%.3f MiB/s=%.1f\n",
+                receipt_sha.c_str(),box.c_str(),threads.c_str(),static_cast<long long>(wf.B()),cap_blob.size(),
                 cap_prefill_ms,cap_restore_ms,mib,1000.0*mib/cap_restore_ms);
 }
 PKV_CELL("10.3/E4", "E1", Timing103);
@@ -319,9 +393,7 @@ void Real102() {
     Fixture fx;
     fx.model=model.model; model.model=nullptr;
     fx.geo={24,2,64,32768}; fx.vocab=151936;
-    PKV_CHECK_MSG(sslm_kv_block_size(fx.model)==size_t(fx.geo.context_cap)*fx.BytesPerToken() &&
-                  sslm_kv_page_size(fx.model)==size_t(16)*fx.BytesPerToken(),
-                  "10.2 real 0.5B artifact geometry differs from receipt");
+    if(!RequireRealRuleB(fx,kPlanB0p5,"10.2 real 0.5B")) return;
     const auto world_ids=Ids(fs::path(prompts)/"world.ids");
     if(world_ids.empty()) return;
     // World and all ten persona children remain live through the loop. A
@@ -342,6 +414,7 @@ void Real102() {
     if(phase!="capture" && phase!="restore") return;
     int graded=0;
     sslm_prefix world=nullptr;
+    std::vector<uint8_t> world_blob;
     if(phase=="capture") {
         Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,int32_t(world_ids.size()),&world),
                SSLM_OK,"10.2 world begin");
@@ -355,11 +428,16 @@ void Real102() {
         std::ofstream file(fs::path(blob_dir)/"world.spx1",std::ios::binary);
         file.write(reinterpret_cast<const char*>(b.data()),std::streamsize(b.size()));
     } else {
-        std::vector<uint8_t> b;
-        PKV_CHECK_MSG(ReadAll((fs::path(blob_dir)/"world.spx1").string(),&b),
+        PKV_CHECK_MSG(ReadAll((fs::path(blob_dir)/"world.spx1").string(),&world_blob),
                       "10.2 world SPX1 missing after process restart");
-        if(b.empty() || !Restored(fx,&pool.pool,b,nullptr,h,&world)) return;
+        if(world_blob.empty() || !Restored(fx,&pool.pool,world_blob,nullptr,h,&world)) return;
     }
+    // Rev 1.16 (strike L3): s and the draw come from the files the cell reads and the test-written rule B, never from
+    // literals. At the box's 1,000-token world and 200-token personas they are 7 and 3 (§3.5 at B = 128).
+    const int64_t B=fx.B();
+    const int64_t world_len=int64_t(world_ids.size());
+    const int64_t s=world_len/B;
+    const int64_t world_pages=CeilDiv(world_len,B);
     for(int i=0;i<10;++i) {
         char name[16],persona[16];
         std::snprintf(name,sizeof(name),"nested%02d",i);
@@ -385,7 +463,18 @@ void Real102() {
             if(b.empty()) return;
             uint32_t shared=0;
             if(!Restored(fx,&pool.pool,b,world,h,&child,&shared)) return;
-            PKV_CHECK_EQ(shared,uint32_t(world_ids.size()/16));
+            // :388 re-derived (rev 1.14 S2): s = floor(|world.ids| / B) at the rule B, and the draw
+            // ceil((|world.ids| + |personaNN.ids|) / B) - s read by the two-sided fill probe around the child's
+            // restore (§8's reading rule; a rebuildable state from the same two blobs).
+            PKV_CHECK_MSG(int64_t(shared)==s,"10.2 %s shares %u pages; floor(%lld / %lld) = %lld",name,shared,
+                          static_cast<long long>(world_len),static_cast<long long>(B),static_cast<long long>(s));
+            const int64_t drawn=CeilDiv(world_len+int64_t(suffix.size()),B)-s;
+            std::printf("10.2 %s: B = %lld, s = %lld, draw = %lld (world %lld, persona %zu)\n",name,
+                        static_cast<long long>(B),static_cast<long long>(s),static_cast<long long>(drawn),
+                        static_cast<long long>(world_len),suffix.size());
+            char what[64];
+            std::snprintf(what,sizeof what,"10.2 %s",name);
+            ChildDrawReads(fx,world_blob,b,world_pages,drawn,what);
             const auto input=fs::path(prompts)/(std::string(name)+".ids");
             for(int a=0;a<5;++a) {
                 const bool budget=(a%2)==0;
@@ -451,4 +540,71 @@ void Parallel66() {
     Status(sslm_workspace_destroy(ws),SSLM_OK,"6.6 workspace destroy");
 }
 PKV_CELL("6.6/E4", "E1", Parallel66);
+
+// 6.6 [E4], rule-B leg (plan rev 1.14, audit S3): the leg above maps pkv_def through GetFixture, which pins it to 16,
+// so it is the pinned leg. This one runs on the real 0.5B artifact at its rule B (128), mapped on its own and asserting
+// its B before anything else: a prefix of L = 300 >= 2B (three pages, the last partial) is built by prefill in a
+// rule-B page pool and saved; two identical restores are made from the blob; 32 tokens are decoded multithreaded from
+// one and serially from the other, and must be equal. Mutant: a parallel-path K/V read that addresses pages at a B
+// other than the pool's (16, as every pinned leg runs) -> red here while the pinned leg stays green.
+// Box input: SUPERSLM_PRECACHE_REAL_MODEL (the real 0.5B artifact). Without it the leg does not run, as 10.1 does not.
+void Parallel66RuleB() {
+    const auto model_path=Env("SUPERSLM_PRECACHE_REAL_MODEL");
+    if(model_path.empty()) return;
+    ModelFile model(model_path);
+    Status(model.status,SSLM_OK,"6.6 rule-B real model map");
+    if(model.status!=SSLM_OK) return;
+    Fixture fx;
+    fx.model=model.model; model.model=nullptr;
+    fx.geo={24,2,64,32768}; fx.vocab=151936;
+    if(!RequireRealRuleB(fx,kPlanB0p5,"6.6 rule-B")) return;
+    const int64_t B=fx.B();
+    constexpr int kL=300;
+    PKV_CHECK_MSG(kL>=2*B && kL%B!=0 && CeilDiv(int64_t(kL),B)==3,
+                  "6.6 rule-B: L = %d is not three pages with a partial last page at B = %lld",kL,
+                  static_cast<long long>(B));
+    // The prefix at its peak R(300), its frozen pages, two restores, and two budget adopters of 80: every draw fits.
+    Scene sc;
+    PagePool& pool=sc.AddPool(fx.model,uint32_t(3*fx.R(kL)+2*fx.R(kL+80)+8));
+    Status(pool.status,SSLM_OK,"6.6 rule-B page pool");
+    if(pool.status!=SSLM_OK) return;
+    sslm_prefix original=Root(fx,&pool.pool,sc.h,kL);
+    if(!original) return;
+    const auto b=Save(original);
+    if(!RequireBlob(b,"6.6 rule-B") || !Header(b,kL,fx)) return;
+    sslm_prefix for_serial=nullptr,for_parallel=nullptr;
+    if(!Restored(fx,&pool.pool,b,nullptr,sc.h,&for_serial)) return;
+    if(!Restored(fx,&pool.pool,b,nullptr,sc.h,&for_parallel)) return;
+    PKV_CHECK_MSG(Save(for_serial)==b && Save(for_parallel)==b,"6.6 rule-B: the two restores are not identical");
+    sslm_seq serial=BudgetSeq(fx,&pool.pool,80,sc.h);
+    sslm_seq parallel=BudgetSeq(fx,&pool.pool,80,sc.h);
+    if(!serial || !parallel) return;
+    Status(sslm_seq_adopt_prefix(serial,for_serial),SSLM_OK,"6.6 rule-B serial adopt");
+    Status(sslm_seq_adopt_prefix(parallel,for_parallel),SSLM_OK,"6.6 rule-B parallel adopt");
+    const sslm_config cfg{1,64,int32_t(fx.geo.layers),0};
+    AlignedBuf memory(sslm_workspace_size(fx.model,&cfg));
+    sslm_workspace ws=nullptr;
+    Status(sslm_workspace_create(fx.model,&cfg,memory.p,memory.n,&ws),SSLM_OK,"6.6 rule-B workspace create");
+    if(!ws) return;
+    HookCounts counts;
+    const sslm_parallel_for hook{Hook,&counts,4,SSLM_PARALLEL_FOR_MATVEC};
+    Status(sslm_workspace_set_parallel_for(ws,&hook),SSLM_OK,"6.6 rule-B hook install");
+    sslm_decode_params p{};
+    p.layer_budget=int32_t(fx.geo.layers);
+    int equal=0;
+    for(int i=0;i<32;++i) {
+        sslm_seq a[1]={serial},c[1]={parallel};
+        int32_t ta=-1,tc=-1;
+        Status(sslm_decode_step(fx.model,a,1,&p,nullptr,&ta),SSLM_OK,"6.6 rule-B serial decode");
+        Status(sslm_decode_step(fx.model,c,1,&p,ws,&tc),SSLM_OK,"6.6 rule-B parallel decode");
+        PKV_CHECK_MSG(ta>=0 && ta==tc,"6.6 rule-B: restored parallel token differs at %d (%d vs %d)",i,ta,tc);
+        if(ta>=0 && ta==tc) ++equal;
+    }
+    PKV_CHECK_EQ(equal,32);
+    PKV_CHECK_MSG(counts.calls>0 && counts.tasks>0,
+                  "6.6 rule-B installed parallel hook never ran (calls=%d, tasks=%d)",
+                  int(counts.calls),int(counts.tasks));
+    Status(sslm_workspace_destroy(ws),SSLM_OK,"6.6 rule-B workspace destroy");
+}
+PKV_CELL("6.6/E4:rule-b", "E4", Parallel66RuleB);
 }
