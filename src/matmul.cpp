@@ -99,6 +99,10 @@
 // function alignment switch; a section of its own is the control it offers. Other compilers align loops themselves.
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma code_seg(".sslmgem")
+// The section's first 16 bytes: puts DotRowAvx2 at 16 mod 64 and the DotRow loop at 0 mod 64, the placement every fast
+// build had (results/2026-10-21-prefill7-bisect/, results/2026-10-21-msvc-pin/). Kept by /INCLUDE, never called.
+extern "C" __declspec(noinline) void superslm_gemm_section_head() {}
+#pragma comment(linker, "/INCLUDE:superslm_gemm_section_head")
 #endif
 
 namespace superslm {
