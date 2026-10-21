@@ -5867,7 +5867,7 @@ SslmGpuStatus sslm_gpu_seq_restore_into_poolImpl(SslmGpuContext* ctx, SslmGpuMod
 	return SSLM_OK;
 }
 
-// Precached prefixes (1.16.0, unreleased on this branch; plan §4): the GPU twin of sslm_prefix_save / sslm_prefix_restore over the
+// Precached prefixes (unreleased until 1.16.0; plan §4): the GPU twin of sslm_prefix_save / sslm_prefix_restore over the
 // same 'SPX1' layout (§3.2): a 184-byte header, the residual, then rows [0, L) in canonical order
 // [layer][K|V][kv_head][pos < L][d]. backend = 1 and the producer adapter's VendorId/DeviceId at 20/24. The
 // bytes and the reader's check order are src/spx1_format's, the same writer and reader the CPU verbs use.
