@@ -1273,9 +1273,10 @@ that never calls the verb.
   the check there: the verified rows are kept and the call returns `SSLM_OK`.
 - **Decode parameters.** As for canonical mode; pass `decode_step` the same
   ones. Under damped parameters the anti-LM state is created or re-keyed only
-  when the pass has two or more rows, installed once the first row has run,
-  and fed each confirmed token only, so after the next `decode_step` the
-  history equals a run without the verb.
+  when the pass has two or more rows, installed only once the check's first
+  finish has returned a token (a failed first finish leaves the old state and
+  order, as a failed `decode_step` does), and fed each confirmed token only,
+  so after the next `decode_step` the history equals a run without the verb.
 - **Threading.** Under the one-token split (see above), the call runs as
   one-token passes with the check between them, so no rejected row is
   computed; each confirmed token then costs about what a decode step costs.

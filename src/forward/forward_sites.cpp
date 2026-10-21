@@ -3004,6 +3004,10 @@ inline void ReadRowSaturationCounters(const uint64_t* kv, const uint64_t* kv_lan
 	out[4] = rope_k ? *rope_k : 0;
 }
 
+// Schema fast-decode J1-X (MSVC one-thread A/B, 2026-10-21): the per-row attribution is a compile-time
+// specialization. kRowCounts = false is the pre-J1-X loop exactly (no per-token snapshot or test); only the
+// exact jump-forward's pass, which passes a per-row output, instantiates kRowCounts = true.
+template <bool kRowCounts>
 static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
                                             size_t chunk_tokens, const LayerWeights* layers,
                                             uint32_t num_hidden_layers, size_t hidden_size,
@@ -3158,8 +3162,8 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 			// Schema fast-decode plan rev 1.3.3 §5.10.4: every saturation count this pass makes is made
 			// in this token's stage (the K/V landing, QK-norm and RoPE sites below), so its row's share
 			// is the counters' movement across that stage.
-			uint64_t row_before[kRowSaturationCounters] = {};
-			if (out_row_saturation_counts) {
+			[[maybe_unused]] uint64_t row_before[kRowCounts ? kRowSaturationCounters : 1];
+			if constexpr (kRowCounts) {
 				ReadRowSaturationCounters(kv_saturation_count, out_kv_landing_saturation_count,
 				                          out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
 				                          out_rope_k_saturation_count, row_before);
@@ -3227,7 +3231,7 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 					for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
 				}
 			}
-			if (out_row_saturation_counts) {
+			if constexpr (kRowCounts) {
 				uint64_t row_after[kRowSaturationCounters] = {};
 				ReadRowSaturationCounters(kv_saturation_count, out_kv_landing_saturation_count,
 				                          out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
@@ -3437,7 +3441,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             uint64_t* out_k_channel_landing_saturation_count,
                                             uint64_t* out_rope_q_saturation_count,
                                             uint64_t* out_rope_k_saturation_count) {
-	return RunLayerLoopChunkBatchedImpl(
+	return RunLayerLoopChunkBatchedImpl<false>(
 	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
 	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
 	    rope_tables, OnePageView(workspace, workspace_size, context_cap), option_g_fused_k_landing,
@@ -3466,7 +3470,7 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             uint64_t* out_rope_q_saturation_count,
                                             uint64_t* out_rope_k_saturation_count,
                                             const GemmThreading& threading) {
-	return RunLayerLoopChunkBatchedImpl(
+	return RunLayerLoopChunkBatchedImpl<false>(
 	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
 	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
 	    rope_tables, OnePageView(workspace, workspace_size, context_cap), option_g_fused_k_landing,
@@ -3491,12 +3495,20 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                            uint64_t* out_rope_q_saturation_count,
                                            uint64_t* out_rope_k_saturation_count, const GemmThreading& threading,
                                            uint64_t* out_row_saturation_counts) {
-	return RunLayerLoopChunkBatchedImpl(
+	if (out_row_saturation_counts) {
+		return RunLayerLoopChunkBatchedImpl<true>(
+		    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
+		    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
+		    rope_tables, view, option_g_fused_k_landing, kv_saturation_count, site_prefix, trace_hook_state,
+		    q_width, out_kv_landing_saturation_count, out_k_channel_landing_saturation_count,
+		    out_rope_q_saturation_count, out_rope_k_saturation_count, threading, out_row_saturation_counts);
+	}
+	return RunLayerLoopChunkBatchedImpl<false>(
 	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
 	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
 	    rope_tables, view, option_g_fused_k_landing, kv_saturation_count, site_prefix, trace_hook_state,
 	    q_width, out_kv_landing_saturation_count, out_k_channel_landing_saturation_count,
-	    out_rope_q_saturation_count, out_rope_k_saturation_count, threading, out_row_saturation_counts);
+	    out_rope_q_saturation_count, out_rope_k_saturation_count, threading, nullptr);
 }
 
 // Master plan §6.4 steps 14-15's real two-step composition (T-1389; built

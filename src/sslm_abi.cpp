@@ -3972,8 +3972,9 @@ FinishOut FinishRow(const sslm_model_s* model, const sslm_seq_s* seq, const int8
 		// Schema fast-decode plan §5.8: the create-or-re-key block, shared with the J1 verb. Plan
 		// rev 1.3.3 §4.5: prepared here, installed at the decode step's commit, so a finish that
 		// fails leaves the live state (and its order) as the call found it. The scorer reads the
-		// state the commit will install.
-		{
+		// state the commit will install. Plan rev 1.3.4 §5.10.7: a caller that already holds a prepared
+		// state (the exact check at row 0, before it installs) passes it in `*fresh`, and it is scored as is.
+		if (!*fresh) {
 			const sslm_status ast = PrepareAntiLm(seq, params->anti_lm_max_order, /*from_verb=*/false, fresh);
 			if (ast != SSLM_OK) {
 				out.st = ast;
@@ -4908,16 +4909,23 @@ sslm_status RunExactPasses(const sslm_model_s* model, superslm::SequenceLayerSta
 
 	// Row r's check: the decode step's finish at row r (its final codes and scale, the walk state after
 	// its token), against d_{r+1}. False on a mismatch or a failure (a status, or std::bad_alloc).
+	// Plan rev 1.3.4 §5.10.7: row 0's finish scores against the prepared anti-LM state without installing
+	// it, and the state is installed only once that finish has returned a token (matched or not; a dead
+	// end is a token), which is where off's decode_step commits its create or re-key. A row-0 finish that
+	// fails installs nothing: the prepared state is dropped with `x`, and the sequence keeps its old state
+	// and order, as off's failed decode_step does (§4.5). Rows r >= 1 score against the installed state.
 	auto check_row = [&](int32_t r) -> bool {
 		AntiLmPtr unused = NoAntiLm();
+		AntiLmPtr* const scored = r == 0 ? &x->fresh : &unused;
 		FinishOut fo;
 		try {
 			fo = FinishRow(model, seq, embed_codes + static_cast<size_t>(r) * H, hidden_scales[r], x->walk_after[r],
-			               x->params, fs, ws, /*check=*/true, &unused);
+			               x->params, fs, ws, /*check=*/true, scored);
 		} catch (const std::bad_alloc&) {
 			return false;
 		}
 		if (fo.st != SSLM_OK) return false;
+		if (r == 0 && x->damped) InstallAntiLm(seq, std::move(x->fresh), x->params->anti_lm_max_order);
 		if (verify == 1) return true;   // S-VERIFY: every check row confirms
 		if (verify == 2) return false;  // S-VERIFY: none does
 		return fo.token == x->tokens[r + 1];
@@ -4934,9 +4942,6 @@ sslm_status RunExactPasses(const sslm_model_s* model, superslm::SequenceLayerSta
 		}
 		superslm::AntiLmApplyUpdate(seq->damped_greedy_antilm, &update);
 		return true;
-	};
-	auto install = [&]() {
-		if (x->damped) InstallAntiLm(seq, std::move(x->fresh), x->params->anti_lm_max_order);
 	};
 
 	const superslm::GemmThreading threading = MatvecThreading(ws);
@@ -4965,11 +4970,7 @@ sslm_status RunExactPasses(const sslm_model_s* model, superslm::SequenceLayerSta
 				break;                  // rows 0 .. r - 1 are kept (§5.10.3)
 			}
 			SfdApplySatRow(state, r, 1, row_counts.data() + static_cast<size_t>(r) * 5);
-			if (r == 0) {
-				install();
-			} else if (!feed(x->tokens[r])) {
-				break;
-			}
+			if (r >= 1 && !feed(x->tokens[r])) break;
 			jj = r;
 			if (r == h - 1 || !check_row(r)) break;
 		}
@@ -4985,7 +4986,6 @@ sslm_status RunExactPasses(const sslm_model_s* model, superslm::SequenceLayerSta
 		    &state.rope_k_saturation_count, threading, row_counts.data());
 		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
 		SfdApplySatRow(state, 0, h, row_counts.data());
-		install();
 		for (int32_t r = 0; r + 1 < h; ++r) {
 			if (!check_row(r) || !feed(x->tokens[r + 1])) break;
 			jj = r + 1;
