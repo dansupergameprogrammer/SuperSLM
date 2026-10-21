@@ -1,5 +1,5 @@
-// Precached-prefixes plan cell 8.16 [F2] (rev 1.18.1, audit G5 (b); §4 item 2; rev 1.18.4, the red suite's
-// reading 15): a restored GPU prefix's derived state, against its prefill twin. SPX1 carries no ready flag, no
+// Precached-prefixes plan cell 8.16 [F2] (the precache plan's GPU restore rows: audit G5 (b); §4 item 2; the red
+// suite's reading 15): a restored GPU prefix's derived state, against its prefill twin. SPX1 carries no ready flag, no
 // snapshot flag and no bind permission, so restore derives them from L: ready iff L > 0, the prefill snapshot
 // valid iff L > 0, the bind permission iff L = 0. On GPU prefixes restored at L = 0 and at L > 0, and their
 // prefill twins:
