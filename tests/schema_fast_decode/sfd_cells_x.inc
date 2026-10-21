@@ -734,13 +734,27 @@ void Cell_X_6_3() {
 		const std::vector<size_t> ps = XForcedPositions(f, a.schema, off, size_t(a.budget - 1));
 		CHECK_MSG(!ps.empty(), "[6.X3 %s] no position with a forced run of %d tokens", a.name, a.budget - 1);
 		if (ps.empty()) continue;
-		const size_t p = ps[0];
 		const int32_t r = 2;  // wrong-at-2: j = 2, rows 3.. rejected
+		// The position: the first whose wrong-at-2 draft is full (budget - 1 tokens), else the first with a row
+		// r + 1 at all. XWrong finds no wrong token where the state has one legal token, and XMakeDraft then
+		// returns the perfect prefix only, which has no row r + 1 for S-SATROW(r + 1) to name.
+		size_t p = SIZE_MAX;
+		std::vector<int32_t> d;
+		for (int pass = 0; pass < 2 && p == SIZE_MAX; ++pass)
+			for (size_t q : ps) {
+				std::mt19937 gq(1);
+				std::vector<int32_t> dq =
+				    XMakeDraft(f, a.schema, off, q, XDraft::kWrongAt, r, size_t(a.budget - 1), gq, nullptr);
+				if (pass == 0 ? dq.size() == size_t(a.budget - 1) : dq.size() > size_t(r)) {
+					p = q;
+					d = std::move(dq);
+					break;
+				}
+			}
+		CHECK_MSG(p != SIZE_MAX, "[6.X3 %s] no position whose wrong-at-%d draft has a row %d", a.name, r, r + 1);
+		if (p == SIZE_MAX) continue;
 		XRestoreRig rr(f, sp);
 		if (!rr.ok()) continue;
-		std::mt19937 g(1);
-		const std::vector<int32_t> d =
-		    XMakeDraft(f, a.schema, off, p, XDraft::kWrongAt, r, size_t(a.budget - 1), g, nullptr);
 		const sslm_jump_options o = XExact(&d);
 		const bool split = a.hook && a.budget <= int32_t(kQ6cSplitMax);
 		// (i) a rejected row
@@ -1572,7 +1586,8 @@ void Cell_X_4_2() {
 					          v.blob_after == v.blob_before ? "unchanged" : "changed");
 				}
 			}
-			if (c.kind == XDraft::kPerfect && c.budget >= 7) {
+			// Only where the draft can fill the budget: a draft capped at kmax tokens admits at most kmax + 1 rows.
+			if (c.kind == XDraft::kPerfect && c.budget >= 7 && c.kmax >= size_t(c.budget - 1)) {
 				bool reached = false;
 				for (const XVerbRec& v : run.verbs) reached = reached || v.ctx_after - v.ctx_before == c.budget;
 				CHECK_MSG(reached, "[4.X2 %s, hook %d] no call admitted M = %d rows", c.name, hook, c.budget);

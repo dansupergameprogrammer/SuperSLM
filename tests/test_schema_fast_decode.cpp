@@ -3696,8 +3696,8 @@ std::string ReadRepoFile(const char* rel) {
 	return {};
 }
 
-// 9.2 [J1] The ABI inventory and allowlist carry the new verbs, the version is bumped, and the existing
-// ordinals are unchanged.
+// 9.2 [J1] The ABI inventory and allowlist carry the new verbs, the version header and CMake agree on a released
+// version, and the existing ordinals are unchanged.
 void Cell_9_2() {
 	const std::string inc = ReadRepoFile("include/superslm/sslm_abi_functions.inc");
 	const std::string verbs = ReadRepoFile("tests/t2807-api-slot/c_abi_verbs.txt");
@@ -3706,8 +3706,11 @@ void Cell_9_2() {
 		CHECK_MSG(inc.find(std::string(v) + "(") != std::string::npos, "[9.2] sslm_abi_functions.inc does not declare %s", v);
 		CHECK_MSG(verbs.find(std::string("\n") + v + "\n") != std::string::npos, "[9.2] c_abi_verbs.txt does not list %s", v);
 	}
-	// The version is CMakeLists.txt's project() VERSION, read from the file (no build defines it for the
-	// suite, so CMake and build.bat agree). Main is 1.13.1; the plan names no target, only a bump.
+	// The version (conductor ruling): a development build carries the last released version until its release
+	// commit, and the bump is the release commit's check, not this cell's. So 9.2 asserts what
+	// tests/ci/check_version_header.py enforces -- sslm_version.h's MAJOR/MINOR/PATCH equal CMakeLists.txt's
+	// project() VERSION -- and that the value is a released one: CHANGELOG.md carries a dated "## [x.y.z] - "
+	// heading for it.
 	const std::string cml = ReadRepoFile("CMakeLists.txt");
 	const size_t at = cml.find("project(superslm VERSION ");
 	std::string version;
@@ -3715,8 +3718,25 @@ void Cell_9_2() {
 		const size_t b = at + std::strlen("project(superslm VERSION ");
 		version = cml.substr(b, cml.find_first_of(" )", b) - b);
 	}
-	CHECK_MSG(!version.empty() && version != "1.13.1", "[9.2] the project version is still %s",
-	          version.empty() ? "(CMakeLists.txt not found)" : version.c_str());
+	CHECK_MSG(!version.empty(), "[9.2] CMakeLists.txt's project(superslm VERSION ...) was not found");
+	{
+		const std::string hdr = ReadRepoFile("include/superslm/sslm_version.h");
+		std::string from_header;
+		for (const char* part : {"MAJOR", "MINOR", "PATCH"}) {
+			const std::string key = std::string("#define SUPERSLM_VERSION_") + part + " ";
+			const size_t k = hdr.find(key);
+			std::string n;
+			if (k != std::string::npos)
+				for (size_t i = k + key.size(); i < hdr.size() && hdr[i] >= '0' && hdr[i] <= '9'; ++i) n += hdr[i];
+			from_header += (from_header.empty() ? "" : ".") + (n.empty() ? std::string("?") : n);
+		}
+		CHECK_MSG(!hdr.empty() && from_header == version, "[9.2] sslm_version.h says %s, CMakeLists.txt says %s",
+		          hdr.empty() ? "(not found)" : from_header.c_str(), version.c_str());
+		const std::string log = ReadRepoFile("CHANGELOG.md");
+		CHECK_MSG(!version.empty() && log.find("\n## [" + version + "] - ") != std::string::npos,
+		          "[9.2] the version %s is not a released one: CHANGELOG.md has no dated \"## [%s] - \" heading",
+		          version.c_str(), version.c_str());
+	}
 	// No new status (§5.3; rev 1.2.2, audit M-2): the status list's entry count equals the base this line
 	// builds on, and the existing ordinals are unchanged. That base is main's 30 plus the one status the
 	// merged precached-prefixes line appends (SSLM_RESTORE_PRODUCER_MISMATCH, ordinal 30): 31. Schema

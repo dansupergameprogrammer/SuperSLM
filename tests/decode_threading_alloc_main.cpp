@@ -26,10 +26,19 @@ void* operator new(std::size_t size) {
 	throw std::bad_alloc{};
 }
 void* operator new[](std::size_t size) { return operator new(size); }
+// The nothrow forms are replaced too (and counted): left to the runtime they allocate with its own allocator,
+// and the free below then releases memory that malloc never gave out (ASan: alloc-dealloc-mismatch).
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+	++g_new_calls;
+	return std::malloc(size ? size : 1);
+}
+void* operator new[](std::size_t size, const std::nothrow_t& t) noexcept { return operator new(size, t); }
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 void operator delete[](void* p) noexcept { std::free(p); }
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
 
 static int g_checks = 0, g_failures = 0;
 #define CHECK_MSG(cond, ...) \
