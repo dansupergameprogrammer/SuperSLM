@@ -539,8 +539,10 @@ sslm_status TfVerb(const Engine& e, const TfCfg& c, sslm_seq s, int32_t budget, 
 	                             count);
 }
 // Exact mode (J1-X, §5.10) with the decode's own params and the cfg's workspace; `draft` is the host draft.
+// `out`, when given, is the caller's output buffer, sized before the call: a call under an armed allocation
+// window passes one, so the window counts the verb's allocations and not this harness's.
 sslm_status TfExact(const Engine& e, const TfCfg& c, sslm_seq s, int32_t budget, const std::vector<int32_t>& draft,
-                    int32_t order, int32_t* count) {
+                    int32_t order, int32_t* count, std::vector<int32_t>* out = nullptr) {
 	const sslm_decode_params p = TfParams(e, c, order);
 	sslm_jump_options o{};
 	o.struct_size = static_cast<uint32_t>(sizeof(sslm_jump_options));
@@ -548,10 +550,17 @@ sslm_status TfExact(const Engine& e, const TfCfg& c, sslm_seq s, int32_t budget,
 	static const int32_t kNone = -7;
 	o.draft = draft.empty() ? &kNone : draft.data();
 	o.draft_count = static_cast<int32_t>(draft.size());
-	std::vector<int32_t> buf(size_t(budget > 0 ? budget : 1), -7);
+	const size_t cap = size_t(budget > 0 ? budget : 1);
+	std::vector<int32_t> local;
+	if (!out) local.assign(cap, -7);
+	std::vector<int32_t>& buf = out ? *out : local;
+	if (buf.size() < cap) {
+		*count = -1;
+		return SSLM_INVALID_ARGUMENT;
+	}
 	*count = -1;
 	return superslm::test::sfd::JumpWithOptions(e.m, s, budget, c.damped ? &p : nullptr, &o, c.ws ? e.ws : nullptr,
-	                                            buf.data(), budget > 0 ? budget : 1, count);
+	                                            buf.data(), int32_t(cap), count);
 }
 int32_t TfChainHead(const Engine& e, sslm_seq s, int32_t* count) {
 	int32_t id = -1, acc = 0;
@@ -867,7 +876,26 @@ int TfFork(const char* tag, long k, F&& body) {
 
 struct TfTally {
 	long trials = 0, failed = 0, tf3_failed = 0, in_finish = 0, rest_differs = 0;
+	long ref_allocs = -1;  // the never-failed target decode's allocations; -1 when it did not run clean
 };
+
+// The (d) arms' sweep verdict, or "" when it passes. Greedy with a workspace is allocation-free by design (the
+// decode borrows the workspace and has nothing of its own to allocate), so there zero trials is the expected
+// outcome and is asserted: the never-failed reference decode ran clean and made no allocation. Every other cfg
+// must have allocations to fail, and every trial must pass.
+std::string TfDArmVerdict(const TfCfg& c, const TfTally& t) {
+	const bool alloc_free = !c.damped && c.ws;
+	if (alloc_free) {
+		if (t.ref_allocs == 0 && t.trials == 0 && t.failed == 0) return "";
+		if (t.ref_allocs < 0) return "the never-failed reference decode failed, or the arm did not build";
+		return "greedy with a workspace must be allocation-free, but the target decode made " +
+		       std::to_string(t.ref_allocs) + " allocations (" + std::to_string(t.failed) + " of " +
+		       std::to_string(t.trials) + " trials failed)";
+	}
+	if (t.failed == 0 && t.trials > 0) return "";
+	return t.trials ? std::to_string(t.failed) + " of " + std::to_string(t.trials) + " trials"
+	                : std::string("no allocation to fail, or the arm did not build");
+}
 
 // The first allocation of the layer branch's finish. The ready twin's target decode is the same decode
 // minus the embed and the layer pass: its allocations are the shared preamble (a common prefix of the
@@ -898,6 +926,7 @@ TfTally TfSweep(Engine& e, const TfCtx& x, TfArm arm, int32_t order, int32_t pin
 		t.failed = 1;
 		return t;
 	}
+	t.ref_allocs = ref.allocs;
 	long finish_from = 0;
 	if (arm == TfArm::kLayer) {
 		const int fails = g_failures;
@@ -1329,9 +1358,10 @@ int XCallTrial(Engine& e, const TfCtx& x, long k, const std::vector<int32_t>& d)
 	}
 	const XObsA before = XObserveA(e, s, 0, 0);
 	int32_t count = -1;
+	std::vector<int32_t> out(d.size() + 1, -7);  // allocated before the window opens
 	superslm::test::sfd::ArmSatRow(sat_row);
 	Arm(k);
-	const sslm_status st = TfExact(e, x.cfg, s, int32_t(d.size()) + 1, d, 2, &count);
+	const sslm_status st = TfExact(e, x.cfg, s, int32_t(d.size()) + 1, d, 2, &count, &out);
 	g_armed = false;
 	superslm::test::sfd::DisarmSatRow();
 	int32_t j = count;
@@ -1422,11 +1452,10 @@ void RunXAllocCells(Engine& e, TfVerdicts* v, long* trials) {
 		for (TfArm arm : {TfArm::kExact0, TfArm::kExact2}) {
 			const TfTally t = TfSweep(e, x, arm, 2, -1, {}, "TF.1d");
 			*trials += t.trials;
-			std::printf("[TF.1d %s, %s] %ld trials, %ld failed\n", TfArmName(arm), cn.c_str(), t.trials, t.failed);
-			if (t.failed || t.trials == 0)
-				v->Red("TF.1d", std::string(TfArmName(arm)) + ", " + cn + ": " +
-				                    (t.trials ? std::to_string(t.failed) + " of " + std::to_string(t.trials) + " trials"
-				                              : std::string("no allocation to fail, or the arm did not build")));
+			std::printf("[TF.1d %s, %s] %ld trials, %ld failed (reference %ld allocations)\n", TfArmName(arm), cn.c_str(),
+			            t.trials, t.failed, t.ref_allocs);
+			const std::string why = TfDArmVerdict(c, t);
+			if (!why.empty()) v->Red("TF.1d", std::string(TfArmName(arm)) + ", " + cn + ": " + why);
 		}
 		// TF.4 (a) in the (d) arms: the target decode at order 3, a re-key of the order-2 state.
 		if (c.damped)
@@ -1449,11 +1478,10 @@ void RunXAllocCells(Engine& e, TfVerdicts* v, long* trials) {
 			}
 			const TfTally t = TfSweep(e, x, arm, 2, pin, {}, "TF.5");
 			*trials += t.trials;
-			std::printf("[TF.5 %s, %s, pin %d] %ld trials, %ld failed\n", TfArmName(arm), cn.c_str(), pin, t.trials, t.failed);
-			if (t.failed || t.trials == 0)
-				v->Red("TF.5 (d)", std::string(TfArmName(arm)) + ", " + cn + ": " +
-				                       (t.trials ? std::to_string(t.failed) + " of " + std::to_string(t.trials) + " trials"
-				                                 : std::string("no allocation to fail, or the arm did not build")));
+			std::printf("[TF.5 %s, %s, pin %d] %ld trials, %ld failed (reference %ld allocations)\n", TfArmName(arm),
+			            cn.c_str(), pin, t.trials, t.failed, t.ref_allocs);
+			const std::string why = TfDArmVerdict(c, t);
+			if (!why.empty()) v->Red("TF.5 (d)", std::string(TfArmName(arm)) + ", " + cn + ": " + why);
 		}
 	}
 }
@@ -1487,9 +1515,10 @@ void RunX53ii(TfVerdicts* v, long* trials) {
 			sslm_seq s = pc.pool ? TfBuild(e, x, TfArm::kLayer, &pc.pool) : nullptr;
 			if (s) {
 				int32_t ref_count = -1;
+				std::vector<int32_t> out(d.size() + 1, -7);  // allocated before the window opens
 				superslm::test::sfd::ArmSatRow(int32_t(d.size()));
 				Arm(-1);
-				const sslm_status st = TfExact(e, c, s, int32_t(d.size()) + 1, d, 2, &ref_count);
+				const sslm_status st = TfExact(e, c, s, int32_t(d.size()) + 1, d, 2, &ref_count, &out);
 				g_armed = false;
 				superslm::test::sfd::DisarmSatRow();
 				allocs = g_index.load();
