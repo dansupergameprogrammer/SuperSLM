@@ -373,16 +373,35 @@ writes the size it needs to `*out_blob_size` and returns the status the
 - 1.12.0 and earlier refuse `SLM6` on its magic with
   `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`. GPU and CPU blobs are separate
   formats; neither backend restores the other's.
+- `sslm_gpu_prefix_save(ctx, prefix, blob, &size)` (1.16.0, unreleased) writes a frozen
+  prefix as an `SPX1` blob, the CPU's precached-prefix layout with backend 1
+  and the adapter's vendor and device IDs as producer. It reads the pool's
+  host mirror and submits nothing. An unfrozen prefix, or one not at rest
+  after a whole token, is `SSLM_GPU_PREFIX_REJECTED`; a short buffer is
+  `SSLM_OUTPUT_BUFFER_TOO_SMALL` with the size written. Exported, and
+  unreleased until 1.16.0.
+- `sslm_gpu_prefix_restore(ctx, model, pool, blob, size, parent_or_null,
+  &prefix, &shared)` (1.16.0, unreleased) validates the whole blob first (arguments,
+  Busy, size and magic, digest, backend, producer
+  (`SSLM_RESTORE_PRODUCER_MISMATCH`), model (`SSLM_RESTORE_MODEL_MISMATCH`),
+  then kv precision, schema and field domains, each
+  `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`), then draws `ceil(L/B) - s` pages
+  (`SSLM_GPU_KV_POOL_EXHAUSTED`, nothing drawn) and shares the parent's `s`
+  leading pages when it is a frozen prefix of this pool holding exactly the
+  blob's origin with equal rows; otherwise `s = 0`. A blob restores only on
+  the engine version and adapter that wrote it. Exported, and unreleased
+  until 1.16.0.
 
 **In flight.** `sslm_gpu_kv_pool_create`, `sslm_gpu_prefix_prefill`,
-`sslm_gpu_prefix_begin_from`, `sslm_gpu_seq_adopt_prefix` and
-`sslm_gpu_seq_restore_into_pool` submit GPU work: they are serialized as
+`sslm_gpu_prefix_begin_from`, `sslm_gpu_seq_adopt_prefix`,
+`sslm_gpu_seq_restore_into_pool` and `sslm_gpu_prefix_restore` submit GPU work: they are serialized as
 every submitting call is (below), and each returns `SSLM_BUSY`, changing
 nothing, while any sequence in the process is Submitted. Every guarded call
 on a pooled sequence has the same any-sequence scope, and a guarded call on
 a dedicated sequence, a model or an adapter returns `SSLM_BUSY` while a
 pooled sequence is Submitted. The other paged calls submit nothing and are
-never refused Busy.
+never refused Busy. (`sslm_gpu_prefix_restore` is exported, and unreleased
+until 1.16.0.)
 
 **Speed.** On the NVIDIA RTX 2080 SUPER (one card, one driver),
 single-sequence decode through a pooled sequence's page table was no more
@@ -506,6 +525,13 @@ refused on the prefix's state (not frozen, another pool of the same model, prefi
 freeze, a schema bind it can no longer take); and
 `SSLM_GPU_PREFIX_SCHEMA_MISMATCH`, an adopt whose schema binding does not
 match the prefix's.
+
+One covers precached prefixes (1.16.0, unreleased; ordinal 30):
+`SSLM_RESTORE_PRODUCER_MISMATCH`, an `SPX1` blob given to
+`sslm_gpu_prefix_restore` that another engine version wrote, or that was
+written on another adapter (its vendor or device ID differs from the
+context's). Nothing is drawn. The status is exported, and unreleased until
+1.16.0, with the GPU twins.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 diverge on one refusal: when a device-side domain guard refuses one of the admitted
@@ -1012,6 +1038,56 @@ figures.
   so that the prefix's tokens and the continuation's tokens equal the whole
   text's tokens is the host's job.
 
+### Frozen-prefix save and restore (1.14.0 CPU ABI)
+
+`SSLM_HAS_PREFIX_SAVE_ABI` marks the availability of `sslm_prefix_save` and
+`sslm_prefix_restore`. Save accepts a frozen prefix and writes canonical `SPX1`
+bytes. Use the two-call buffer convention: a null or short buffer returns
+`SSLM_BUFFER_TOO_SMALL` and sets the exact byte count in `*n`. An unfrozen
+prefix is refused with `SSLM_INVALID_ARGUMENT`. A frozen prefix may be saved
+concurrently by multiple callers; releasing it during a save is caller
+undefined behavior.
+
+`SPX1` carries the CPU backend, producer version, model hash, KV precision,
+schema binding and walk state, current token, length and origin, hidden scale,
+five saturation counts, residual, and canonical K/V rows. Its exact size is
+`184 + hidden_size + length * bytes_per_token`. It omits page identities,
+page size, budget, and allocation history. The SHA-256 digest detects accidental
+changes to the bytes; it does not authenticate them. With a recomputed digest,
+an edited blob can choose any model-resolvable schema and valid walk state,
+length within the context cap, origin within length, valid current token,
+int32 mantissa, any int64 exponent, any saturation counts, and arbitrary
+residual and K/V bytes. Magic, backend, producer, model identity, and KV
+precision must match exactly.
+
+Restore accepts only a blob from this backend and producer. A producer version
+mismatch returns `SSLM_RESTORE_PRODUCER_MISMATCH`; model, precision, and schema
+mismatches have their distinct restore statuses. Every refusal clears `*out`.
+`parent_or_null` is a sharing hint. A nested blob (origin above 0) shares the
+hint's leading `floor(origin / B)` pages only when the hint is frozen, belongs
+to the same model and the same pool, holds exactly `origin` positions, and its
+rows over those pages, every layer, K and V, are byte-equal to the blob's. The
+restore then draws `ceil(length / B) - floor(origin / B)` pages and fills them
+from the blob, the parent's partial last page included, and reports the shared
+count through `*out_shared_pages`. A null or nonmatching hint, or a root blob,
+restores the same prefix privately (`SSLM_OK`, 0 shared) when the pool has
+`ceil(length / B)` free pages. The restored child holds its own references to
+the shared pages, so the parent may be released afterwards. A private nested
+restore may return `SSLM_KV_POOL_EXHAUSTED` even where building the nested
+prefix against its parent was admitted. `B` is the restore pool's page size
+(the contiguous pool option's is the context cap). `SPX1` carries no page size,
+so a blob restores into a pool of any page size; the restored prefix is then
+adoptable only from pools of that page size, as for every prefix. Releasing a hint while restore reads
+it is caller undefined behavior.
+
+Every blob written by this library and restored by the same release version
+(or the same development build) yields, on success, a prefix whose adopters
+emit the same tokens as adopters of the prefill-built prefix. Accidental byte
+changes are refused unless they collide under SHA-256. Development builds on
+one version line may accept one another's blobs, outside that fidelity promise.
+Model mapping refuses two schema names with the same nonzero FNV-1a 64-bit
+hash, or a name hashing to zero, so a saved schema hash resolves uniquely.
+
 ### Schema-constrained generation
 
 A schema is compiled offline (see [sslm_format.md](sslm_format.md)'s
@@ -1050,7 +1126,7 @@ reproducible, on the same certified platform, as an unconstrained one.
 
 ### Status causes
 
-`sslm_status` carries one success value (`SSLM_OK`) plus 29 distinct
+`sslm_status` carries one success value (`SSLM_OK`) plus 30 distinct
 rejection causes (an internal sentinel past the last real value is never
 returned or accepted as an argument), in five groups: argument/precondition
 rejections (a bad argument, a buffer too small, a misaligned buffer);
@@ -1070,7 +1146,8 @@ otherwise valid model and valid params, `SSLM_NUMERIC_STEP_REFUSED`,
 schema-content span on an unbound sequence; a prefix or restore whose
 schema doesn't match; a fixed span the schema's own DFA cannot reach; a
 schema the offline compiler could not prove satisfiable), the shared
-`SSLM_GPU_SHADER_BINARY_STALE` deployment-mismatch cause, plus one
+`SSLM_GPU_SHADER_BINARY_STALE` deployment-mismatch cause, the
+`SSLM_RESTORE_PRODUCER_MISMATCH` producer-version refusal (ordinal 30), plus one
 process-level resource-exhaustion cause distinct from a caller-supplied
 buffer running out.
 

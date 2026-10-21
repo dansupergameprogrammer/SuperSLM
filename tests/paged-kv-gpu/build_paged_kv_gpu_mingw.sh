@@ -5,6 +5,8 @@
 #
 # Usage: tests/paged-kv-gpu/build_paged_kv_gpu_mingw.sh [--out=DIR] [--jobs=N] [--state-tracking] [--list] [TARGET ...]
 #   TARGET   g2 | g3 | g4 | g5 | g6   every executable whose bracket is that step (default: all five)
+#            f2                  the precached-prefixes GPU cells (tests/precache-gpu, plan step F1/F2)
+#            e5                  the precached-prefixes E5 GPU cell (pcg_cell_9_10; its capture leg is box-only)
 #            <exe name>          one executable from the table below (e.g. pkvg_g2, g1d_cell_3_6f)
 #   --out    default <repo>/out/pkvg (the exes must sit under the repo: the shader staleness check walks up
 #            from the exe to src/gpu/shaders)
@@ -85,6 +87,14 @@ g1e_cell_10_3|plain|G6|g1e_cell_10_3|
 g1e_cell_10_5|plain|G6|g1e_cell_10_5|
 g1e_cell_10_7|plain|G6|g1e_cell_10_7|
 pkvg_g6_decode_timing|plain|G6|pkvg_g6_decode_timing|
+pcg_cell_format|plain|F2|../precache-gpu/pcg_cell_format|
+pcg_cell_pool|plain|F2|../precache-gpu/pcg_cell_pool|
+pcg_cell_busy|plain|F2|../precache-gpu/pcg_cell_busy|
+pcg_cell_faults|alloc|F2|../precache-gpu/pcg_cell_faults|
+pcg_cell_schema|plain|F2|../precache-gpu/pcg_cell_schema|
+pcg_cell_budget_snapshot|plain|F2|../precache-gpu/pcg_cell_budget_snapshot|
+pcg_cell_restore_derived|plain|F2|../precache-gpu/pcg_cell_restore_derived|
+pcg_cell_9_10|plain|E5|../precache-gpu/pcg_cell_9_10|
 '
 # Host-only programs (no engine): the suite's process runner.
 HOST_TABLE="pkvg_suite"
@@ -198,7 +208,7 @@ build_exe() {  # build_exe "name|config|step|sources|extra"
 		if ! compile "$OBJ/cells-$cfg-$tag" "$flags" "tests/paged-kv-gpu/$src.cpp"; then
 			REDCOMPILE+=("$name"); return 0
 		fi
-		objs+=("$OBJ/cells-$cfg-$tag/$src.o")
+		objs+=("$OBJ/cells-$cfg-$tag/$(basename "$src").o")
 	done
 	local hook=""
 	[ "$extra" = hooks ] && hook="$(hooks_objs | tail -1)"

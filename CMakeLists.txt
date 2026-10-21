@@ -45,6 +45,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/gpu/gpu_inflight_registry.cpp
 	src/decode_digest.cpp
 	src/kv_pages.cpp
+	src/spx1_format.cpp
 	src/sslm_abi.cpp
 	src/damped_greedy_antilm.cpp
 	src/damped_greedy_topk.cpp
@@ -117,6 +118,7 @@ endif()
 include(tests/paged-kv/paged_kv.cmake)
 # GPU paged-KV plan (rev 16) step G3: the D3D12-free core's host-only cells.
 include(tests/gpu-g3-core/g3_core.cmake)
+include(tests/precache/precache.cmake)
 
 # T-2152 (outside strike item 1): tests/test_main.cpp's own T-2019/T-2024 GPU-serial-port
 # section calls `superslm_gpu::*` directly (#ifdef _WIN32-guarded in that file so the same

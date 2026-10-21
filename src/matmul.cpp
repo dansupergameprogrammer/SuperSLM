@@ -92,6 +92,21 @@
 #define SUPERSLM_AVX512_TARGET
 #endif
 
+// MSVC: this file's code goes in its own image section. An image section starts on a page boundary, so the GEMM
+// kernels' alignment depends only on this file's code, not on how much code the linker places before it. Without
+// it, unrelated edits elsewhere in the library moved the DotRow loop by 16 bytes mod 64 and changed a one-thread
+// 7-token prefill by 28 % under MSVC on a Zen 2 host (tools/msvc_pin/README.md). MSVC has no loop or
+// function alignment switch; a section of its own is the control it offers. Other compilers align loops themselves.
+#if defined(_MSC_VER) && !defined(__clang__)
+// The section's first 16 bytes ($a sorts before $m within the image section): puts DotRowAvx2 at 16 mod 64 and the
+// DotRow loop at 0 mod 64, the placement every fast build had; tools/msvc_pin/run-pinmap.ps1 checks it
+// (tools/msvc_pin/README.md). Kept by /INCLUDE, never called.
+#pragma code_seg(".sslmgem$a")
+extern "C" __declspec(noinline) void superslm_gemm_section_head() {}
+#pragma comment(linker, "/INCLUDE:superslm_gemm_section_head")
+#pragma code_seg(".sslmgem$m")
+#endif
+
 namespace superslm {
 namespace {
 
@@ -1289,3 +1304,7 @@ void GemmProbQ15AccumulateInto(const int64_t* probs, const int8_t* values, size_
 extern "C" SUPERSLM_BUILDCFG_USED const char superslm_build_config_record[] =
     "SSLM-BUILDCFG/2{" SUPERSLM_BUILDCFG_F0 SUPERSLM_BUILDCFG_F1 SUPERSLM_BUILDCFG_F2 SUPERSLM_BUILDCFG_F3 SUPERSLM_BUILDCFG_F4 SUPERSLM_BUILDCFG_F5
     SUPERSLM_BUILDCFG_F6 SUPERSLM_BUILDCFG_F7 SUPERSLM_BUILDCFG_F8 SUPERSLM_BUILDCFG_F9 SUPERSLM_BUILDCFG_F10 SUPERSLM_BUILDCFG_F11 "}";
+
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma code_seg()
+#endif

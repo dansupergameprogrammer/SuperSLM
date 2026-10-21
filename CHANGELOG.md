@@ -4,6 +4,19 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
+In progress, for 1.14.0. The version stays at the last release (1.13.1 on `main`) until the release commit.
+
+- **Precached prefixes on the CPU: save and restore** (`SSLM_HAS_PREFIX_SAVE_ABI`). `sslm_prefix_save` writes a
+  frozen prefix as a canonical `SPX1` blob; `sslm_prefix_restore` validates the whole blob before it draws or
+  shares any page, and restores a frozen prefix, optionally sharing pages with a parent prefix. The blob records its
+  producer (the engine version); a blob from another version is refused with the new
+  `SSLM_RESTORE_PRODUCER_MISMATCH` (ordinal 30). `include/superslm/sslm_version.h` carries the version, and a check
+  keeps it equal to CMake's.
+- **GPU twins, unreleased until 1.16.0.** `sslm_gpu_prefix_save` and `sslm_gpu_prefix_restore` are declared and
+  exported, but no release promises them before 1.16.0.
+- **MSVC GEMM placement pin.** `src/matmul.cpp` gets its own image section, so the GEMM kernels' alignment no
+  longer moves with unrelated edits; `tools/msvc_pin/run-pinmap.ps1` checks the placement.
+
 ## [1.13.1] - 2026-10-19
 
 A GPU fix release. No token, save format, existing status or existing verb changes; one GPU verb is added.

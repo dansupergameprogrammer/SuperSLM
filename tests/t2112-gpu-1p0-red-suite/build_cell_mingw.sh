@@ -24,7 +24,7 @@ FLAGS="-std=c++20 -O2 -I$REPO/include -I$REPO/tests -I$REPO/src/gpu -I$HERE -DNO
 -include d3d12.h -include d3d12sdklayers.h -DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION -DSUPERSLM_O11_ALLOC_INJECTION"
 ENGINE="src/artifact.cpp src/sha256.cpp src/tokenizer.cpp src/model.cpp src/intmath.cpp src/silu_lut.cpp src/matmul.cpp
 src/proof_manifest.cpp src/trace_hook.cpp src/forward/checked_chain_funnel.cpp src/forward/forward_sites.cpp
-src/forward/parallel_split.cpp src/gpu/gpu_inflight_registry.cpp src/decode_digest.cpp src/kv_pages.cpp
+src/forward/parallel_split.cpp src/gpu/gpu_inflight_registry.cpp src/decode_digest.cpp src/kv_pages.cpp src/spx1_format.cpp
 src/gpu/superslm_gpu.cpp src/gpu/gpu_1p0.cpp"
 OBJ="$OUT/obj"
 mkdir -p "$OBJ" "$OUT/shaders"

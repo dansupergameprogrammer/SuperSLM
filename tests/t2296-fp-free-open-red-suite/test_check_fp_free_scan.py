@@ -921,8 +921,9 @@ def test_population_08_source_manifest_resolves_its_real_files():
     sources = [line.strip() for line in block.splitlines()[1:] if line.strip()]
     # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on (design Sec4.1 said 17).
     # GPU paged KV G3 added src/gpu/gpu_inflight_registry.cpp: 20 from then on.
-    assert len(sources) == 20, (
-        "SUPERSLM_CORE_SOURCES names 20 translation units from GPU paged KV G3 on, 19 from the paged-KV page module on, 18 from decode threading D0 on (design "
+    # The precached-prefix blob codec added src/spx1_format.cpp: 21 from then on.
+    assert len(sources) == 21, (
+        "SUPERSLM_CORE_SOURCES names 21 translation units from the SPX1 codec on, 20 from GPU paged KV G3 on, 19 from the paged-KV page module on, 18 from decode threading D0 on (design "
         "Sec4.1's own text states 17); CMakeLists.txt currently names {}: {}".format(len(sources), sources)
     )
     missing = [s for s in sources if not os.path.exists(os.path.join(engine_root, s))]
@@ -2873,13 +2874,14 @@ def test_derive_core_sources_control_ordinary_manifest_unaffected():
         "got {}".format(result)
     )
     # The real, currently-committed CMakeLists.txt must also be unaffected --
-    # population eight's own 20-source claim depends on this.
+    # population eight's own 21-source claim depends on this.
     engine_root = os.path.dirname(_TESTS_ROOT)
     real_cmake = os.path.join(engine_root, "CMakeLists.txt")
     real_result = scan.derive_core_sources(real_cmake)
     # The paged-KV page module added src/kv_pages.cpp: 19 from then on; decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on.
     # GPU paged KV G3 added src/gpu/gpu_inflight_registry.cpp: 20 from then on.
-    assert len(real_result) == 20, (
+    # The precached-prefix blob codec added src/spx1_format.cpp: 21 from then on.
+    assert len(real_result) == 21, (
         "the completeness self-check must not regress the real, currently-"
         "committed CMakeLists.txt -- got {} sources: {}".format(
             len(real_result), real_result)
@@ -4468,8 +4470,9 @@ def test_scan_build_output_real_build_finds_exactly_its_objects(real_build_dir):
     objects = scan_build_output.find_target_objects(real_build_dir, "superslm")
     # Decode threading D0 added src/forward/parallel_split.cpp: 18 from D0 on.
     # GPU paged KV G3 added src/gpu/gpu_inflight_registry.cpp: 20 from then on.
-    assert len(objects) == 20, (
-        "the real build emits exactly 20 objects for the superslm target from GPU paged KV G3 on, 19 from the paged-KV page module on, 18 from decode "
+    # The precached-prefix blob codec added src/spx1_format.cpp: 21 from then on.
+    assert len(objects) == 21, (
+        "the real build emits exactly 21 objects for the superslm target from the SPX1 codec on, 20 from GPU paged KV G3 on, 19 from the paged-KV page module on, 18 from decode "
         "threading D0 on (design Sec4.1 said 17); found {}: {}".format(
             len(objects), objects)
     )
