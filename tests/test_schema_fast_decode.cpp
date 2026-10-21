@@ -3682,16 +3682,26 @@ void Cell_9_1() {
 	}
 }
 
+// A repository text file, read for the inventory cells (9.2, 9.X2), with every '\r' removed: the cells search it
+// line by line ("\n" + verb + "\n", a line compared whole), and a CRLF checkout left each line ending in '\r' so
+// no verb ever matched (MSVC ctest, 2026-10-21). Every caller only searches the text; none hashes its bytes.
+static std::string RepoText(const std::vector<uint8_t>& b) {
+	std::string s;
+	s.reserve(b.size());
+	for (const uint8_t c : b)
+		if (c != '\r') s.push_back(static_cast<char>(c));
+	return s;
+}
+
 std::string ReadRepoFile(const char* rel) {
 	static const char* kPrefixes[] = {"", "../", "../../", "../../../"};
 	for (const char* p : kPrefixes) {
 		std::vector<uint8_t> b;
-		if (superslm_marshal::ReadFile((std::string(p) + rel).c_str(), b)) return std::string(b.begin(), b.end());
+		if (superslm_marshal::ReadFile((std::string(p) + rel).c_str(), b)) return RepoText(b);
 	}
 #if defined(SFD_SOURCE_DIR)
 	std::vector<uint8_t> b;
-	if (superslm_marshal::ReadFile((std::string(SFD_SOURCE_DIR) + "/" + rel).c_str(), b))
-		return std::string(b.begin(), b.end());
+	if (superslm_marshal::ReadFile((std::string(SFD_SOURCE_DIR) + "/" + rel).c_str(), b)) return RepoText(b);
 #endif
 	return {};
 }

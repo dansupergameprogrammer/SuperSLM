@@ -870,7 +870,16 @@ int TfFork(const char* tag, long k, F&& body) {
 	else std::printf("FAIL [%s k %ld] the trial exited abnormally (a sanitizer report, above)\n", tag, k);
 	return kTfFail;
 #else
-	return body();
+	// In process (no fork on Windows): the trial's checks are reported in its mask, as a forked child's are, and
+	// never in this process's own tally. Left in the tally, a trial expected to fail -- TF.7's guard-off sweep,
+	// whose verdict is its rest_differs count -- read as a setup failure and turned TF.1, TF.3, TF.4 (a), TF.5,
+	// TF.6 and TF.7 all red "setup failed" (MSVC ctest, 2026-10-21). A real trial failure still sets kTfFail in the
+	// mask, which each cell turns red on, so nothing is weakened: it is only counted where the POSIX run counts it.
+	const int checks = g_checks, failures = g_failures;
+	const int mask = body();
+	g_checks = checks;
+	g_failures = failures;
+	return mask;
 #endif
 }
 
