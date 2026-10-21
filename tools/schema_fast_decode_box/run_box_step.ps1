@@ -19,6 +19,15 @@
 # all), with -RestSeconds between steps. Timed comparisons are -Pairs interleaved pairs after one
 # discarded warm-up pair, alternating which arm runs first.
 #
+# MSVC GEMM placement (2026-10-21, results\2026-10-21-msvc-pin\): under MSVC, src\matmul.cpp's code is pinned in
+# its own image section (.sslmgem) behind a 16-byte head, so the DotRow loop that runs every pass below 8 tokens
+# lands at 0 mod 64 whatever else links ahead of it. Unpinned, unrelated edits moved it by 16 bytes and the one-
+# thread 7-token prefill by ~28 %. The pin is fixed by matmul.cpp's own content, so after ANY edit to
+# src\matmul.cpp (or a toolchain change) re-run the placement check before trusting a timed step:
+#   powershell -ExecutionPolicy Bypass -File tools\schema_fast_decode_box\results\2026-10-21-msvc-pin\run-pinmap.ps1 -Commit <sha>
+# and confirm GemmInt8AccumulateCols at 0, DotRowAvx2 at 16, TiledGemmAvx2 at 32 and ActiveGemmTier at 32 mod 64.
+# If they moved, re-tune the head's size in matmul.cpp (README there) before measuring.
+#
 # Usage:  powershell -ExecutionPolicy Bypass -File tools\schema_fast_decode_box\run_box_step.ps1 -Step B0
 param(
     [Parameter(Mandatory = $true)][string]$Step,
