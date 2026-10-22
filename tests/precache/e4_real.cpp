@@ -5,6 +5,9 @@
 #include <numeric>
 #include <filesystem>
 #include <sstream>
+#if defined(_WIN32)
+extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void* module,char* name,unsigned long size);
+#endif
 
 namespace {
 using namespace pc;
@@ -271,6 +274,22 @@ void CrossCompiler43() {
 }
 PKV_CELL("4.3/E4", "E1", CrossCompiler43);
 
+// The SHA-256 of the running program (code review 2026-10-22, finding 5): printed on every 10.3 line, so the slices
+// of one paired run, and the worst leg, are tied to one build when they are read together (run sheet B8e, the audit).
+std::string RunnerSha() {
+#if defined(_WIN32)
+    char path[4096]={};
+    const unsigned long n=GetModuleFileNameA(nullptr,path,sizeof path);
+    const std::string self=(n>0 && n<sizeof path) ? std::string(path,n) : std::string{};
+#else
+    std::error_code ec;
+    const std::string self=fs::read_symlink("/proc/self/exe",ec).string();
+#endif
+    const std::string sha=self.empty() ? std::string{} : ShaFile(self);
+    PKV_CHECK_MSG(sha.size()==64,"10.3 cannot hash the running program (%s)",self.c_str());
+    return sha;
+}
+
 // 10.3's commissioned timing receipt (F12): the 13-field PC-TIMING-1 record the debunker writes after commissioning the
 // instrument, bound to this box, one thread, both rule-B geometries, the 0.5B model, the prompt manifest, the instrument
 // source and the anchor. Readings taken without it are refused, so nothing is acted on before commissioning (§8).
@@ -336,10 +355,30 @@ void Timing103() {
     const auto threads=Env("SUPERSLM_PRECACHE_THREADS");
     if(!TimingReceiptCommissioned(Sha(fx.bytes.p,fx.size))) return;
     const auto receipt_sha=ShaFile(receipt_path);
+    const auto runner_sha=RunnerSha();
+    if(runner_sha.empty()) return;
     constexpr int kPairs=8;
     constexpr double kStudent95=2.365; // two-sided t_0.975,7.
     const double tick_ms=1000.0*double(std::chrono::steady_clock::period::num)/
                          double(std::chrono::steady_clock::period::den);
+    // One untimed warm-up pair per process (code review finding 10): with slices, each slice's first prefill would
+    // otherwise be its process's cold one, which inflates prefill time and so the ratio, four times instead of once.
+    {
+        char name[16]; std::snprintf(name,sizeof(name),"flat%02d",first);
+        const auto ids=Ids(fs::path(prompts)/(std::string(name)+".ids"));
+        if(ids.empty()) return;
+        sslm_prefix warm=nullptr;
+        Status(sslm_prefix_begin_budgeted(fx.model,&pool.pool,int32_t(ids.size()),&warm),SSLM_OK,"10.3 warm-up begin");
+        if(!warm) return;
+        Status(PrefixPrefillAll(fx.model,warm,ids,64),SSLM_OK,"10.3 warm-up prefill");
+        Status(sslm_prefix_freeze(warm),SSLM_OK,"10.3 warm-up freeze");
+        const auto b=Save(warm);
+        sslm_prefix_release(warm);
+        if(!RequireBlob(b,"10.3 warm-up")) return;
+        sslm_prefix restored=nullptr;
+        Status(Restore(fx,&pool.pool,b,nullptr,&restored),SSLM_OK,"10.3 warm-up restore");
+        if(restored) sslm_prefix_release(restored);
+    }
     int graded=0;
     for(int i=first;i<=last;++i) {
         char name[16]; std::snprintf(name,sizeof(name),"flat%02d",i);
@@ -382,8 +421,8 @@ void Timing103() {
         for(double value:logs) squared+=(value-mean)*(value-mean);
         const double half=kStudent95*std::sqrt(squared/(kPairs-1)/kPairs);
         const double lower=std::exp(mean-half),upper=std::exp(mean+half);
-        std::printf("10.3 receipt=%s box=%s threads=%s geometry=0p5 B=%lld %s pairs=%d bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f ratio95=[%.1f,%.1f]\n",
-                    receipt_sha.c_str(),box.c_str(),threads.c_str(),static_cast<long long>(fx.B()),name,kPairs,bytes,
+        std::printf("10.3 receipt=%s runner=%s box=%s threads=%s geometry=0p5 B=%lld %s pairs=%d bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f ratio95=[%.1f,%.1f]\n",
+                    receipt_sha.c_str(),runner_sha.c_str(),box.c_str(),threads.c_str(),static_cast<long long>(fx.B()),name,kPairs,bytes,
                     prefill_sum/kPairs,restore_sum/kPairs,lower,upper);
         std::fflush(stdout);
         PKV_CHECK_MSG(lower>=1000,
@@ -391,8 +430,8 @@ void Timing103() {
                       name,lower,upper);
         if(lower>=1000) ++graded;
     }
-    std::printf("10.3 slice flat%02d-flat%02d: %d of %d prefixes resolved at or above 1000x\n",first,last,graded,
-                last-first+1);
+    std::printf("10.3 slice flat%02d-flat%02d: %d of %d prefixes resolved at or above 1000x runner=%s receipt=%s\n",
+                first,last,graded,last-first+1,runner_sha.c_str(),receipt_sha.c_str());
     PKV_CHECK_EQ(graded,last-first+1);
 }
 PKV_CELL("10.3/E4", "E1", Timing103);
@@ -460,6 +499,7 @@ void Worst103() {
     }
     if(!TimingReceiptCommissioned(ShaFile(Env("SUPERSLM_PRECACHE_REAL_MODEL")))) return;
     const auto receipt_sha=ShaFile(Env("SUPERSLM_PRECACHE_TIMING_RECEIPT"));
+    const auto runner_sha=RunnerSha();
     std::vector<uint8_t> cap_blob;
     PKV_CHECK_MSG(ReadAll(blob_path,&cap_blob),"10.3 worst blob missing: %s (run the capture phase first)",
                   blob_path.c_str());
@@ -480,9 +520,9 @@ void Worst103() {
     }
     cap_restore_ms/=3.0;
     const double mib=double(cap_blob.size())/(1024.0*1024.0);
-    std::printf("10.3 receipt=%s box=%s threads=%s worst cap=32768 geometry=1p5 28x2x128 B=%lld "
+    std::printf("10.3 receipt=%s runner=%s box=%s threads=%s worst cap=32768 geometry=1p5 28x2x128 B=%lld "
                 "bytes_including_digest=%zu blob_sha256=%s restore_ms=%.3f MiB=%.3f MiB/s=%.1f\n",
-                receipt_sha.c_str(),Env("SUPERSLM_PRECACHE_BOX_ID").c_str(),Env("SUPERSLM_PRECACHE_THREADS").c_str(),
+                receipt_sha.c_str(),runner_sha.c_str(),Env("SUPERSLM_PRECACHE_BOX_ID").c_str(),Env("SUPERSLM_PRECACHE_THREADS").c_str(),
                 static_cast<long long>(wf.B()),cap_blob.size(),Sha(cap_blob.data(),cap_blob.size()).c_str(),
                 cap_restore_ms,mib,1000.0*mib/cap_restore_ms);
 }
@@ -684,6 +724,8 @@ void Parallel66RuleB() {
     Fixture fx;
     TakeRealArtifact(fx,model,{24,2,64,32768});
     if(!RequireRealRuleB(fx,kPlanB0p5,"6.6 rule-B")) return;
+    // Code review finding 9: the log names the artifact that ran, for the audit (B0 hashes the file it expects).
+    std::printf("6.6 rule-B: model_sha256=%s\n",Sha(fx.bytes.p,fx.size).c_str());
     const int64_t B=fx.B();
     constexpr int kL=300;
     PKV_CHECK_MSG(kL>=2*B && kL%B!=0 && CeilDiv(int64_t(kL),B)==3,

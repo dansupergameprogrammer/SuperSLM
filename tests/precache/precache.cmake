@@ -58,12 +58,20 @@ target_sources(superslm_precache_unpinned PRIVATE ${PC_DIR}/unpinned/e5_unpinned
 target_compile_definitions(superslm_precache_unpinned PRIVATE PC_REFERENCE_DIR="${PC_DIR}/reference")
 target_compile_definitions(superslm_precache_unpinned_getfixture_receipt PRIVATE
     PKV_PIN_GENERATED_FIXTURES=1 PC_UNPINNED_RECEIPT_VIA_GETFIXTURE=1)
+# Plan rev 1.18.1 (§8, R13): after M1 this plan's work runs on a post-M1 branch cut from main at the squash, and the
+# line is origin/main. git merge-base HEAD origin/main then moves exactly when a main commit is merged into the
+# branch, so every foreign commit taken in forces the population to be regenerated and licensed before grading.
+# Set here, before the generator block reads it (code review 2026-10-22, finding 1: with it set later, a fresh cache
+# read it empty and the first configure wrote "unanchored-no-merge-base").
+set(PRECACHE_REFERENCE_LINE "origin/main" CACHE STRING
+    "Line whose merge-base anchors licensed precache references")
 # §8, R13: the licensed reference population is regenerated at every new `git merge-base HEAD <line>`. Its generator is
-# T-3035's prefill-only harness, carried verbatim from origin/curie/t3035-precache-refs (972d5b7b; both files last
-# changed at abe60753), so the box builds the same capture code beside the engine it anchors to. It links the shipping
-# library (no test seams) and calls no save or restore verb. Its header's anchor is the merge-base read when this tree
-# is configured; when the engine sources at HEAD differ from that anchor's, or the history is shallow, the anchor is
-# written as "unanchored-...", which every grading refuses (precache_reference.h). Reconfigure before regenerating.
+# T-3035's prefill-only harness, carried verbatim from origin/curie/t3035-precache-refs (972d5b7b; t3035_reference.cpp
+# last changed at abe60753, t3022_precache_reference.cpp at c9d003c8), so the box builds the same capture code beside
+# the engine it anchors to. It links the shipping library (no test seams) and calls no save or restore verb. Its
+# header's anchor is the merge-base read when this tree is configured; when the engine sources at HEAD or in the
+# working tree differ from that anchor's, or the history is shallow, the anchor is written as "unanchored-...", which
+# every grading refuses (precache_reference.h). Reconfigure before regenerating.
 add_executable(superslm_precache_reference_gen EXCLUDE_FROM_ALL ${PC_DIR}/reference/t3035_reference.cpp)
 target_include_directories(superslm_precache_reference_gen PRIVATE include src)
 target_link_libraries(superslm_precache_reference_gen PRIVATE superslm)
@@ -85,10 +93,13 @@ if(GIT_FOUND)
     else()
         execute_process(COMMAND ${GIT_EXECUTABLE} diff --quiet ${pc_mb} HEAD -- src include CMakeLists.txt
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} RESULT_VARIABLE pc_engine_diff)
-        if(pc_engine_diff EQUAL 0)
+        # Uncommitted engine edits count too (code review finding 8): the working tree must equal HEAD there.
+        execute_process(COMMAND ${GIT_EXECUTABLE} diff --quiet HEAD -- src include CMakeLists.txt
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} RESULT_VARIABLE pc_engine_dirty)
+        if(pc_engine_diff EQUAL 0 AND pc_engine_dirty EQUAL 0)
             set(PC_GEN_ANCHOR "${pc_mb}")
         else()
-            set(PC_GEN_ANCHOR "unanchored-engine-differs-from-${pc_mb}")
+            set(PC_GEN_ANCHOR "unanchored-engine-differs-from-${pc_mb}-or-dirty")
         endif()
     endif()
 endif()
@@ -98,11 +109,6 @@ endif()
 target_compile_definitions(superslm_precache_reference_gen PRIVATE
     T3035_ENGINE_ANCHOR="${PC_GEN_ANCHOR}" T3035_HARNESS_COMMIT="${PC_GEN_HARNESS}")
 find_package(Python3 COMPONENTS Interpreter)
-# Plan rev 1.18.1 (§8, R13): after M1 this plan's work runs on a post-M1 branch cut from main at the squash, and the
-# line is origin/main. git merge-base HEAD origin/main then moves exactly when a main commit is merged into the
-# branch, so every foreign commit taken in forces the population to be regenerated and licensed before grading.
-set(PRECACHE_REFERENCE_LINE "origin/main" CACHE STRING
-    "Line whose merge-base anchors licensed precache references")
 set(PC_MERGE_BASE_FILE "${CMAKE_CURRENT_BINARY_DIR}/precache-reference-merge-base.txt")
 if(Python3_Interpreter_FOUND)
     set(PC_PYTHON_EXECUTABLE ${Python3_EXECUTABLE})

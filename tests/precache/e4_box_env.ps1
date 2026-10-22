@@ -4,7 +4,8 @@
 #
 # It sets no state outside this PowerShell session: MSVC 14.34 (vcvarsall x64, Windows SDK 10.0.22621.0), the paths,
 # and the SUPERSLM_PRECACHE_* inputs of the E4 cells. Windows PowerShell 5.1 and PowerShell 7 both run it. Each piece
-# runs in a fresh window, so a crash costs only that piece; every piece writes its log under $E4Logs as it goes.
+# runs in a fresh window, so a crash costs only that piece; every piece writes its log under $E4Logs as it goes
+# (UTF-8, no BOM). The runner flushes after each 10.3 prefix line; a crash can lose other unflushed output.
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -27,26 +28,37 @@ foreach ($d in @($E4Work, $E4Logs, $E4Timing)) { New-Item -ItemType Directory -F
 
 function global:E4-Log([string]$Name) { return (Join-Path $E4Logs ($Name + '.log')) }
 
-# Runs a program with its output appended to a piece's log as it is written, and returns its exit code.
+# Runs a program and appends its output to a piece's log as UTF-8 without a BOM, one line at a time, also echoing it.
+# [System.IO.File]::AppendAllText, not Tee-Object or Out-File: Windows PowerShell 5.1 writes those as UTF-16LE or with
+# a BOM, which mixes encodings inside one log (code review 2026-10-22, finding 2; tools/longleg_kit/longleg.ps1 has the
+# same rule). Use it as a statement: the pipeline emits every output line and then the exit code, so do not assign it;
+# read the exit code from the log's last line.
+function global:E4-Append([string]$Log, [string]$Line) {
+    [System.IO.File]::AppendAllText($Log, $Line + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+}
 function global:E4-Run([string]$Log, [string]$Exe, [string[]]$Arguments) {
-    ('[{0}] {1} {2}' -f (Get-Date -Format 's'), $Exe, ($Arguments -join ' ')) | Out-File -Append -Encoding utf8 $Log
+    E4-Append $Log ('[{0}] {1} {2}' -f (Get-Date -Format 's'), $Exe, ($Arguments -join ' '))
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $Log -Append
+    & $Exe @Arguments 2>&1 | ForEach-Object { $l = "$_"; E4-Append $Log $l; $l }
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prev
-    ('[{0}] exit {1}' -f (Get-Date -Format 's'), $code) | Out-File -Append -Encoding utf8 $Log
+    E4-Append $Log ('[{0}] exit {1}' -f (Get-Date -Format 's'), $code)
     return $code
 }
 
 if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    $vs = & $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.14.34.17.4.x86.x64 -property installationPath |
-          Select-Object -First 1
-    if (-not $vs) { throw 'no Visual Studio install carries MSVC 14.34 (Microsoft.VisualStudio.Component.VC.14.34.17.4.x86.x64)' }
-    $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
-    $lines = & cmd.exe /d /c "call `"$vcvars`" x64 10.0.22621.0 -vcvars_ver=14.34 >nul 2>&1 && set"
-    if ($LASTEXITCODE -ne 0) { throw "vcvarsall x64 -vcvars_ver=14.34 failed ($vcvars)" }
+    # As longleg.ps1 finds it: any install with the VC tools, then 14.34 chosen by -vcvars_ver (code review finding 6:
+    # the 14.34 side-by-side component is not registered when 14.34 is the install's own toolset).
+    $found = $null
+    foreach ($vs in @(& $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)) {
+        $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
+        if (-not (Test-Path -LiteralPath $vcvars)) { continue }
+        $lines = & cmd.exe /d /c "call `"$vcvars`" x64 10.0.22621.0 -vcvars_ver=14.34 >nul 2>&1 && set"
+        if ($LASTEXITCODE -eq 0) { $found = $vcvars; break }
+    }
+    if (-not $found) { throw 'no Visual Studio install gives MSVC 14.34 (vcvarsall x64 10.0.22621.0 -vcvars_ver=14.34)' }
     foreach ($line in $lines) {
         $at = $line.IndexOf('=')
         if ($at -gt 0) { Set-Item -Path ('env:' + $line.Substring(0, $at)) -Value $line.Substring($at + 1) }

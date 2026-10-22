@@ -57,11 +57,11 @@ if __name__ == "__main__":
     root, name = sys.argv[1], sys.argv[2]
     rel, edits = M[name]
     path = f"{root}/{rel}"
-    src = open(path, newline="").read()
+    src = open(path, encoding="utf-8", newline="").read()
     for old, new in edits:
         n = src.count(old)
         if n != 1:
             sys.exit(f"{name}: expected one occurrence in {rel}, found {n}")
         src = src.replace(old, new)
-    open(path, "w", newline="").write(src)
+    open(path, "w", encoding="utf-8", newline="").write(src)
     print("applied", name, "to", rel)
