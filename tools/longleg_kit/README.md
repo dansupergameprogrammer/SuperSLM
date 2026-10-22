@@ -99,6 +99,15 @@ Pass these to `START.cmd` or `longleg.ps1`:
 | `-Toolchains msvc` | Runs only the MSVC pieces (about 7 to 8 hours). |
 | `-Parallel 6` | Runs more pieces at once. The default is 4. |
 | `-Only msvc__4.2` | Runs only the pieces whose id starts with this. |
+| `-RetryCrashed` | Runs again the pieces recorded **CRASHED** (the old record and logs are kept, renamed). |
 | `-SelfTest` | Tests the scheduler with stand-in pieces. It builds nothing. |
 
 To run one piece again, delete its `results\<piece>.done` file and start the kit.
+
+After each build the kit starts both programs once (`--list`, which runs no cell). A program Windows cannot
+start fails its build in seconds, with the exit code in `results\build-<toolchain>.done`, instead of crashing
+every piece. For the AddressSanitizer build, the kit first copies MSVC 14.34's ASan runtime
+(`clang_rt.asan_dynamic-x86_64.dll`) beside the programs, because Windows looks in the program's own folder
+first. On the first spare-PC run, without this, every ASan piece exited 0xC0000142 (DLL initialization failed)
+at once. To re-run those pieces with the fixed kit, once the rest are done: copy the new kit onto the drive and
+run `START.cmd -Toolchains msvc-asan -RetryCrashed`.

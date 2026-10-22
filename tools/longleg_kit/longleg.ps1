@@ -42,6 +42,9 @@ Run only the pieces whose id starts with one of these strings (for example msvc_
 .PARAMETER Parallel
 Pieces at once. Each piece is one single-threaded process. Default 4 (the i5-14400F has six performance cores).
 
+.PARAMETER RetryCrashed
+Run again the selected pieces recorded CRASHED. Their old .done, .attempts and log files are kept, renamed with the time.
+
 .PARAMETER SelfTest
 Exercise the piece scheduler, resume and summary with stand-in pieces in a temporary folder (any OS). Builds nothing.
 #>
@@ -54,6 +57,7 @@ param(
     [string[]]$Toolchains = @('msvc', 'clangcl', 'msvc-asan'),
     [string[]]$Only = @(),
     [ValidateRange(1, 16)][int]$Parallel = 4,
+    [switch]$RetryCrashed,
     [switch]$SelfTest
 )
 
@@ -371,12 +375,52 @@ function Get-BinaryPath([string]$Work, [string]$Toolchain, [string]$Binary) {
     return (Join-Path (Get-BuildDir $Work $Toolchain) ("superslm_precache_" + $Binary + '.exe'))
 }
 
+function Get-WindowsBuild {
+    try {
+        $v = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+        $name = ''
+        if ($v.PSObject.Properties['DisplayVersion']) { $name = $v.DisplayVersion + ' ' }
+        return ($name + 'build ' + $v.CurrentBuild + '.' + $v.UBR)
+    } catch { return [System.Environment]::OSVersion.VersionString }
+}
+
+# Starts each built program once (--list runs no cell), so a program Windows cannot start fails its build in seconds
+# instead of crashing every piece. Returns $null when both start, else what failed.
+function Test-BuiltBinaries([string]$Work, [string]$Toolchain, [string]$Results) {
+    $log = Join-Path $Results ("build-" + $Toolchain + '.log')
+    if ($Toolchain -eq 'msvc-asan') {
+        # The spare PC's first run: every ASan piece exited 0xC0000142 (DLL initialization failed) at once. Windows
+        # searches the program's own folder first, so the runtime this build linked against goes there.
+        $dll = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\clang_rt.asan_dynamic-x86_64.dll'
+        if (-not (Test-Path -LiteralPath $dll)) { return "no ASan runtime at $dll" }
+        Copy-Item -LiteralPath $dll -Destination (Get-BuildDir $Work $Toolchain) -Force
+        [System.IO.File]::AppendAllText($log, "copied $dll beside the programs`n")
+    }
+    foreach ($b in @('e1', 'unpinned')) {
+        $exe = Get-BinaryPath $Work $Toolchain $b
+        $code = Invoke-Logged $log $exe @('--list')
+        if ($code -ne 0) {
+            return ("{0} does not start: exit {1} (0x{2:X8}) on Windows {3}; see build-{4}.log" -f
+                    (Split-Path -Leaf $exe), $code, $code, (Get-WindowsBuild), $Toolchain)
+        }
+    }
+    return $null
+}
+
 function Invoke-Build([string]$Work, [string]$Src, [string]$Commit, [string]$Toolchain, [string]$Results) {
     $dir = Get-BuildDir $Work $Toolchain
     $stamp = Join-Path $Results ("build-" + $Toolchain + '.done')
     $done = Read-KeyValue $stamp
     if ($done.Count -gt 0) {
-        if ($done['commit'] -eq $Commit -and $done['status'] -eq 'ok') { return $done }
+        if ($done['commit'] -eq $Commit -and $done['status'] -eq 'ok') {
+            if ($done['startup'] -eq 'ok') { return $done }
+            # Stamped by a kit without the start-up check: check the built programs now, without rebuilding.
+            $why = Test-BuiltBinaries $Work $Toolchain $Results
+            if ($why) { $done['status'] = 'failed'; $done['detail'] = $why; Write-Line "BUILD FAILED for $Toolchain (its pieces are skipped): $why" }
+            else { $done['startup'] = 'ok' }
+            Write-KeyValue $stamp $done
+            return $done
+        }
         if ($done['commit'] -eq $Commit -and $done['status'] -eq 'failed') { return $done }
     }
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -417,6 +461,13 @@ function Invoke-Build([string]$Work, [string]$Src, [string]$Commit, [string]$Too
         $result['cl'] = $clLine
         if ($Toolchain -eq 'clangcl') { $result['clang'] = ((& (Join-Path $script:LlvmBin 'clang-cl.exe') --version) | Select-Object -First 1) }
         $result['vcvars'] = "x64 $script:Sdk -vcvars_ver=$script:Msvc (VCToolsVersion $env:VCToolsVersion)"
+        $result['windows'] = Get-WindowsBuild
+        $why = Test-BuiltBinaries $Work $Toolchain $Results
+        if ($why) {
+            $result['status'] = 'failed'
+            $result['detail'] = $why
+            Write-Line "BUILD FAILED for $Toolchain (its pieces are skipped): $why"
+        } else { $result['startup'] = 'ok' }
     }
     Write-KeyValue $stamp $result
     return $result
@@ -501,6 +552,21 @@ function Complete-Piece($Run, [string]$Results) {
     if ($m.Count -gt 0) { Write-Line ("finished {0}: {1} ({2} checks, {3} failed, {4:N1} h)" -f $piece.Id, $verdict, $checks, $failures, $hours) }
     else { Write-Line ("finished {0}: {1} (exit {2}, no verdict line, {3:N1} h)" -f $piece.Id, $verdict, $code, $hours) }
     return $true
+}
+
+# -RetryCrashed: a CRASHED piece runs again with a fresh attempt count; its old .done, .attempts and logs are kept, renamed.
+function Reset-CrashedPieces($Pieces, [string]$Results) {
+    $tag = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    foreach ($p in $Pieces) {
+        if ((Read-KeyValue (Get-PieceFile $Results $p.Id '.done'))['verdict'] -ne 'CRASHED') { continue }
+        $old = @(Get-ChildItem -LiteralPath $Results -Filter ($p.Id + '.attempt*.log'))
+        foreach ($suffix in @('.done', '.attempts')) {
+            $f = Get-PieceFile $Results $p.Id $suffix
+            if (Test-Path -LiteralPath $f) { $old += Get-Item -LiteralPath $f }
+        }
+        foreach ($f in $old) { Rename-Item -LiteralPath $f.FullName -NewName ($f.Name + ".old-$tag") }
+        Write-Line "runs again: $($p.Id) (was CRASHED)"
+    }
 }
 
 function Invoke-Queue($Pieces, [scriptblock]$LaunchFor, [string]$Results, [int]$Slots, [scriptblock]$OnChange) {
@@ -728,6 +794,16 @@ switch ($Mode) {
     Invoke-Queue $pieces $launch $results 2 { }
     Assert (@(Get-ChildItem -LiteralPath $results -Filter '*.out.log').Count -eq $before + 1) 'deleting one .done reruns that piece only'
 
+    # -RetryCrashed reruns only the CRASHED piece, from attempt 1, and keeps its old record.
+    $before = @(Get-ChildItem -LiteralPath $results -Filter '*.out.log').Count
+    Reset-CrashedPieces $pieces $results
+    Assert (@(Get-ChildItem -LiteralPath $results -Filter 'msvc-asan__T.4-E2-crash.done.old-*').Count -eq 1) '-RetryCrashed keeps the old record'
+    Assert (@(Get-ChildItem -LiteralPath $results -Filter 'msvc-asan__T.4-E2-crash.attempt1.err.log.old-*').Count -eq 1) '-RetryCrashed keeps the old logs'
+    Invoke-Queue $pieces $launch $results 2 { }
+    Assert (@(Get-ChildItem -LiteralPath $results -Filter '*.out.log').Count -eq $before) '-RetryCrashed reruns only the CRASHED piece'
+    $again = Read-KeyValue (Get-PieceFile $results 'msvc-asan__T.4-E2-crash' '.done')
+    Assert ($again['verdict'] -eq 'CRASHED' -and $again['attempts'] -eq '2') "-RetryCrashed starts the attempt count afresh ($($again['attempts']))"
+
     Assert (@(Get-Pieces @('msvc') @('msvc__T.2')).Count -eq 1) '-Only selects by id prefix'
     Remove-Item -LiteralPath $root -Recurse -Force
     if ($fails.Count -gt 0) { Write-Host "self-test: $($fails.Count) failure(s)"; return 1 }
@@ -802,6 +878,7 @@ try {
         $built[$tc] = ($b['status'] -eq 'ok')
     }
     $runnable = @($pieces | Where-Object { $built[$_.Toolchain] })
+    if ($RetryCrashed) { Reset-CrashedPieces $runnable $results }
     $pendingHours = ($runnable | Where-Object { -not (Test-Path -LiteralPath (Get-PieceFile $results $_.Id '.done')) } | Measure-Object -Property Hours -Sum).Sum
     if (-not $pendingHours) { $pendingHours = 0 }
     Write-Line ("{0} piece(s); about {1:N0} CPU-hours left, {2} at a time" -f $runnable.Count, $pendingHours, $Parallel)
