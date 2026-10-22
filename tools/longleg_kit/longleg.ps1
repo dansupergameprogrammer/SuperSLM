@@ -741,14 +741,14 @@ Start-Transcript -LiteralPath $transcript | Out-Null
 try {
     Write-Line "SuperSLM long legs; drive folder $longLeg"
     Write-Line 'checking prerequisites'
-    $missing = Show-Prerequisites (Get-Prerequisites $Toolchains)
+    $missing = @(Show-Prerequisites (Get-Prerequisites $Toolchains))
     if ($missing.Count -gt 0) {
         if ($Resume -or $CheckOnly) { exit 2 }
         $go = $Install
         if (-not $go) { $go = (Read-Host 'Install them now? [Y/n]') -notmatch '^[nN]' }
         if (-not $go) { exit 2 }
         Install-Missing $missing
-        $missing = Show-Prerequisites (Get-Prerequisites $Toolchains)
+        $missing = @(Show-Prerequisites (Get-Prerequisites $Toolchains))
         if ($missing.Count -gt 0) { Write-Line 'still missing after the install; open a new window and run the kit again'; exit 2 }
     }
     Write-Line 'checking the drive''s inputs'
