@@ -1,0 +1,9 @@
+blob_sha256=e869127ad0d6b4db2bb6a86140b437d302c27672bce2509052fb37416684b314
+compiler=Clang
+compiler_version=18.1.3
+fixture_revision=precache-fixtures-2026-10-01-r1
+format=PC-COMPILER-1
+input_ids_sha256=3d3dcf0988972b989df8cb01f629abf0c01768e6a4fc73e41aa0637373c4281c
+model_sha256=994b58b49d3660bccfdd59dc6315028ea0203f37f4705d70eb7ce4dbecdb1db3
+project_version=1.13.1
+runner_sha256=dc453c3a2bfe1838f7b54a295863f7aa03eb32825aa2613a3c6c30ff09c857d4

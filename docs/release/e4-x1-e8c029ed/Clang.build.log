@@ -1,0 +1,56 @@
+-- The CXX compiler identification is Clang 18.1.3
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/clang++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Found Python3: /usr/bin/python3 (found version "3.13.16") found components: Interpreter 
+-- Configuring done (0.8s)
+-- Generating done (0.0s)
+-- Build files have been written to: /tmp/claude-0/-home-claude/6bd7b785-8d10-5dad-99b7-8c29806efe51/scratchpad/e4/xcb-clang
+[0/2] Re-checking globbed directories...
+[1/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/silu_lut.cpp.o
+[2/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/artifact.cpp.o
+[3/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/intmath.cpp.o
+[4/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/matmul.cpp.o
+[5/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/trace_hook.cpp.o
+[6/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/tokenizer.cpp.o
+[7/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/sha256.cpp.o
+[8/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/proof_manifest.cpp.o
+[9/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/model.cpp.o
+[10/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/forward/checked_chain_funnel.cpp.o
+[11/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/decode_digest.cpp.o
+[12/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/gpu/gpu_inflight_registry.cpp.o
+[13/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/spx1_format.cpp.o
+[14/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/forward/parallel_split.cpp.o
+[15/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/damped_greedy_topk.cpp.o
+[16/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/kv_pages.cpp.o
+[17/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/forward/forward_sites.cpp.o
+/home/claude/sslm-post-m1/src/forward/forward_sites.cpp:140:17: warning: unused function 'U128ShrToU64' [-Wunused-function]
+  140 | inline uint64_t U128ShrToU64(U128 v, int k) {
+      |                 ^~~~~~~~~~~~
+1 warning generated.
+[18/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/precache_stubs.cpp.o
+[19/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/damped_greedy_antilm.cpp.o
+[20/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/damped_greedy_phaseD.cpp.o
+[21/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/damped_greedy_phaseD_loop.cpp.o
+[22/34] Building CXX object CMakeFiles/superslm_test_injection.dir/src/sslm_abi.cpp.o
+/home/claude/sslm-post-m1/src/sslm_abi.cpp:1635:67: warning: missing field 'engine' initializer [-Wmissing-field-initializers]
+ 1635 |         sslm_model_s* h = new (std::nothrow) sslm_model_s{std::move(view)};
+      |                                                                          ^
+1 warning generated.
+[23/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/paged-kv/pkv_main.cpp.o
+[24/34] Linking CXX static library libsuperslm_test_injection.a
+[25/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/e2_format.cpp.o
+[26/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/e2_failures.cpp.o
+[27/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/e2_integrity.cpp.o
+[28/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/e2_reference.cpp.o
+[29/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/e2_composition.cpp.o
+[30/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/e2_schema.cpp.o
+[31/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/e2_root.cpp.o
+[32/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/e3_nested.cpp.o
+[33/34] Building CXX object CMakeFiles/superslm_precache_e1.dir/tests/precache/e4_real.cpp.o
+[34/34] Linking CXX executable superslm_precache_e1
