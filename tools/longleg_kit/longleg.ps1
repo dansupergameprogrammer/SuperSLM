@@ -86,6 +86,7 @@ $script:PollSeconds = 20
 $script:Msvc = '14.34'            # the box's MSVC 14.34.31933 (vcvarsall -vcvars_ver=14.34)
 $script:Sdk = '10.0.22621.0'
 $script:LlvmBin = 'C:\Program Files\LLVM\bin'
+$script:LockHeld = $false         # only the instance that wrote kit.lock removes it
 
 # ---------------------------------------------------------------------------------------------------------------
 # Small helpers
@@ -160,6 +161,13 @@ function Update-PathFromRegistry {
     $env:Path = (@($machine, $user) | Where-Object { $_ }) -join ';'
 }
 
+# Windows PowerShell 5.1 turns a native command's stderr into error records once it is redirected, and
+# $ErrorActionPreference = 'Stop' makes the first one fatal. Stderr is dropped here, or kept as plain lines with -MergeStderr.
+function Invoke-Native([string]$Exe, [string[]]$Arguments, [switch]$MergeStderr) {
+    $ErrorActionPreference = 'Continue'
+    if ($MergeStderr) { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } } else { & $Exe @Arguments 2>$null }
+}
+
 function Find-App([string]$Name) {
     $cmd = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue |
         Where-Object { $_.Source -notlike '*\WindowsApps\*' } | Select-Object -First 1
@@ -172,7 +180,7 @@ function Get-VsInfo {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (Test-Path -LiteralPath $vswhere) {
         $info.VsWhere = $vswhere
-        $install = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null |
+        $install = Invoke-Native $vswhere @('-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath') |
             Select-Object -First 1
         if ($install) {
             $info.Install = $install
@@ -204,28 +212,28 @@ function Get-Prerequisites([string[]]$Wanted) {
     if ($Wanted -contains 'msvc-asan') { $vsComponents += 'Microsoft.VisualStudio.Component.VC.ASAN' }
 
     $git = Find-App 'git'
-    $rows += [pscustomobject]@{ Name = 'Git'; Ok = [bool]$git; Have = $git; Fix = 'winget install --id Git.Git -e --source winget' }
+    $rows += [pscustomobject]@{ Name = 'Git'; Ok = [bool]$git; Have = $git; Fix = 'winget install --id Git.Git -e --source winget --accept-source-agreements --accept-package-agreements' }
 
     $py = Find-App 'python'
     $pyOk = $false
-    if ($py) { $pyOk = ((& $py --version 2>&1) -join ' ') -match 'Python 3\.' }
-    $rows += [pscustomobject]@{ Name = 'Python 3'; Ok = $pyOk; Have = $py; Fix = 'winget install --id Python.Python.3.12 -e --source winget' }
+    if ($py) { $pyOk = ((Invoke-Native $py @('--version') -MergeStderr) -join ' ') -match 'Python 3\.' }
+    $rows += [pscustomobject]@{ Name = 'Python 3'; Ok = $pyOk; Have = $py; Fix = 'winget install --id Python.Python.3.12 -e --source winget --accept-source-agreements --accept-package-agreements' }
 
     $cmake = Find-App 'cmake'
     $cmakeOk = $false
     if ($cmake) {
-        $v = ((& $cmake --version 2>&1) | Select-Object -First 1) -replace '[^0-9.]', ''
+        $v = ((Invoke-Native $cmake @('--version') -MergeStderr) | Select-Object -First 1) -replace '[^0-9.]', ''
         try { $cmakeOk = ([version]$v) -ge ([version]'3.20') } catch { $cmakeOk = $false }
     }
-    $rows += [pscustomobject]@{ Name = 'CMake 3.20 or later'; Ok = $cmakeOk; Have = $cmake; Fix = 'winget install --id Kitware.CMake -e --source winget' }
+    $rows += [pscustomobject]@{ Name = 'CMake 3.20 or later'; Ok = $cmakeOk; Have = $cmake; Fix = 'winget install --id Kitware.CMake -e --source winget --accept-source-agreements --accept-package-agreements' }
 
     $ninja = Find-App 'ninja'
-    $rows += [pscustomobject]@{ Name = 'Ninja'; Ok = [bool]$ninja; Have = $ninja; Fix = 'winget install --id Ninja-build.Ninja -e --source winget' }
+    $rows += [pscustomobject]@{ Name = 'Ninja'; Ok = [bool]$ninja; Have = $ninja; Fix = 'winget install --id Ninja-build.Ninja -e --source winget --accept-source-agreements --accept-package-agreements' }
 
     $vs = Get-VsInfo
     $addArgs = ($vsComponents | ForEach-Object { "--add $_" }) -join ' '
     if (-not $vs.Install) {
-        $vsFix = 'winget install --id Microsoft.VisualStudio.2022.BuildTools -e --source winget --override "--passive --wait --norestart ' + $addArgs + '"'
+        $vsFix = 'winget install --id Microsoft.VisualStudio.2022.BuildTools -e --source winget --accept-source-agreements --accept-package-agreements --override "--passive --wait --norestart ' + $addArgs + '"'
     } else {
         $setup = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
         $vsFix = '& "' + $setup + '" modify --installPath "' + $vs.Install + '" --passive --norestart ' + $addArgs
@@ -241,10 +249,10 @@ function Get-Prerequisites([string[]]$Wanted) {
         $clangOk = $false
         $have = $null
         if (Test-Path -LiteralPath $clang) {
-            $have = ((& $clang --version 2>&1) | Select-Object -First 1)
+            $have = ((Invoke-Native $clang @('--version') -MergeStderr) | Select-Object -First 1)
             $clangOk = $have -match 'clang version 15\.'
         }
-        $rows += [pscustomobject]@{ Name = 'clang-cl 15 (LLVM 15.0.1)'; Ok = $clangOk; Have = $have; Fix = 'winget install --id LLVM.LLVM -e --version 15.0.1 --source winget' }
+        $rows += [pscustomobject]@{ Name = 'clang-cl 15 (LLVM 15.0.1)'; Ok = $clangOk; Have = $have; Fix = 'winget install --id LLVM.LLVM -e --version 15.0.1 --source winget --accept-source-agreements --accept-package-agreements' }
     }
     return $rows
 }
@@ -310,11 +318,12 @@ function Test-Inputs([string]$LongLeg, [string]$Results) {
 # Source and builds
 # ---------------------------------------------------------------------------------------------------------------
 function Invoke-Logged([string]$Log, [string]$Exe, [string[]]$Arguments) {
-    Add-Content -LiteralPath $Log -Value ("> " + $Exe + ' ' + ($Arguments -join ' '))
+    # UTF-8 lines, not *>>: Windows PowerShell 5.1's redirection writes UTF-16LE into the middle of the log.
+    [System.IO.File]::AppendAllText($Log, ("> " + $Exe + ' ' + ($Arguments -join ' ') + "`n"))
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $Exe @Arguments *>> $Log
+        & $Exe @Arguments 2>&1 | ForEach-Object { [System.IO.File]::AppendAllText($Log, "$_`n") }
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prev
@@ -333,7 +342,7 @@ function Initialize-Source([string]$LongLeg, [string]$Work) {
         New-Item -ItemType Directory -Force -Path $src | Out-Null
         if ((Invoke-Logged $log 'git' @('-C', $src, 'init', '-q')) -ne 0) { throw "git init failed; see $log" }
     }
-    $have = (& git -C $src rev-parse -q --verify "$commit^{commit}" 2>$null)
+    $have = (Invoke-Native 'git' @('-C', $src, 'rev-parse', '-q', '--verify', "$commit^{commit}"))
     if (-not $have) {
         Write-Line 'unpacking the source from the drive''s bundle (full history)'
         if ((Invoke-Logged $log 'git' @('-C', $src, 'fetch', '-q', $bundle, '+refs/*:refs/bundle/*')) -ne 0) { throw "git fetch from the bundle failed; see $log" }
@@ -378,8 +387,9 @@ function Invoke-Build([string]$Work, [string]$Src, [string]$Commit, [string]$Too
     switch ($Toolchain) {
         'msvc' { $cfg = @('-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl') }
         'clangcl' {
-            $cc = Join-Path $script:LlvmBin 'clang-cl.exe'
-            $ld = Join-Path $script:LlvmBin 'lld-link.exe'
+            # Forward slashes: CMake reads a backslash in a -D value as an escape ("Syntax error in cmake code").
+            $cc = (Join-Path $script:LlvmBin 'clang-cl.exe').Replace('\', '/')
+            $ld = (Join-Path $script:LlvmBin 'lld-link.exe').Replace('\', '/')
             $cfg = @('-DCMAKE_BUILD_TYPE=Release', "-DCMAKE_C_COMPILER=$cc", "-DCMAKE_CXX_COMPILER=$cc", "-DCMAKE_LINKER=$ld")
         }
         'msvc-asan' {
@@ -635,13 +645,17 @@ function Enter-Lock([string]$Results) {
         $other = Read-KeyValue $lock
         if ($other['pid']) {
             $proc = Get-Process -Id ([int]$other['pid']) -ErrorAction SilentlyContinue
-            if ($proc -and $proc.StartTime.ToString('s') -eq $other['started']) {
+            $procStarted = $null
+            # After a reboot the pid may belong to a system process, whose StartTime throws access denied.
+            if ($proc) { try { $procStarted = $proc.StartTime.ToString('s') } catch { $procStarted = $null } }
+            if ($procStarted -and $procStarted -eq $other['started']) {
                 throw "the kit is already running (process $($other['pid'])); close that window first"
             }
         }
     }
     $me = Get-Process -Id $PID
     Write-KeyValue $lock @{ pid = $PID; started = $me.StartTime.ToString('s') }
+    $script:LockHeld = $true
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -675,7 +689,8 @@ switch ($Mode) {
     $launch = {
         param($p)
         @{ Exe = $shell; Dir = $root; Env = @{ LONGLEG_SELFTEST = $p.Id }
-           Arguments = @('-NoProfile', '-File', $fake, ('=' + $p.Cell), $p.Binary, (Join-Path $root ($p.Id + '.flag'))) }
+           Arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $fake + '"'), ('=' + $p.Cell), $p.Binary,
+                         ('"' + (Join-Path $root ($p.Id + '.flag')) + '"')) }   # Start-Process joins these unquoted; %TEMP% may hold a space
     }.GetNewClosure()
     $src = @{ Commit = ('0' * 40); Branch = 'self-test' }
     $fails = New-Object System.Collections.Generic.List[string]
@@ -713,7 +728,7 @@ switch ($Mode) {
     Invoke-Queue $pieces $launch $results 2 { }
     Assert (@(Get-ChildItem -LiteralPath $results -Filter '*.out.log').Count -eq $before + 1) 'deleting one .done reruns that piece only'
 
-    Assert ((Get-Pieces @('msvc') @('msvc__T.2')).Count -eq 1) '-Only selects by id prefix'
+    Assert (@(Get-Pieces @('msvc') @('msvc__T.2')).Count -eq 1) '-Only selects by id prefix'
     Remove-Item -LiteralPath $root -Recurse -Force
     if ($fails.Count -gt 0) { Write-Host "self-test: $($fails.Count) failure(s)"; return 1 }
     Write-Host 'self-test: 0 failures'
@@ -818,6 +833,6 @@ try {
         Remove-ResumeHook
     }
 } finally {
-    Remove-Item -LiteralPath (Join-Path $results 'kit.lock') -ErrorAction SilentlyContinue
+    if ($script:LockHeld) { Remove-Item -LiteralPath (Join-Path $results 'kit.lock') -ErrorAction SilentlyContinue }
     Stop-Transcript | Out-Null
 }
