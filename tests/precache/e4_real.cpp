@@ -51,6 +51,34 @@ bool RequireRealRuleB(Fixture& fx,int64_t plan_b,const char* cell) {
     return engine==rule && fx.B()==rule && rule==plan_b && geometry;
 }
 
+// A real fixture built by hand from its mapped artifact. The Fixture takes the artifact's bytes with the mapping, so
+// the helpers that read the artifact itself (ArtifactHiddenSize through Header(), the SPX1 size checks) see it: before
+// this, fx.bytes stayed empty on the real fixtures and every such check refused "lacks an SSLM section header" (found by
+// the cloud stand-in run, 2026-10-22). The vocabulary is CFG1's, so a stand-in with the real K/V geometry runs the same
+// cell; on the real artifacts it reads 151,936. Declared after the ModelFile it empties, so it unmaps first.
+void TakeRealArtifact(Fixture& fx,ModelFile& file,Geometry geo) {
+    fx.model=file.model; file.model=nullptr;
+    fx.bytes.p=file.bytes.p; fx.bytes.n=file.bytes.n; file.bytes.p=nullptr; file.bytes.n=0;
+    fx.size=file.size;
+    fx.geo=geo;
+    fx.vocab=0;
+    const uint8_t* b=fx.bytes.p;
+    auto u32=[](const uint8_t* q){return uint32_t(q[0])|uint32_t(q[1])<<8|uint32_t(q[2])<<16|uint32_t(q[3])<<24;};
+    auto u64=[&](const uint8_t* q){return uint64_t(u32(q))|uint64_t(u32(q+4))<<32;};
+    if(b && fx.size>=superslm::kHeaderBytes) {
+        const uint32_t count=u32(b+12);
+        for(uint32_t i=0;i<count && i<superslm::kMaxSections;++i) {
+            const uint8_t* row=b+superslm::kHeaderBytes+size_t(i)*superslm::kSectionDescBytes;
+            if(size_t(row-b)+superslm::kSectionDescBytes>fx.size) break;
+            if(u32(row)!=uint32_t(superslm::SslmSectionType::Config)) continue;
+            const uint64_t off=u64(row+8),len=u64(row+16);
+            if(len>=40 && off<=fx.size && len<=fx.size-off && std::memcmp(b+off,"CFG1",4)==0)
+                fx.vocab=int32_t(u32(b+off+32));
+        }
+    }
+    PKV_CHECK_MSG(fx.vocab>0,"real artifact has no readable CFG1 vocabulary");
+}
+
 // 10.2's draw (rev 1.14 S2, rev 1.16 L3): a rebuildable state for the two-sided fill probe -- a fresh page pool of
 // `pages`, the world restored into it from its blob, then (when `child` is set) the persona child restored against
 // that world as its hint. Handles are released before the pool is destroyed.
@@ -132,8 +160,7 @@ void Real101() {
     if(model.status!=SSLM_OK) return;
     const auto model_sha=Sha(model.bytes.p,model.size);
     Fixture fx;
-    fx.model=model.model; model.model=nullptr;
-    fx.geo={24,2,64,32768}; fx.vocab=151936;
+    TakeRealArtifact(fx,model,{24,2,64,32768});
     if(!RequireRealRuleB(fx,kPlanB0p5,"10.1 real 0.5B")) return;
     // Pools at the rule B (rev 1.14 S2): CapPages() and R() read fx.B(), the rule.
     // One flat prefix is live at a time. The legacy adopter reserves all
@@ -244,18 +271,10 @@ void CrossCompiler43() {
 }
 PKV_CELL("4.3/E4", "E1", CrossCompiler43);
 
-void Timing103() {
-    const auto model_path=Env("SUPERSLM_PRECACHE_REAL_MODEL");
-    const auto prompts=Env("SUPERSLM_PRECACHE_PROMPT_DIR");
-    if(model_path.empty() || prompts.empty()) return;
-    ModelFile model(model_path);
-    Status(model.status,SSLM_OK,"10.3 real model map");
-    if(model.status!=SSLM_OK) return;
-    Fixture fx;
-    fx.model=model.model; model.model=nullptr;
-    fx.geo={24,2,64,32768}; fx.vocab=151936;
-    if(!RequireRealRuleB(fx,kPlanB0p5,"10.3 real 0.5B")) return;
-    PagePool pool(fx.model,300);
+// 10.3's commissioned timing receipt (F12): the 13-field PC-TIMING-1 record the debunker writes after commissioning the
+// instrument, bound to this box, one thread, both rule-B geometries, the 0.5B model, the prompt manifest, the instrument
+// source and the anchor. Readings taken without it are refused, so nothing is acted on before commissioning (§8).
+bool TimingReceiptCommissioned(const std::string& model_sha) {
     const auto receipt_path=Env("SUPERSLM_PRECACHE_TIMING_RECEIPT");
     const auto instrument_path=Env("SUPERSLM_PRECACHE_TIMING_INSTRUMENT");
     const auto prompt_manifest=Env("SUPERSLM_PRECACHE_TIMING_PROMPT_MANIFEST");
@@ -276,18 +295,53 @@ void Timing103() {
         // 896 KiB at 1.5B), so the receipt names each geometry with its rule B, computed here, not B = 16.
         field("geometry")==std::string("0p5:24x2x64x32768:B=")+std::to_string(E4RuleB(64,32768,1))+
                            ";1p5:28x2x128x32768:B="+std::to_string(E4RuleB(128,32768,1)) &&
-        field("model_sha256")==Sha(model.bytes.p,model.size) &&
+        field("model_sha256")==model_sha &&
         field("prompt_manifest_sha256")==ShaFile(prompt_manifest) &&
         field("instrument_sha256")==ShaFile(instrument_path) &&
         field("anchor")==Env("SUPERSLM_PRECACHE_TIMING_ANCHOR");
     PKV_CHECK_MSG(commissioned,"10.3 timing receipt identity or independent commission is invalid");
-    if(!commissioned) return;
+    return commissioned;
+}
+
+// The box crashes on long runs (plan R12), so 10.3's paired run is taken in slices of the ten prefixes, each in its own
+// process: SUPERSLM_PRECACHE_TIMING_PREFIXES = "first-last" (inclusive, 0-9; unset = all ten). Every prefix is graded
+// in the slice that times it, and E4's receipt needs all ten graded across the slices.
+bool TimingSlice(int* first,int* last) {
+    *first=0; *last=9;
+    const char* v=std::getenv("SUPERSLM_PRECACHE_TIMING_PREFIXES");
+    if(!v || !*v) return true;
+    int a=-1,b=-1;
+    char extra=0;
+    const bool ok=std::sscanf(v,"%d-%d%c",&a,&b,&extra)==2 && 0<=a && a<=b && b<=9;
+    PKV_CHECK_MSG(ok,"10.3 SUPERSLM_PRECACHE_TIMING_PREFIXES must read first-last within 0-9, got '%s'",v);
+    if(ok) {*first=a; *last=b;}
+    return ok;
+}
+
+void Timing103() {
+    const auto model_path=Env("SUPERSLM_PRECACHE_REAL_MODEL");
+    const auto prompts=Env("SUPERSLM_PRECACHE_PROMPT_DIR");
+    if(model_path.empty() || prompts.empty()) return;
+    int first=0,last=9;
+    if(!TimingSlice(&first,&last)) return;
+    ModelFile model(model_path);
+    Status(model.status,SSLM_OK,"10.3 real model map");
+    if(model.status!=SSLM_OK) return;
+    Fixture fx;
+    TakeRealArtifact(fx,model,{24,2,64,32768});
+    if(!RequireRealRuleB(fx,kPlanB0p5,"10.3 real 0.5B")) return;
+    PagePool pool(fx.model,300);
+    const auto receipt_path=Env("SUPERSLM_PRECACHE_TIMING_RECEIPT");
+    const auto box=Env("SUPERSLM_PRECACHE_BOX_ID");
+    const auto threads=Env("SUPERSLM_PRECACHE_THREADS");
+    if(!TimingReceiptCommissioned(Sha(fx.bytes.p,fx.size))) return;
     const auto receipt_sha=ShaFile(receipt_path);
     constexpr int kPairs=8;
     constexpr double kStudent95=2.365; // two-sided t_0.975,7.
     const double tick_ms=1000.0*double(std::chrono::steady_clock::period::num)/
                          double(std::chrono::steady_clock::period::den);
-    for(int i=0;i<10;++i) {
+    int graded=0;
+    for(int i=first;i<=last;++i) {
         char name[16]; std::snprintf(name,sizeof(name),"flat%02d",i);
         const auto ids=Ids(fs::path(prompts)/(std::string(name)+".ids"));
         if(ids.empty()) return;
@@ -331,37 +385,87 @@ void Timing103() {
         std::printf("10.3 receipt=%s box=%s threads=%s geometry=0p5 B=%lld %s pairs=%d bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f ratio95=[%.1f,%.1f]\n",
                     receipt_sha.c_str(),box.c_str(),threads.c_str(),static_cast<long long>(fx.B()),name,kPairs,bytes,
                     prefill_sum/kPairs,restore_sum/kPairs,lower,upper);
+        std::fflush(stdout);
         PKV_CHECK_MSG(lower>=1000,
                       "10.3 %s threshold unresolved or missed: 95%% ratio interval [%.1f,%.1f]",
                       name,lower,upper);
+        if(lower>=1000) ++graded;
     }
+    std::printf("10.3 slice flat%02d-flat%02d: %d of %d prefixes resolved at or above 1000x\n",first,last,graded,
+                last-first+1);
+    PKV_CHECK_EQ(graded,last-first+1);
+}
+PKV_CELL("10.3/E4", "E1", Timing103);
+
+// 10.3's worst reachable setting (§7 10.3; F12): a cap-length prefix at 1.5B geometry, its restore recorded as ms and
+// MiB/s for the plugin's cost model. Recorded, not graded against a bar. Its prefill (32,768 tokens at 1.5B, one
+// thread) runs far past the home box's safe run length (R12), so the leg has two phases in separate processes:
+//   SUPERSLM_PRECACHE_WORST_PHASE=capture  builds the prefix by prefill and saves it to SUPERSLM_PRECACHE_WORST_BLOB
+//                                          (written beside the target, then renamed, so a crash leaves no partial
+//                                          blob); it runs on any machine at the same source revision;
+//   SUPERSLM_PRECACHE_WORST_PHASE=restore  on the box, under the commissioned receipt: the blob's size must be header +
+//                                          hidden + 32,768 canonical rows, then three restores are timed.
+// The restore validates the blob (digest included) against the mapped 1.5B artifact and this build's producer, so a
+// blob from another build or model is refused, not timed.
+void Worst103() {
     const auto worst_path=Env("SUPERSLM_PRECACHE_REAL_1P5_MODEL");
-    if(worst_path.empty()) return;
+    const auto blob_path=Env("SUPERSLM_PRECACHE_WORST_BLOB");
+    const auto phase=Env("SUPERSLM_PRECACHE_WORST_PHASE");
+    if(worst_path.empty() || blob_path.empty()) return;
+    PKV_CHECK_MSG(phase=="capture" || phase=="restore","10.3 worst phase must name capture or restore");
+    if(phase!="capture" && phase!="restore") return;
     ModelFile worst(worst_path);
     Status(worst.status,SSLM_OK,"10.3 1.5B worst-setting map");
     if(worst.status!=SSLM_OK) return;
     Fixture wf;
-    wf.model=worst.model; worst.model=nullptr;
-    wf.geo={28,2,128,32768}; wf.vocab=151936;
+    TakeRealArtifact(wf,worst,{28,2,128,32768});
     if(!RequireRealRuleB(wf,kPlanB1p5,"10.3 real 1.5B")) return;
     PagePool worst_pool(wf.model,uint32_t(wf.CapPages()+4));
     Status(worst_pool.status,SSLM_OK,"10.3 cap-length pool");
     if(worst_pool.status!=SSLM_OK) return;
-    sslm_prefix cap_prefix=nullptr;
-    const auto cap_start=std::chrono::steady_clock::now();
-    Status(sslm_prefix_begin_budgeted(wf.model,&worst_pool.pool,32768,&cap_prefix),
-           SSLM_OK,"10.3 cap-length begin");
-    if(!cap_prefix) return;
-    Status(PrefixPrefillAll(wf.model,cap_prefix,Stream(41,32768,wf.vocab),64),
-           SSLM_OK,"10.3 cap-length prefill");
-    Status(sslm_prefix_freeze(cap_prefix),SSLM_OK,"10.3 cap-length freeze");
-    const auto cap_prefill_end=std::chrono::steady_clock::now();
-    const auto cap_blob=Save(cap_prefix);
-    if(!RequireBlob(cap_blob,"10.3 cap-length")) {sslm_prefix_release(cap_prefix);return;}
-    PKV_CHECK_MSG(cap_blob.size()==kHeader+ArtifactHiddenSize(wf)+
-                  size_t(32768)*wf.BytesPerToken(),
-                  "10.3 cap-length 1.5B byte count omits header, digest or canonical rows");
-    sslm_prefix_release(cap_prefix);
+    const size_t expected=kHeader+ArtifactHiddenSize(wf)+size_t(32768)*wf.BytesPerToken();
+    if(phase=="capture") {
+        sslm_prefix cap_prefix=nullptr;
+        const auto cap_start=std::chrono::steady_clock::now();
+        Status(sslm_prefix_begin_budgeted(wf.model,&worst_pool.pool,32768,&cap_prefix),
+               SSLM_OK,"10.3 cap-length begin");
+        if(!cap_prefix) return;
+        Status(PrefixPrefillAll(wf.model,cap_prefix,Stream(41,32768,wf.vocab),64),
+               SSLM_OK,"10.3 cap-length prefill");
+        Status(sslm_prefix_freeze(cap_prefix),SSLM_OK,"10.3 cap-length freeze");
+        const auto cap_prefill_end=std::chrono::steady_clock::now();
+        const auto cap_blob=Save(cap_prefix);
+        sslm_prefix_release(cap_prefix);
+        if(!RequireBlob(cap_blob,"10.3 cap-length")) return;
+        PKV_CHECK_MSG(cap_blob.size()==expected,
+                      "10.3 cap-length 1.5B byte count omits header, digest or canonical rows");
+        if(cap_blob.size()!=expected) return;
+        const fs::path target(blob_path),partial(blob_path+".partial");
+        {
+            std::ofstream out(partial,std::ios::binary|std::ios::trunc);
+            out.write(reinterpret_cast<const char*>(cap_blob.data()),std::streamsize(cap_blob.size()));
+            out.flush();
+            PKV_CHECK_MSG(bool(out),"10.3 cap-length blob write failed: %s",partial.string().c_str());
+            if(!out) return;
+        }
+        std::error_code ec;
+        fs::remove(target,ec);
+        fs::rename(partial,target,ec);
+        PKV_CHECK_MSG(!ec,"10.3 cap-length blob rename failed: %s",ec.message().c_str());
+        std::printf("10.3 worst capture cap=32768 geometry=1p5 28x2x128 B=%lld bytes_including_digest=%zu "
+                    "blob_sha256=%s prefill_ms=%.3f\n",static_cast<long long>(wf.B()),cap_blob.size(),
+                    Sha(cap_blob.data(),cap_blob.size()).c_str(),
+                    std::chrono::duration<double,std::milli>(cap_prefill_end-cap_start).count());
+        return;
+    }
+    if(!TimingReceiptCommissioned(ShaFile(Env("SUPERSLM_PRECACHE_REAL_MODEL")))) return;
+    const auto receipt_sha=ShaFile(Env("SUPERSLM_PRECACHE_TIMING_RECEIPT"));
+    std::vector<uint8_t> cap_blob;
+    PKV_CHECK_MSG(ReadAll(blob_path,&cap_blob),"10.3 worst blob missing: %s (run the capture phase first)",
+                  blob_path.c_str());
+    PKV_CHECK_MSG(cap_blob.size()==expected,"10.3 worst blob is %zu bytes; a cap-length 1.5B blob is %zu",
+                  cap_blob.size(),expected);
+    if(cap_blob.size()!=expected) return;
     double cap_restore_ms=0;
     for(int i=0;i<3;++i) {
         sslm_prefix restored=nullptr;
@@ -370,17 +474,19 @@ void Timing103() {
         const auto end=std::chrono::steady_clock::now();
         Status(st,SSLM_OK,"10.3 cap-length restore");
         if(st!=SSLM_OK) return;
+        if(i==0) PKV_CHECK_MSG(Save(restored)==cap_blob,"10.3 cap-length restore does not re-save the same bytes");
         cap_restore_ms+=std::chrono::duration<double,std::milli>(end-begin).count();
         sslm_prefix_release(restored);
     }
     cap_restore_ms/=3.0;
-    const double cap_prefill_ms=std::chrono::duration<double,std::milli>(cap_prefill_end-cap_start).count();
     const double mib=double(cap_blob.size())/(1024.0*1024.0);
-    std::printf("10.3 receipt=%s box=%s threads=%s worst cap=32768 geometry=1p5 28x2x128 B=%lld bytes_including_digest=%zu prefill_ms=%.3f restore_ms=%.3f MiB=%.3f MiB/s=%.1f\n",
-                receipt_sha.c_str(),box.c_str(),threads.c_str(),static_cast<long long>(wf.B()),cap_blob.size(),
-                cap_prefill_ms,cap_restore_ms,mib,1000.0*mib/cap_restore_ms);
+    std::printf("10.3 receipt=%s box=%s threads=%s worst cap=32768 geometry=1p5 28x2x128 B=%lld "
+                "bytes_including_digest=%zu blob_sha256=%s restore_ms=%.3f MiB=%.3f MiB/s=%.1f\n",
+                receipt_sha.c_str(),Env("SUPERSLM_PRECACHE_BOX_ID").c_str(),Env("SUPERSLM_PRECACHE_THREADS").c_str(),
+                static_cast<long long>(wf.B()),cap_blob.size(),Sha(cap_blob.data(),cap_blob.size()).c_str(),
+                cap_restore_ms,mib,1000.0*mib/cap_restore_ms);
 }
-PKV_CELL("10.3/E4", "E1", Timing103);
+PKV_CELL("10.3/E4:worst", "E4", Worst103);
 
 void Real102() {
     const auto model_path=Env("SUPERSLM_PRECACHE_REAL_MODEL");
@@ -392,8 +498,7 @@ void Real102() {
     if(model.status!=SSLM_OK) return;
     const auto model_sha=Sha(model.bytes.p,model.size);
     Fixture fx;
-    fx.model=model.model; model.model=nullptr;
-    fx.geo={24,2,64,32768}; fx.vocab=151936;
+    TakeRealArtifact(fx,model,{24,2,64,32768});
     if(!RequireRealRuleB(fx,kPlanB0p5,"10.2 real 0.5B")) return;
     const auto world_ids=Ids(fs::path(prompts)/"world.ids");
     if(world_ids.empty()) return;
@@ -577,8 +682,7 @@ void Parallel66RuleB() {
     Status(model.status,SSLM_OK,"6.6 rule-B real model map");
     if(model.status!=SSLM_OK) return;
     Fixture fx;
-    fx.model=model.model; model.model=nullptr;
-    fx.geo={24,2,64,32768}; fx.vocab=151936;
+    TakeRealArtifact(fx,model,{24,2,64,32768});
     if(!RequireRealRuleB(fx,kPlanB0p5,"6.6 rule-B")) return;
     const int64_t B=fx.B();
     constexpr int kL=300;
@@ -623,8 +727,13 @@ void Parallel66RuleB() {
         if(ta>=0 && ta==tc) ++equal;
     }
     PKV_CHECK_EQ(equal,32);
-    PKV_CHECK_MSG(counts.calls>0 && counts.tasks>0,
-                  "6.6 rule-B installed parallel hook never ran (calls=%d, tasks=%d)",
+    // F13: the hook ran. And more than the finish's one call per token: the projections split at this artifact's
+    // geometry at the shipping minimum work (no seam here), so the matvec mutant is reachable on this leg. On the real
+    // 0.5B the query, gate, up and down projections each exceed 256 KiB of weight; a narrow stand-in reads 32 calls
+    // and cannot carry the mutant (recorded, 2026-10-22).
+    std::printf("6.6 rule-B hook: calls=%d tasks=%d over 32 tokens\n",int(counts.calls),int(counts.tasks));
+    PKV_CHECK_MSG(counts.calls>32 && counts.tasks>0,
+                  "6.6 rule-B installed parallel hook never split a projection (calls=%d over 32 tokens, tasks=%d)",
                   int(counts.calls),int(counts.tasks));
     Status(sslm_workspace_destroy(ws),SSLM_OK,"6.6 rule-B workspace destroy");
 }

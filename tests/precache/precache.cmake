@@ -58,6 +58,45 @@ target_sources(superslm_precache_unpinned PRIVATE ${PC_DIR}/unpinned/e5_unpinned
 target_compile_definitions(superslm_precache_unpinned PRIVATE PC_REFERENCE_DIR="${PC_DIR}/reference")
 target_compile_definitions(superslm_precache_unpinned_getfixture_receipt PRIVATE
     PKV_PIN_GENERATED_FIXTURES=1 PC_UNPINNED_RECEIPT_VIA_GETFIXTURE=1)
+# §8, R13: the licensed reference population is regenerated at every new `git merge-base HEAD <line>`. Its generator is
+# T-3035's prefill-only harness, carried verbatim from origin/curie/t3035-precache-refs (972d5b7b; both files last
+# changed at abe60753), so the box builds the same capture code beside the engine it anchors to. It links the shipping
+# library (no test seams) and calls no save or restore verb. Its header's anchor is the merge-base read when this tree
+# is configured; when the engine sources at HEAD differ from that anchor's, or the history is shallow, the anchor is
+# written as "unanchored-...", which every grading refuses (precache_reference.h). Reconfigure before regenerating.
+add_executable(superslm_precache_reference_gen EXCLUDE_FROM_ALL ${PC_DIR}/reference/t3035_reference.cpp)
+target_include_directories(superslm_precache_reference_gen PRIVATE include src)
+target_link_libraries(superslm_precache_reference_gen PRIVATE superslm)
+set(PC_GEN_ANCHOR "unanchored-no-git")
+set(PC_GEN_HARNESS "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --is-shallow-repository
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} OUTPUT_VARIABLE pc_shallow OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} OUTPUT_VARIABLE PC_GEN_HARNESS OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND ${GIT_EXECUTABLE} merge-base HEAD ${PRECACHE_REFERENCE_LINE}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} RESULT_VARIABLE pc_mb_rc
+        OUTPUT_VARIABLE pc_mb OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(NOT pc_shallow STREQUAL "false")
+        set(PC_GEN_ANCHOR "unanchored-shallow-history")
+    elseif(NOT pc_mb_rc EQUAL 0 OR NOT pc_mb MATCHES "^[0-9a-f]+$")
+        set(PC_GEN_ANCHOR "unanchored-no-merge-base")
+    else()
+        execute_process(COMMAND ${GIT_EXECUTABLE} diff --quiet ${pc_mb} HEAD -- src include CMakeLists.txt
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} RESULT_VARIABLE pc_engine_diff)
+        if(pc_engine_diff EQUAL 0)
+            set(PC_GEN_ANCHOR "${pc_mb}")
+        else()
+            set(PC_GEN_ANCHOR "unanchored-engine-differs-from-${pc_mb}")
+        endif()
+    endif()
+endif()
+if(NOT PC_GEN_ANCHOR MATCHES "^[0-9a-f]+$")
+    message(STATUS "superslm_precache_reference_gen: references would be written ${PC_GEN_ANCHOR}")
+endif()
+target_compile_definitions(superslm_precache_reference_gen PRIVATE
+    T3035_ENGINE_ANCHOR="${PC_GEN_ANCHOR}" T3035_HARNESS_COMMIT="${PC_GEN_HARNESS}")
 find_package(Python3 COMPONENTS Interpreter)
 # Plan rev 1.18.1 (§8, R13): after M1 this plan's work runs on a post-M1 branch cut from main at the squash, and the
 # line is origin/main. git merge-base HEAD origin/main then moves exactly when a main commit is merged into the
