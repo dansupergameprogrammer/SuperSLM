@@ -11,7 +11,8 @@ F14, one check-removal mutant per clause of the SPX1 reader's validation (spx1::
   no-size no-magic no-digest no-backend no-producer-version no-producer-adapter no-model no-kv-precision
   no-schema-unresolved no-schema-walk no-unbound-walk no-length-negative no-length-cap no-size-exact
   no-origin-negative no-origin-past-length no-token-empty no-token-negative no-token-vocab no-scale-m
-F6:  step45-swap               the domain checks (step 5) run before the schema check (step 4)
+F6:  step45-swap               the plan's step-4/5 swap: the producer check (§3.4 step 5) before the backend's (step 4)
+     step78-swap               the domain checks (step 8) before the schema check (step 7)
 F7:  first-compatible-schema   the schema resolved as the first one whose states admit the walk, not by name
 F3:  draw-first-and-return     restore draws a page before validating and returns it, so a zero-free pool answers
                                every input with its capacity status
@@ -31,6 +32,17 @@ SCHEMA_BLOCK = """	const uint64_t schema_hash = Get64(p, 96);
 		schema_index = static_cast<int32_t>(idx);
 	} else if (walk != kWalkUnbound) {
 		return Verdict::kSchema;
+	}
+"""
+BACKEND = "\tif (Get32(p, 4) != x.backend) return Verdict::kBackend;\n"
+PRODUCER = """	// The producer: engine version, adapter vendor and device.
+	uint32_t vendor = 0, device = 0;
+	if (x.adapter_ids != nullptr && !x.adapter_ids(x.adapter_user, &vendor, &device)) {
+		return Verdict::kAdapterUnavailable;
+	}
+	if (Get32(p, 8) != SUPERSLM_VERSION_MAJOR || Get32(p, 12) != SUPERSLM_VERSION_MINOR ||
+	    Get32(p, 16) != SUPERSLM_VERSION_PATCH || Get32(p, 20) != vendor || Get32(p, 24) != device) {
+		return Verdict::kProducer;
 	}
 """
 DOMAIN_BLOCK = """	const int64_t length = static_cast<int64_t>(Get64(p, 112));
@@ -98,7 +110,9 @@ M = {
     "no-token-vocab": (SPX1, "(length > 0 && (token < 0 || static_cast<uint64_t>(token) >= x.vocab_size))) {",
                        "(length > 0 && token < 0)) {  // MUTANT no-token-vocab"),
     "no-scale-m": (SPX1, "if (m < INT32_MIN || m > INT32_MAX) return Verdict::kDomain;", "// MUTANT no-scale-m"),
-    "step45-swap": (SPX1, SCHEMA_DOMAIN, "\t// MUTANT step45-swap: the domains before the schema\n" + DOMAIN_BLOCK + SCHEMA_BLOCK),
+    "step45-swap": (SPX1, BACKEND + PRODUCER,
+                    PRODUCER + "\t// MUTANT step45-swap: the producer (step 5) before the backend (step 4)\n" + BACKEND),
+    "step78-swap": (SPX1, SCHEMA_DOMAIN, "\t// MUTANT step78-swap: the domains (step 8) before the schema (step 7)\n" + DOMAIN_BLOCK + SCHEMA_BLOCK),
     "first-compatible-schema": (SPX1,
         "const SchemaEntry* entry = x.schemas != nullptr ? x.schemas->ByNameHash(schema_hash, &idx) : nullptr;",
         "const SchemaEntry* entry = nullptr;  // MUTANT first-compatible-schema\n"

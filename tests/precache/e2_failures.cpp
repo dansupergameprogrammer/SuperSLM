@@ -307,6 +307,10 @@ void Precedence57() {
         PagePool zero(fx.model,8);
         std::vector<sslm_seq> held;
         PKV_CHECK_MSG(AdmitPages(fx,&zero.pool,8,&held),"5.7 zero-free pool did not admit all eight pages");
+        sslm_seq extra=nullptr; // built as 5.6: a 2-page create refused confirms exactly zero free.
+        Status(sslm_seq_create_budgeted(fx.model,&zero.pool,16,&extra),SSLM_KV_POOL_EXHAUSTED,
+               "5.7 zero-free confirmation");
+        if(extra) sslm_seq_release(extra);
         auto b=good;
         PutLe64(b,112,above_cap);
         Digest(b);
