@@ -59,7 +59,10 @@ target_compile_definitions(superslm_precache_unpinned PRIVATE PC_REFERENCE_DIR="
 target_compile_definitions(superslm_precache_unpinned_getfixture_receipt PRIVATE
     PKV_PIN_GENERATED_FIXTURES=1 PC_UNPINNED_RECEIPT_VIA_GETFIXTURE=1)
 find_package(Python3 COMPONENTS Interpreter)
-set(PRECACHE_REFERENCE_LINE "origin/claude/shared-prefix-kv-build-wj8q9c" CACHE STRING
+# Plan rev 1.18.1 (§8, R13): after M1 this plan's work runs on a post-M1 branch cut from main at the squash, and the
+# line is origin/main. git merge-base HEAD origin/main then moves exactly when a main commit is merged into the
+# branch, so every foreign commit taken in forces the population to be regenerated and licensed before grading.
+set(PRECACHE_REFERENCE_LINE "origin/main" CACHE STRING
     "Line whose merge-base anchors licensed precache references")
 set(PC_MERGE_BASE_FILE "${CMAKE_CURRENT_BINARY_DIR}/precache-reference-merge-base.txt")
 if(Python3_Interpreter_FOUND)
