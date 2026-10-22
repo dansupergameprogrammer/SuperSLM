@@ -10,8 +10,13 @@ post-M1 branch: C-D), so it never depends on how the source tree was cloned, and
   (ii)  the same clone after `git fetch --unshallow`: the fixture records the true merge-base and exits 0.
 
 Mutant: the fixture's shallow check removed. (i)'s first clone then records C as an anchor and exits 0, and this cell
-goes red. The reference cells take the anchor through ctest's FIXTURES_REQUIRED, so a refusal here leaves them not run
-(a failure, never a skip), and the loader refuses any file that is not a 40-hex anchor.
+goes red.
+
+This cell grades the fixture only. The rest of §15.28 (i)'s chain is not asserted here: the reference cells take the
+anchor through ctest's FIXTURES_REQUIRED, so a fixture refusal leaves them Not Run (counted failed, never skipped), and
+the loader (precache_reference.h) refuses any anchor that is not 40 characters. Its one-time receipt, a --depth 1 clone
+of the post-M1 branch where `ctest -R '^superslm_precache_e2_reference$'` reports the anchor refusal and e2_reference
+Not Run, is in the plan's build record post-m1-cloud-2026-10-22.md.
 """
 
 import os
