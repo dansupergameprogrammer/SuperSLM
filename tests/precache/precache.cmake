@@ -96,6 +96,9 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/write_merge_base.py
             ${CMAKE_CURRENT_SOURCE_DIR} ${PRECACHE_REFERENCE_LINE} ${PC_MERGE_BASE_FILE})
     set_tests_properties(superslm_precache_reference_anchor PROPERTIES FIXTURES_SETUP precache_reference)
+    # Plan rev 1.18.9 §15.28 item 2 (§8): the anchor fixture refuses a shallow history, on a repository of the cell's own.
+    add_test(NAME superslm_precache_merge_base_shallow
+        COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/test_merge_base_shallow.py)
     add_test(NAME superslm_precache_real_two_process
         COMMAND ${Python3_EXECUTABLE} ${PC_DIR}/run_real_two_process.py
             $<TARGET_FILE:superslm_precache_e1>)
