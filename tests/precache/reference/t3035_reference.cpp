@@ -117,15 +117,29 @@ void WriteRow(std::ofstream& out, Input& in, Pool& pool, sslm_prefix prefix,
         throw std::runtime_error("real stream ended before token 64: " + id);
 }
 
+// Plan rev 1.18.13 §15.33 (a): the discrimination record a header binds is named per stem by the caller, with no
+// default, and exactly that file is hashed. RECORD is a path holding "{id}" once, replaced by the stem (flat00,
+// nested03, ...), e.g. ...\discrimination-v2\P1-real0p5-flat\{id}.stream.json. Which record is licensed is the
+// run sheet's call, never this program's.
+fs::path RecordPath(const std::string& pattern, const std::string& id) {
+    const size_t at = pattern.find("{id}");
+    if (at == std::string::npos || pattern.find("{id}", at + 1) != std::string::npos)
+        throw std::runtime_error("RECORD must contain {id} exactly once: " + pattern);
+    std::string path = pattern;
+    path.replace(at, 4, id);
+    if (!fs::is_regular_file(path)) throw std::runtime_error("discrimination record missing: " + path);
+    return fs::path(path);
+}
+
 void CapturePrefix(Input& in, Pool& pool, sslm_prefix prefix, const fs::path& prompt_dir,
                    const fs::path& output_dir, const std::string& id, size_t length,
                    size_t page_positions, size_t origin, bool damped_available,
                    const std::string& model_sha, const std::string& tokenizer,
                    const std::string& id_suffix, const std::string& run_label,
-                   const fs::path& discrimination_dir) {
+                   const std::string& record_pattern) {
     const fs::path source = prompt_dir / (id + ".txt");
     const fs::path ids = prompt_dir / (id + "." + id_suffix);
-    const fs::path discrimination = discrimination_dir / (id + ".discrimination.json");
+    const fs::path discrimination = RecordPath(record_pattern, id);
     const fs::path output = output_dir / (id + "-" + run_label + ".ref");
     std::ofstream out(output, std::ios::binary | std::ios::trunc);
     if (!out) throw std::runtime_error("reference output open failed: " + output.string());
@@ -155,9 +169,10 @@ void CapturePrefix(Input& in, Pool& pool, sslm_prefix prefix, const fs::path& pr
 #ifndef T3035_NO_MAIN
 int main(int argc, char** argv) {
     try {
-        if (argc != 9 && argc != 10) throw std::runtime_error("usage: t3035_reference MODEL PROMPT_DIR OUT_DIR flat|nested run1|run2 TOKENIZER ID_SUFFIX DISCRIM_DIR [COUNT]");
-        const fs::path prompt_dir(argv[2]), output_dir(argv[3]), discrimination_dir(argv[8]);
+        if (argc != 9 && argc != 10) throw std::runtime_error("usage: t3035_reference MODEL PROMPT_DIR OUT_DIR flat|nested run1|run2 TOKENIZER ID_SUFFIX RECORD [COUNT]  (RECORD: record path with {id} for the stem, no default)");
+        const fs::path prompt_dir(argv[2]), output_dir(argv[3]);
         const std::string shape(argv[4]), run_label(argv[5]), tokenizer(argv[6]), id_suffix(argv[7]);
+        const std::string record_pattern(argv[8]);
         if (shape != "flat" && shape != "nested") throw std::runtime_error("invalid shape");
         if (run_label != "run1" && run_label != "run2") throw std::runtime_error("invalid run label");
         const int count = argc == 10 ? std::stoi(argv[9]) : 10;
@@ -179,7 +194,7 @@ int main(int argc, char** argv) {
                 Check(sslm_prefix_freeze(prefix.p), "prefix_freeze");
                 CapturePrefix(in, pool, prefix.p, prompt_dir, output_dir, id, ids.size(),
                               page_positions, 0, damped, model_sha, tokenizer, id_suffix, run_label,
-                              discrimination_dir);
+                              record_pattern);
             }
         } else {
             const auto world_ids = ReadIds(prompt_dir / ("world." + id_suffix));
@@ -198,7 +213,7 @@ int main(int argc, char** argv) {
                 CapturePrefix(in, pool, child.p, prompt_dir, output_dir, id,
                               world_ids.size() + persona_ids.size(), page_positions,
                               world_ids.size(), damped, model_sha, tokenizer, id_suffix, run_label,
-                              discrimination_dir);
+                              record_pattern);
             }
         }
         return 0;

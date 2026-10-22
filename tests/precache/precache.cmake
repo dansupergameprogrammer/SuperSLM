@@ -66,8 +66,9 @@ target_compile_definitions(superslm_precache_unpinned_getfixture_receipt PRIVATE
 set(PRECACHE_REFERENCE_LINE "origin/main" CACHE STRING
     "Line whose merge-base anchors licensed precache references")
 # §8, R13: the licensed reference population is regenerated at every new `git merge-base HEAD <line>`. Its generator is
-# T-3035's prefill-only harness, carried verbatim from origin/curie/t3035-precache-refs (972d5b7b; t3035_reference.cpp
-# last changed at abe60753, t3022_precache_reference.cpp at c9d003c8), so the box builds the same capture code beside
+# T-3035's prefill-only harness, carried from origin/curie/t3035-precache-refs (972d5b7b; t3035_reference.cpp
+# last changed there at abe60753, t3022_precache_reference.cpp at c9d003c8) with one change, plan rev 1.18.13 §15.33:
+# the discrimination record each header binds is a required per-stem path argument, not a fixed v1 name. So the box builds the same capture code beside
 # the engine it anchors to. It links the shipping library (no test seams) and calls no save or restore verb. Its
 # header's anchor is the merge-base read when this tree is configured; when the engine sources at HEAD or in the
 # working tree differ from that anchor's, or the history is shallow, the anchor is written as "unanchored-...", which
