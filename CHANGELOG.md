@@ -4,7 +4,8 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 ## [Unreleased]
 
-In progress, for 1.14.0. The version stays at the last release (1.13.1 on `main`) until the release commit.
+For 1.14.0. `docs/releases/1.14.0.md` is the release note. The version stays at the last release (1.13.1 on `main`)
+until the release commit, which sets 1.14.0 in CMake and `sslm_version.h` and dates this entry.
 
 - **Precached prefixes on the CPU: save and restore** (`SSLM_HAS_PREFIX_SAVE_ABI`). `sslm_prefix_save` writes a
   frozen prefix as a canonical `SPX1` blob; `sslm_prefix_restore` validates the whole blob before it draws or
@@ -12,6 +13,9 @@ In progress, for 1.14.0. The version stays at the last release (1.13.1 on `main`
   producer (the engine version); a blob from another version is refused with the new
   `SSLM_RESTORE_PRODUCER_MISMATCH` (ordinal 30). `include/superslm/sslm_version.h` carries the version, and a check
   keeps it equal to CMake's.
+- **Model mapping refuses colliding schema name hashes.** A model whose schema names include two with the same
+  nonzero FNV-1a 64-bit hash, or one hashing to zero, is refused at map, on the CPU and the GPU alike, so a schema
+  hash saved in a blob resolves to one schema. The certified model artifacts still map (the E0 audit).
 - **GPU twins, unreleased until 1.16.0.** `sslm_gpu_prefix_save` and `sslm_gpu_prefix_restore` are declared and
   exported, but no release promises them before 1.16.0.
 - **MSVC GEMM placement pin.** `src/matmul.cpp` gets its own image section, so the GEMM kernels' alignment no
