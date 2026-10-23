@@ -1,0 +1,40 @@
+[E1] 6.1/E2 ...
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:30: 6.1: 8 K/V rows differ from the SPX1 canonical rows
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:67: 6.1: residual, scale, counts, token or schema changed
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:30: 6.1: 392 K/V rows differ from the SPX1 canonical rows
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:67: 6.1: residual, scale, counts, token or schema changed
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:30: 6.1: 6976 K/V rows differ from the SPX1 canonical rows
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:67: 6.1: residual, scale, counts, token or schema changed
+[E1] 6.1/E2 RED (35929 checks, 6 failed)
+[E1] 6.4/E2 ...
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 root SPX1 round-trip blob differs
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 root SPX1 round-trip blob differs
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 root SPX1 round-trip blob differs
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 nested SPX1 round-trip blob differs
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 schema-bound SPX1 round-trip blob differs
+[E1] 6.4/E2 RED (110 checks, 5 failed)
+[E1] 6.7/E2 ...
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_zero adopter=schema_zero mode=legacy 64-token continuation differs
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_zero adopter=schema_zero mode=budget 64-token continuation differs
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_one adopter=schema_one mode=legacy 64-token continuation differs
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_one adopter=schema_one mode=budget 64-token continuation differs
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_two adopter=schema_two mode=legacy 64-token continuation differs
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_two adopter=schema_two mode=budget 64-token continuation differs
+[E1] 6.7/E2 RED (203 checks, 9 failed)
+[E1] 8.4/E2 ...
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_zero adopter=schema_zero mode=legacy 64-token continuation differs
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_zero adopter=schema_zero mode=budget 64-token continuation differs
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_one adopter=schema_one mode=legacy 64-token continuation differs
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_one adopter=schema_one mode=budget 64-token continuation differs
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_two adopter=schema_two mode=legacy 64-token continuation differs
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:152: 6.7 prefix=schema_two adopter=schema_two mode=budget 64-token continuation differs
+[E1] 8.4/E2 RED (203 checks, 9 failed)
+[E1] 8.5/E2 ...
+FAIL [8.5/E2] tests/precache/e2_composition.cpp:34: 8.5 restored prefix under adapter differs from prefill twin
+[E1] 8.5/E2 RED (28 checks, 1 failed)

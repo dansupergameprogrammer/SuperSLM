@@ -1,0 +1,31 @@
+[E1] 6.1/E2 ...
+[E1] 6.1/E2 green (35929 checks, 0 failed)
+[E1] 6.4/E2 ...
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 schema-bound SPX1 round-trip blob differs
+[E1] 6.4/E2 RED (110 checks, 1 failed)
+[E1] 6.7/E2 ...
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_one adopter=schema_zero mode=legacy: expected disposition 21, got 21/0
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_one adopter=schema_zero mode=budget: expected disposition 21, got 21/0
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_one adopter=schema_one mode=legacy: expected disposition 0, got 0/21
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_one adopter=schema_one mode=budget: expected disposition 0, got 0/21
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_two adopter=schema_zero mode=legacy: expected disposition 21, got 21/0
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_two adopter=schema_zero mode=budget: expected disposition 21, got 21/0
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_two adopter=schema_two mode=legacy: expected disposition 0, got 0/21
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_two adopter=schema_two mode=budget: expected disposition 0, got 0/21
+[E1] 6.7/E2 RED (193 checks, 10 failed)
+[E1] 8.4/E2 ...
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_one adopter=schema_zero mode=legacy: expected disposition 21, got 21/0
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_one adopter=schema_zero mode=budget: expected disposition 21, got 21/0
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_one adopter=schema_one mode=legacy: expected disposition 0, got 0/21
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_one adopter=schema_one mode=budget: expected disposition 0, got 0/21
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_two adopter=schema_zero mode=legacy: expected disposition 21, got 21/0
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_two adopter=schema_zero mode=budget: expected disposition 21, got 21/0
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_two adopter=schema_two mode=legacy: expected disposition 0, got 0/21
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:135: 6.7 prefix=schema_two adopter=schema_two mode=budget: expected disposition 0, got 0/21
+[E1] 8.4/E2 RED (193 checks, 10 failed)
+[E1] 8.5/E2 ...
+[E1] 8.5/E2 green (28 checks, 0 failed)

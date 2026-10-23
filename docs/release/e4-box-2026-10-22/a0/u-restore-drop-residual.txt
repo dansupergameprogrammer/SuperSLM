@@ -1,0 +1,37 @@
+[E2] 4.7/E2:pkv_def ...
+FAIL [4.7/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:60: 4.7 pkv_def L=1: the restored prefix re-saves different bytes
+FAIL [4.7/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [4.7/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:60: 4.7 pkv_def L=127: the restored prefix re-saves different bytes
+FAIL [4.7/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [4.7/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:60: 4.7 pkv_def L=128: the restored prefix re-saves different bytes
+FAIL [4.7/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [4.7/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:60: 4.7 pkv_def L=129: the restored prefix re-saves different bytes
+FAIL [4.7/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [4.7/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:60: 4.7 pkv_def L=3968: the restored prefix re-saves different bytes
+FAIL [4.7/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [4.7/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:60: 4.7 pkv_def L=3969: the restored prefix re-saves different bytes
+FAIL [4.7/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [4.7/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:60: 4.7 pkv_def L=4095: the restored prefix re-saves different bytes
+FAIL [4.7/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [4.7/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:60: 4.7 pkv_def L=4096: the restored prefix re-saves different bytes
+[E2] 4.7/E2:pkv_def RED (1363 checks, 15 failed)
+[E2] 9.8/E2:pkv_def ...
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:114: 9.8 pkv_def L=1: the contiguous restore re-saves different bytes
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:119: 9.8 pkv_def L=1: the page-pool restore of the re-saved blob re-saves different bytes
+FAIL [9.8/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [9.8/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:114: 9.8 pkv_def L=128: the contiguous restore re-saves different bytes
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:119: 9.8 pkv_def L=128: the page-pool restore of the re-saved blob re-saves different bytes
+FAIL [9.8/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [9.8/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:114: 9.8 pkv_def L=129: the contiguous restore re-saves different bytes
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:119: 9.8 pkv_def L=129: the page-pool restore of the re-saved blob re-saves different bytes
+FAIL [9.8/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [9.8/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:114: 9.8 pkv_def L=4095: the contiguous restore re-saves different bytes
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:119: 9.8 pkv_def L=4095: the page-pool restore of the re-saved blob re-saves different bytes
+FAIL [9.8/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [9.8/E2:pkv_def] tests/precache/precache_common.h:169: restored legacy adopter tokens differ from prefill twin
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:114: 9.8 pkv_def L=4096: the contiguous restore re-saves different bytes
+FAIL [9.8/E2:pkv_def] tests/precache/unpinned/e2_unpinned.cpp:119: 9.8 pkv_def L=4096: the page-pool restore of the re-saved blob re-saves different bytes
+[E2] 9.8/E2:pkv_def RED (1159 checks, 18 failed)

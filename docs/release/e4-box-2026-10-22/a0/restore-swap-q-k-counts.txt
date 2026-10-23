@@ -1,0 +1,38 @@
+[E1] 6.1/E2 ...
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 140
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 148
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:67: 6.1: residual, scale, counts, token or schema changed
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 140
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 148
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:67: 6.1: residual, scale, counts, token or schema changed
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 140
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 148
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:67: 6.1: residual, scale, counts, token or schema changed
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 140
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 148
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:67: 6.1: residual, scale, counts, token or schema changed
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:86: 6.1 saturation count 3 lost or swapped in SSB6
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:86: 6.1 saturation count 4 lost or swapped in SSB6
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 140
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:61: 6.1 independent SSB6 state differs at offset 148
+FAIL [6.1/E2] tests/precache/e2_integrity.cpp:67: 6.1: residual, scale, counts, token or schema changed
+[E1] 6.1/E2 RED (35929 checks, 17 failed)
+[E1] 6.4/E2 ...
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 root SPX1 round-trip blob differs
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 root SPX1 round-trip blob differs
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 root SPX1 round-trip blob differs
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 nested SPX1 round-trip blob differs
+FAIL [6.4/E2] tests/precache/e2_root.cpp:109: 6.4 schema-bound SPX1 round-trip blob differs
+[E1] 6.4/E2 RED (110 checks, 5 failed)
+[E1] 6.7/E2 ...
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [6.7/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+[E1] 6.7/E2 RED (203 checks, 3 failed)
+[E1] 8.4/E2 ...
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+FAIL [8.4/E2] tests/precache/e2_schema.cpp:104: 6.7 schema binding or walk changed on restore
+[E1] 8.4/E2 RED (203 checks, 3 failed)
+[E1] 8.5/E2 ...
+[E1] 8.5/E2 green (28 checks, 0 failed)
