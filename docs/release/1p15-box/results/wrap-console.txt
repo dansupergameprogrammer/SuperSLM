@@ -1,0 +1,28 @@
+VCToolsVersion=14.44.35207
+Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35214 for x64
+[2026-10-23T12:47:27.9345776-07:00] start: tree 5c83f65e354d9041c45e9eb0c1810c099e1cad2b (engine = e82d7d40), steps build,pinmap,b7b-t1,b7b-t4,abp
+[2026-10-23T12:47:27.9395761-07:00] build start
+[2026-10-23T12:47:36.5306540-07:00] build: bench sha256 f6cc7d6164cd55ab8b695e0028c2da9df0271bf403185a15b49b4d657386e6cd
+[2026-10-23T12:47:36.5336539-07:00] build done
+[2026-10-23T12:47:36.5376547-07:00] pinmap start
+[2026-10-23T12:47:37.6627706-07:00] pinmap: GemmInt8AccumulateCols   0000000140055680 mod64=0
+[2026-10-23T12:47:37.6637721-07:00] pinmap: DotRowAvx2               0000000140054f50 mod64=16
+[2026-10-23T12:47:37.6697703-07:00] pinmap: TiledGemmAvx2            00000001400563a0 mod64=32
+[2026-10-23T12:47:37.6757706-07:00] pinmap:  0002:00000000 00000010H .sslmgem$a              CODE
+[2026-10-23T12:47:37.6807704-07:00] pinmap:  0002:00000010 00003160H .sslmgem$m              CODE
+[2026-10-23T12:47:37.6867725-07:00] pinmap:  0002:00003170 0000000cH .sslmgem$x              CODE
+[2026-10-23T12:47:37.6917709-07:00] pinmap: PIN OK: the GEMM kernels are at the pinned placement
+[2026-10-23T12:47:37.6997738-07:00] pinmap done
+[2026-10-23T12:47:37.7047720-07:00] b7b-t1 start
+[2026-10-23T12:54:25.7086061-07:00] b7b-t1: 41 prompts, 123 exact arms, 0 not identical to off; B2 off digest 7e46330608d11704, 28 tokens
+[2026-10-23T12:54:25.7116061-07:00] b7b-t1 done
+[2026-10-23T12:54:25.7166011-07:00] b7b-t4 start
+[2026-10-23T12:59:17.1137627-07:00] b7b-t4: 41 prompts, 123 exact arms, 0 not identical to off; B2 off digest 7e46330608d11704, 28 tokens
+[2026-10-23T12:59:17.1147634-07:00] b7b-t4 done
+[2026-10-23T12:59:17.1217609-07:00] abp start
+[2026-10-23T12:59:17.1347613-07:00] abp arm ref: D:\SuperSLM\.worktrees\sfd-results\build-exact\sslm_schema_fast_decode_bench.exe sha256 fcba88dbd5b1be5bca1e5d827d1b9be6e03c49eab258df06c391183120ade583
+[2026-10-23T12:59:17.1387625-07:00] abp arm release: D:\_scratch\sfd-1p15\build-msvc\sslm_schema_fast_decode_bench.exe sha256 f6cc7d6164cd55ab8b695e0028c2da9df0271bf403185a15b49b4d657386e6cd
+[2026-10-23T13:00:33.5149776-07:00] abp: 7-token prefill, one thread: ref 148.2545 ms, release 148.2068 ms, release/ref 1.0008 [0.9971, 1.0088]
+[2026-10-23T13:00:33.5189822-07:00] abp done
+[2026-10-23T13:00:33.5239814-07:00] end PASS
+driver exit: 0

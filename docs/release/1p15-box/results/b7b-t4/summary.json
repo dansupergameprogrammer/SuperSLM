@@ -1,0 +1,911 @@
+{
+    "step":  "b7b-t4",
+    "tree":  "5c83f65e354d9041c45e9eb0c1810c099e1cad2b",
+    "prompts":  41,
+    "arms":  123,
+    "differences":  0,
+    "rows":  [
+                 {
+                     "id":  "B2",
+                     "off_digest":  "7e46330608d11704",
+                     "off_tokens":  28,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "7e46330608d11704",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "7e46330608d11704",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "7e46330608d11704",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-01",
+                     "off_digest":  "58862997fd1a7389",
+                     "off_tokens":  30,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "58862997fd1a7389",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "58862997fd1a7389",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "58862997fd1a7389",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-02",
+                     "off_digest":  "e0391a203a0d1d36",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "e0391a203a0d1d36",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "e0391a203a0d1d36",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "e0391a203a0d1d36",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-03",
+                     "off_digest":  "8f61d8b88a5153c8",
+                     "off_tokens":  23,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "8f61d8b88a5153c8",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "8f61d8b88a5153c8",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "8f61d8b88a5153c8",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-04",
+                     "off_digest":  "1bbd5176de30a5bc",
+                     "off_tokens":  30,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "1bbd5176de30a5bc",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "1bbd5176de30a5bc",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "1bbd5176de30a5bc",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-05",
+                     "off_digest":  "63b7ec53a0e82e7e",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "63b7ec53a0e82e7e",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "63b7ec53a0e82e7e",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "63b7ec53a0e82e7e",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-06",
+                     "off_digest":  "d0f69b6510cd67df",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "d0f69b6510cd67df",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "d0f69b6510cd67df",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "d0f69b6510cd67df",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-07",
+                     "off_digest":  "3488e5948c39ea78",
+                     "off_tokens":  31,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "3488e5948c39ea78",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "3488e5948c39ea78",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "3488e5948c39ea78",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-08",
+                     "off_digest":  "13ec54073b96b06f",
+                     "off_tokens":  23,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "13ec54073b96b06f",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "13ec54073b96b06f",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "13ec54073b96b06f",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-09",
+                     "off_digest":  "13944dd8879a8587",
+                     "off_tokens":  24,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "13944dd8879a8587",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "13944dd8879a8587",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "13944dd8879a8587",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-10",
+                     "off_digest":  "e4a2e7b0156a5ba1",
+                     "off_tokens":  23,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "e4a2e7b0156a5ba1",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "e4a2e7b0156a5ba1",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "e4a2e7b0156a5ba1",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-11",
+                     "off_digest":  "111e779d61fe4dc8",
+                     "off_tokens":  24,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "111e779d61fe4dc8",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "111e779d61fe4dc8",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "111e779d61fe4dc8",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-12",
+                     "off_digest":  "34ad90ea5d8180d5",
+                     "off_tokens":  26,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "34ad90ea5d8180d5",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "34ad90ea5d8180d5",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "34ad90ea5d8180d5",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-13",
+                     "off_digest":  "1f8a6161ae4bf332",
+                     "off_tokens":  24,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "1f8a6161ae4bf332",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "1f8a6161ae4bf332",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "1f8a6161ae4bf332",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-14",
+                     "off_digest":  "784ec43408554598",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "784ec43408554598",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "784ec43408554598",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "784ec43408554598",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-15",
+                     "off_digest":  "cbf12b1b35b98947",
+                     "off_tokens":  29,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "cbf12b1b35b98947",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "cbf12b1b35b98947",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "cbf12b1b35b98947",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-16",
+                     "off_digest":  "2d3764509cea0f9c",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "2d3764509cea0f9c",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "2d3764509cea0f9c",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "2d3764509cea0f9c",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-17",
+                     "off_digest":  "bf5c3b95b8ef4bba",
+                     "off_tokens":  26,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "bf5c3b95b8ef4bba",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "bf5c3b95b8ef4bba",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "bf5c3b95b8ef4bba",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-18",
+                     "off_digest":  "21d6475e32b41539",
+                     "off_tokens":  23,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "21d6475e32b41539",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "21d6475e32b41539",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "21d6475e32b41539",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-19",
+                     "off_digest":  "bb3cbf5e54509673",
+                     "off_tokens":  27,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "bb3cbf5e54509673",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "bb3cbf5e54509673",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "bb3cbf5e54509673",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4a-20",
+                     "off_digest":  "a033e7c75d059d09",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "a033e7c75d059d09",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "a033e7c75d059d09",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "a033e7c75d059d09",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-01",
+                     "off_digest":  "620ab625ca3c0c9c",
+                     "off_tokens":  27,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "620ab625ca3c0c9c",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "620ab625ca3c0c9c",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "620ab625ca3c0c9c",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-02",
+                     "off_digest":  "cc6307c8c2fd7704",
+                     "off_tokens":  26,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "cc6307c8c2fd7704",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "cc6307c8c2fd7704",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "cc6307c8c2fd7704",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-03",
+                     "off_digest":  "2f7a7883b8f5b251",
+                     "off_tokens":  24,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "2f7a7883b8f5b251",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "2f7a7883b8f5b251",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "2f7a7883b8f5b251",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-04",
+                     "off_digest":  "a203c18f6d4641c8",
+                     "off_tokens":  26,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "a203c18f6d4641c8",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "a203c18f6d4641c8",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "a203c18f6d4641c8",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-05",
+                     "off_digest":  "b880bc422e8a5332",
+                     "off_tokens":  22,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "b880bc422e8a5332",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "b880bc422e8a5332",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "b880bc422e8a5332",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-06",
+                     "off_digest":  "c12f9124da896c91",
+                     "off_tokens":  24,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "c12f9124da896c91",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "c12f9124da896c91",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "c12f9124da896c91",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-07",
+                     "off_digest":  "337cd28738ccc077",
+                     "off_tokens":  28,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "337cd28738ccc077",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "337cd28738ccc077",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "337cd28738ccc077",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-08",
+                     "off_digest":  "a8d1fc65275d0fe1",
+                     "off_tokens":  26,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "a8d1fc65275d0fe1",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "a8d1fc65275d0fe1",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "a8d1fc65275d0fe1",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-09",
+                     "off_digest":  "e6c3a263b72bf7f2",
+                     "off_tokens":  32,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "e6c3a263b72bf7f2",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "e6c3a263b72bf7f2",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "e6c3a263b72bf7f2",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-10",
+                     "off_digest":  "277ca4270d219601",
+                     "off_tokens":  27,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "277ca4270d219601",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "277ca4270d219601",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "277ca4270d219601",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-11",
+                     "off_digest":  "b0d249880fdfc995",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "b0d249880fdfc995",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "b0d249880fdfc995",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "b0d249880fdfc995",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-12",
+                     "off_digest":  "1c2e478b986f35eb",
+                     "off_tokens":  30,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "1c2e478b986f35eb",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "1c2e478b986f35eb",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "1c2e478b986f35eb",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-13",
+                     "off_digest":  "5e02bed23c93d8b7",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "5e02bed23c93d8b7",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "5e02bed23c93d8b7",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "5e02bed23c93d8b7",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-14",
+                     "off_digest":  "31a9ccc15994bd8a",
+                     "off_tokens":  30,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "31a9ccc15994bd8a",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "31a9ccc15994bd8a",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "31a9ccc15994bd8a",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-15",
+                     "off_digest":  "a5f80283c11be2a4",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "a5f80283c11be2a4",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "a5f80283c11be2a4",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "a5f80283c11be2a4",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-16",
+                     "off_digest":  "ef44eecb5ebc149c",
+                     "off_tokens":  28,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "ef44eecb5ebc149c",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "ef44eecb5ebc149c",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "ef44eecb5ebc149c",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-17",
+                     "off_digest":  "7485269298a73b78",
+                     "off_tokens":  24,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "7485269298a73b78",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "7485269298a73b78",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "7485269298a73b78",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-18",
+                     "off_digest":  "053b6349c348b49f",
+                     "off_tokens":  24,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "053b6349c348b49f",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "053b6349c348b49f",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "053b6349c348b49f",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-19",
+                     "off_digest":  "b36b0f288313b1f7",
+                     "off_tokens":  27,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "b36b0f288313b1f7",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "b36b0f288313b1f7",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "b36b0f288313b1f7",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 },
+                 {
+                     "id":  "B4b-20",
+                     "off_digest":  "260a53753bec39a1",
+                     "off_tokens":  25,
+                     "arms":  [
+                                  {
+                                      "label":  "on:exact:learned",
+                                      "digest":  "260a53753bec39a1",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact",
+                                      "digest":  "260a53753bec39a1",
+                                      "identical_to_off":  true
+                                  },
+                                  {
+                                      "label":  "on:exact:wrong",
+                                      "digest":  "260a53753bec39a1",
+                                      "identical_to_off":  true
+                                  }
+                              ]
+                 }
+             ]
+}

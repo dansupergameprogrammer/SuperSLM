@@ -1,0 +1,21 @@
+{
+    "rounds":  15,
+    "ref":  {
+                "n":  15,
+                "median":  148.2545,
+                "sign_lo":  145.4388,
+                "sign_hi":  148.8239
+            },
+    "release":  {
+                    "n":  15,
+                    "median":  148.2068,
+                    "sign_lo":  145.7253,
+                    "sign_hi":  148.9833
+                },
+    "release_over_ref":  {
+                             "n":  15,
+                             "median":  1.0008,
+                             "sign_lo":  0.9971,
+                             "sign_hi":  1.0088
+                         }
+}
