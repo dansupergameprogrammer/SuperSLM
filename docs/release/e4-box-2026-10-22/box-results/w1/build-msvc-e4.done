@@ -1,0 +1,10 @@
+cl=Microsoft (R) C/C++ Optimizing Compiler Version 19.34.31948 for x64
+cmake=cmake version 4.4.4
+commit=e8c029ed68f6d3fb0a728673c9a41d16d433916d
+finished=2026-10-22T21:06:01
+sha256_e1=38396bf7984d877a6c98aa08a0599d248226acc2acda45e3b467910a367f1de1
+startup=ok
+status=ok
+toolchain=msvc-e4
+vcvars=x64 10.0.22621.0 -vcvars_ver=14.34 (VCToolsVersion 14.34.31933)
+windows=26H2 build 26300.9711

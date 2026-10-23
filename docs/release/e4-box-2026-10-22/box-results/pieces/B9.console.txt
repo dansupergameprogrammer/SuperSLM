@@ -1,0 +1,20 @@
+pause present at start: True
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc
+blob_bytes=469763768
+blob_sha256=98fe7f408006a88628f2b59b6dbb56cf3f47821049a6cbfa35c11b4fc46c3ac9
+cl=Microsoft (R) C/C++ Optimizing Compiler Version 19.34.31948 for x64
+commit=e8c029ed68f6d3fb0a728673c9a41d16d433916d
+finished=2026-10-22T22:10:47
+line=10.3 worst capture cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=469763768 blob_sha256=98fe7f408006a88628f2b59b6dbb56cf3f47821049a6cbfa35c11b4fc46c3ac9 prefill_ms=3815916.110
+runner_sha256=38396bf7984d877a6c98aa08a0599d248226acc2acda45e3b467910a367f1de1
+vcvars=x64 10.0.22621.0 -vcvars_ver=14.34 (VCToolsVersion 14.34.31933)
+blob sha256 98fe7f408006a88628f2b59b6dbb56cf3f47821049a6cbfa35c11b4fc46c3ac9; W1 printed 98fe7f408006a88628f2b59b6dbb56cf3f47821049a6cbfa35c11b4fc46c3ac9; bytes 469763768
+[E4] 10.3/E4:worst ...
+10.3 real 1.5B: rule B = 64 (engine 64, helpers 64), cap 32768, cap_pages 512, page 917504 bytes
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e box=home-3950x threads=1 worst cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=469763768 blob_sha256=98fe7f408006a88628f2b59b6dbb56cf3f47821049a6cbfa35c11b4fc46c3ac9 restore_ms=315.554 MiB=448.002 MiB/s=1419.7
+[E4] 10.3/E4:worst green (38 checks, 0 failed)
+1 cells, 0 red; 38 checks, 0 failures
+0
+B9 exit: 0
+pause present at end: True
+pause removed: True

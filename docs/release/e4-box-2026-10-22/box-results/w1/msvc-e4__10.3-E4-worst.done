@@ -1,0 +1,10 @@
+attempts=1
+cell=10.3/E4:worst
+checks=27
+exit=0
+failures=0
+finished=2026-10-22T22:10:47
+last_attempt_hours=1.08
+log=msvc-e4__10.3-E4-worst.attempt1.out.log
+toolchain=msvc-e4
+verdict=GREEN

@@ -1,0 +1,7 @@
+piece: msvc-e4__10.3-E4-worst
+cell: 10.3/E4:worst
+verdict: GREEN
+exit: 0
+checks: 27
+failures: 0
+line: [E4] 10.3/E4:worst green (27 checks, 0 failed)

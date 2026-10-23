@@ -125,3 +125,25 @@ built into `build-g1` (MSVC 14.34 Release), and both build commands exit 0. The 
 - All ten nested lines read `B = 128, s = 7, draw = 3`.
 - "21 hashes pinned, restore exited, 100 graded adopters"; 100% tests passed (3/3); 525 s.
 - **PASS.** This log, `logs/B6r-two-process.log`, is 10.1/10.2's E4 record.
+
+## W1 and B9: the 10.3 worst setting (1.5B, cap 32,768)
+
+**W1** ran on the spare PC (i5-14400F, Windows 11), kit `834d6997`, piece `msvc-e4__10.3-E4-worst`. Its files are in
+`w1/`: W1.txt, the blob's SHA-256, the piece's result and logs, the build stamp, and SUMMARY.md after W1. The blob
+itself is not committed.
+- The build is `superslm_precache_e1` at `e8c029ed`, MSVC 19.34.31948 (14.34), runner `38396bf7…1de1`. An earlier
+  attempt built the long legs' commit instead, because of a kit bug where PowerShell names ignore case; it is fixed at
+  `834d6997`, and that attempt's records are kept as `.old-*` on the drive.
+- Capture: `10.3 worst capture cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=469763768
+  blob_sha256=98fe7f40…3ac9 prefill_ms=3815916.110`, 63.6 minutes on one thread. GREEN (27 checks).
+
+**B9** ran on the home box alone, with the PAUSE file present, from the e8c029ed tree and B1's runner (log
+`logs/B9-worst-restore.log`).
+- W1.txt reads `commit=e8c029ed…`. The copied blob's SHA-256 equals W1's (`98fe7f40…3ac9`), at 469,763,768 bytes.
+- `10.3 real 1.5B: rule B = 64 (engine 64, helpers 64), cap 32768, cap_pages 512, page 917504 bytes`.
+- Receipt `0f0c56af…9372`, runner `aba74f21…e86e` (B8's).
+- **restore_ms=315.554, MiB=448.002, MiB/s=1419.7.**
+- No refusal and no re-save mismatch: 10.3/E4:worst green (38 checks).
+- Recorded, not graded: the per-MiB figure for the plugin cost model is about 0.70 ms/MiB at 1.5B, against about
+  0.6 ms/MiB at 0.5B in B8. Against W1's capture prefill this is about 12,100× faster. The prefill was timed on the
+  spare PC, so the ratio is cross-machine.

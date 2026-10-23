@@ -1,0 +1,5 @@
+[E4] 10.3/E4:worst ...
+10.3 real 1.5B: rule B = 64 (engine 64, helpers 64), cap 32768, cap_pages 512, page 917504 bytes
+10.3 worst capture cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=469763768 blob_sha256=98fe7f408006a88628f2b59b6dbb56cf3f47821049a6cbfa35c11b4fc46c3ac9 prefill_ms=3815916.110
+[E4] 10.3/E4:worst green (27 checks, 0 failed)
+1 cells, 0 red; 27 checks, 0 failures
