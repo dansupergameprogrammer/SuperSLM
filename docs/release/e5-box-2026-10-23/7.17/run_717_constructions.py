@@ -7,16 +7,20 @@ verdict per construction. Nothing here is the commissioning.
 
   anchor              docs/api.md at 5d5ca58, as is: 7.17 is red on it for its own reason (the new status
                       is not stated).
-  accept-one          section 8's must-accept as worded: the anchor plus ONE correct statement of
-                      SSLM_RESTORE_PRODUCER_MISMATCH at 30. Rev 1.18.4 raised that name's floor to 2, so this is
-                      refused by the floor: section 8's must-accept and 7.17's rev 1.18.4 floor disagree.
-  accept-two          the anchor plus the two statement forms rev 1.18.4 reads: an own-line statement and a
-                      paired one ("ordinal 30" with the name on the next line). Accepted.
-  reject-kv-30        accept-two with one SSLM_KV_BUDGET_EXCEEDED statement edited to 30.
-  reject-new-31       accept-two with the own-line SSLM_RESTORE_PRODUCER_MISMATCH statement at 31.
-  reject-paired-31    accept-two with the paired statement at 31 (rev 1.18.4, G11).
-  reject-kv-reworded  accept-two with one SSLM_KV_BUDGET_EXCEEDED statement reworded past the locator.
-  reject-unpaired     accept-two plus an "ordinal N" with no status name on its line or the next.
+  must-accept         the anchor plus the two statement forms rev 1.18.4 reads: an own-line statement and a
+                      paired one ("ordinal 30" with the name on the next line). Accepted. Rev 1.18.14 (section
+                      15.34) made this the must-accept; the floor of 2 stays.
+  reject-one-below-floor
+                      the anchor plus ONE correct own-line statement of SSLM_RESTORE_PRODUCER_MISMATCH at 30
+                      (section 8's former must-accept). Refused: below the floor of 2. Rev 1.18.14 made it
+                      the sixth must-reject.
+  reject-kv-30        must-accept with one SSLM_KV_BUDGET_EXCEEDED statement edited to 30.
+  reject-new-31       must-accept with the own-line SSLM_RESTORE_PRODUCER_MISMATCH statement at 31.
+  reject-paired-31    must-accept with the paired statement at 31 (rev 1.18.4, G11).
+  reject-kv-reworded  must-accept with one SSLM_KV_BUDGET_EXCEEDED statement reworded past the locator.
+  reject-unpaired     must-accept plus an "ordinal N" with no status name on its line or the next.
+
+Exit status: 0 when every verdict is the expected one, 1 otherwise.
 
 Usage: python3 run_717_constructions.py [REPO]   (REPO defaults to the repository holding this file)
 """
@@ -45,14 +49,15 @@ def with_statements(text: str, *added: str) -> str:
 two = with_statements(ANCHOR, OWN, PAIRED)
 cases = [
     ("anchor", ANCHOR, False),
-    ("accept-one", with_statements(ANCHOR, OWN), True),
-    ("accept-two", two, True),
+    ("must-accept", two, True),
+    ("reject-one-below-floor", with_statements(ANCHOR, OWN), False),
     ("reject-kv-30", two.replace(KV_LINE, KV_LINE.replace("ordinal 29", "ordinal 30")), False),
     ("reject-new-31", two.replace(OWN, OWN.replace("ordinal 30", "ordinal 31")), False),
     ("reject-paired-31", two.replace(PAIRED, PAIRED.replace("ordinal 30", "ordinal 31")), False),
     ("reject-kv-reworded", two.replace(KV_LINE, KV_LINE.replace("ordinal 29", "the value after 28")), False),
     ("reject-unpaired", with_statements(two, "A status of no name (ordinal 12).\n\nNone here either."), False),
 ]
+unexpected = 0
 with TemporaryDirectory() as d:
     for name, text, want_accept in cases:
         doc = Path(d) / f"{name}.md"
@@ -62,5 +67,9 @@ with TemporaryDirectory() as d:
             verdict, detail = "ACCEPTED", f"{len(found)} statements"
         except ValueError as exc:
             verdict, detail = "REFUSED", str(exc).replace(str(doc), name + ".md")
-        note = "" if (verdict == "ACCEPTED") == want_accept else "  <- differs from the section 8 wording"
-        print(f"{name:20s} {verdict:8s} {detail}{note}")
+        ok = (verdict == "ACCEPTED") == want_accept
+        unexpected += not ok
+        note = "" if ok else "  <- UNEXPECTED"
+        print(f"{name:24s} {verdict:8s} {detail}{note}")
+print(f"{len(cases)} constructions, {unexpected} unexpected")
+sys.exit(1 if unexpected else 0)

@@ -29,18 +29,20 @@ grades it with `check()` against this tree's `sslm_abi.h`:
 | case | verdict |
 |---|---|
 | anchor | REFUSED: RESTORE_PRODUCER_MISMATCH 0 statements, floor 2 (**red on the anchor**) |
-| accept-one | REFUSED: 1 statement, floor 2 (**differs from §8's must-accept**) |
-| accept-two | ACCEPTED: 4 statements |
+| must-accept | ACCEPTED: 4 statements |
+| reject-one-below-floor | REFUSED: 1 statement, floor 2 |
 | reject-kv-30 | REFUSED at :787: KV_BUDGET_EXCEEDED stated at 30, the X-macro has 29 |
 | reject-new-31 | REFUSED at :860: RESTORE_PRODUCER_MISMATCH stated at 31, the X-macro has 30 |
 | reject-paired-31 | REFUSED at :862: same, paired form |
 | reject-kv-reworded | REFUSED: KV_BUDGET_EXCEEDED 1 statement, floor 2 |
 | reject-unpaired | REFUSED at :865: "ordinal 12" with no status name, an unpaired statement |
 
-**For the debunker:** §8 says the must-accept is "the anchor doc plus ONE correct status-30 statement".
-Rev 1.18.4 sets RESTORE_PRODUCER_MISMATCH's floor at 2, so that construction is refused. Either the
-must-accept becomes accept-two, or the floor drops to 1. Which one is the debunker's and planner's
-ruling; the test author has not picked one.
+The script ends with `8 constructions, 0 unexpected` and exits 0.
+
+Rev 1.18.14 (§15.34) ruled on the floor disagreement this record first raised. The must-accept is the two-statement
+case (one own-line statement and one paired statement), and the floor stays at 2. The one-statement document, which
+was §8's must-accept as first worded, is the sixth must-reject: it is below the floor. The script follows the ruling:
+`accept-two` became `must-accept`, and `accept-one` became `reject-one-below-floor`, expected refused.
 
 On the tree, 7.17 is green: 4 stated ordinals match (`api.md:529`, `:813`, `:1139`, `:1150`). That
 agrees with rev 1.18.4's "green when written".
@@ -81,3 +83,19 @@ The ctest reds:
   result.
 
 Not run here, because they are GPU or box only: 9.10, 5.7/F2, and every MSVC leg.
+
+## 9.5: pin tool dry run (rev 1.18.14, §15.34 (2))
+
+`tools/build_precache_9p5_pins.sh WORK --allow-dirty` was run on a scratch worktree of this tree with
+`version-bump-1.14.0.patch` applied. It took 1 min 8 s. All four producers read 1.14.0, the two runs were
+bit-identical, and the rule B was asserted on each fixture:
+
+| fixture | D | cap | B read | L | last page |
+|---|---|---|---|---|---|
+| pkv_def | 48 | 4096 | 128 | 141 | 13/128 |
+| pkv_odd | 48 | 4100 | 256 | 269 | 13/256 |
+| pkv_32k | 48 | 32768 | 256 | 269 | 13/256 |
+| pkv_qk | 128 | 4096 | 64 | 77 | 13/64 |
+
+A mutant tool rule (B capped at 64) was refused on pkv_def, pkv_odd and pkv_32k, and the run exited 1 with no
+manifest. No pins are committed: R2 writes them from R1's commit.
