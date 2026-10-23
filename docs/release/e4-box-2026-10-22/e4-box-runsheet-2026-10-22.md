@@ -10,6 +10,33 @@ instrument's hash is `tests/precache/e4_real.cpp` at this commit. The reference 
 (the M1 squash); `git merge-base` of the pinned commit and `origin/main` is `1948e1f2`, and the engine sources
 (`src/`, `include/`, `CMakeLists.txt`) at the pinned commit are byte-identical to `1948e1f2`'s.
 
+**Generator commit (B3g, B3, B4 only):** `47bdcc9e24917f91e5f9bf67e8a0141662ca5114`, plan rev 1.18.13 §15.33 (a). It
+changes only `tests/precache/reference/t3035_reference.cpp` (and a comment in `precache.cmake`): the generator's
+eighth argument is now `RECORD`, the per-stem discrimination record, with no default. Everything else on this sheet
+stays on `e8c029ed` and its build `build-msvc`. The generator is built from its own worktree and build directory, so
+`src` and `build-msvc` are never moved.
+
+## Re-run after the L1 refusal (rev 1.18.13 §15.33), 2026-10-23
+
+The debunker refused L1 because every header bound the superseded v1 record (`real0p5-*/<stem>.discrimination.json`).
+
+**Re-run, in this order:** B3g (new, ≤ 12 min), B3 (12), B4 (8), B5 (2), A0 (coverage auditor, records only, no box
+time), L1 (debunker, ~10), B6 (10). **About 54 box minutes**: the plan's 42, plus 12 to build the generator at its own
+commit.
+
+**Not re-run:** B0–B2, B7, T1a/T1b, B8a–B8e, W1, B9, X1, B10, B11. They run at `e8c029ed`, and `superslm_precache_e1`
+rebuilt at `47bdcc9e` is byte-identical (cloud: `2531182b…5d26` at both). X1's receipts name `source_revision`
+`e8c029ed`, and B10 compares them against an MSVC job built from `D:\_scratch\e4\src`, which stays at `e8c029ed`, so
+X1/B10 pairing holds. If B10 were built from a `47bdcc9e` tree instead, it would refuse "not built from one source
+revision", and X1 would need re-capturing there (cloud) plus B10 again (15 min). Do not do that.
+
+**One open field before B3: `RECORD`.** Each stem has two commissioned v2 sidecars, `<stem>.stream.json`
+(`T-3035-precache-stream-v2`, stream vitality) and `<stem>.byte.json` (`T-3035-precache-byte-v1`, restored-sequence
+operand). A header has one `discrimination_record_sha256`, and the loader refuses a second key. §15.33 says "the run
+sheet passes the v2 sidecar" (singular) but names both records as "what a header binds". Which one the headers bind
+is the planner's call, not the test author's. B3 and B4 refuse to start until `$E4Record` is set to one of the two.
+`record_hashes` in L1 can list all 40 sidecars either way.
+
 ## What E4 needed, and what is already done
 
 Checked against the files, not the plan's status words.
@@ -28,12 +55,12 @@ Checked against the files, not the plan's status words.
 
 ```
 B0 worktrees ─ B1 build ─┬─ B2 smoke (6.6 both legs)
-                         ├─ B3 refs P1 ─┐
-                         ├─ B4 refs P2 ─┴─ B5 pair check ─ L1 licence [DEBUNKER] ─ B6 two-process (10.1, 10.2)
                          ├─ B7 timing prompt manifest ─ T1a, T1b commission [DEBUNKER] ─ B8a..B8d slices (alone) ─ B8e
                          │                                                       └─ B9 worst restore (alone) ─ needs W1
                          ├─ B10 4.3 MSVC job + compare (needs X1's bundles copied in)
                          └─ B11 6.6 matvec mutant on MSVC (optional)
+B0 ─ B3g generator @47bdcc9e ─┬─ B3 refs P1 ─┐
+                               └─ B4 refs P2 ─┴─ B5 pair check ─ A0 re-audit [AUDITOR] ─ L1 licence [DEBUNKER] ─ B6 (needs B1)
 W1 cap-length 1.5B capture [WORK MACHINE or the long-leg PC; not the home box]
 A1 E4 discrimination re-audit [COVERAGE AUDITOR; no box time] after B6, B8, B9, B10
 ```
@@ -105,33 +132,65 @@ Pass: `6.6/E4 green`, `6.6/E4:rule-b green`, the line `6.6 rule-B: model_sha256=
 cap_pages 256, page 786432 bytes`, and `6.6 rule-B hook: calls=N` with **N > 32** (projections split at the real
 width; F13). Exit 0.
 
-### B3. Regenerate references, P1 real 0.5B flat, run1 and run2 (≤ 12 min) — Dan
-
-The T-3035 generator, built at the anchor (`superslm_precache_reference_gen`), the T-3035 command form and its
-discrimination records. Two separate processes, written to a **new** directory (the `5d5ca58` population is not touched).
+### B3g. Build the generator at its commit (≤ 12 min) — Dan; needs B0
 
 ```powershell
 . D:\_scratch\e4\src\tests\precache\e4_box_env.ps1
+$GenSrc = Join-Path $E4Work 'gensrc'; $GenBuild = Join-Path $E4Work 'build-gen'
+if (-not (Test-Path $GenSrc)) { git -C D:\SuperSLM worktree add --detach $GenSrc 47bdcc9e24917f91e5f9bf67e8a0141662ca5114 }
+git -C $GenSrc rev-parse HEAD              # must print: 47bdcc9e24917f91e5f9bf67e8a0141662ca5114
+git -C $GenSrc merge-base HEAD origin/main # must print: 1948e1f2ea4528790dc6701e26c47bda5739b003
+git -C $GenSrc status --porcelain          # must print nothing
+$log = E4-Log 'B3g-gen-build'
+Remove-Item $log -ErrorAction SilentlyContinue
+E4-Run $log cmake @('-S', $GenSrc, '-B', $GenBuild, '-G', 'Ninja', '-DBUILD_TESTING=ON', '-DCMAKE_BUILD_TYPE=Release',
+                    '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl')
+E4-Run $log ninja @('-C', $GenBuild, 'superslm_precache_reference_gen')
+Select-String -Path $log -Pattern 'unanchored'
+E4-Run $log (Join-Path $GenBuild 'superslm_precache_reference_gen.exe') @()
+```
+
+Pass: both commands exit 0; the `unanchored` line prints **nothing**; the last command exits 1 with a usage line
+ending `RECORD [COUNT]  (RECORD: record path with {id} for the stem, no default)`. Resume: re-run.
+
+### B3. Regenerate references, P1 real 0.5B flat, run1 and run2 (≤ 12 min) — Dan; needs B3g
+
+The T-3035 generator at `47bdcc9e`, the T-3035 command form, and each stem's commissioned v2 sidecar as `RECORD`. Two
+separate processes. First set the refused population aside (once, kept as L1's evidence), then write a fresh
+directory.
+
+```powershell
+. D:\_scratch\e4\src\tests\precache\e4_box_env.ps1
+$E4Record = ''     # SET BEFORE RUNNING: '{id}.stream.json' or '{id}.byte.json', as the planner rules (see the open field above)
+if ($E4Record -notin '{id}.stream.json', '{id}.byte.json') { throw 'E4Record is not set: ask the coordinator' }
+$Gen = Join-Path $E4Work 'build-gen\superslm_precache_reference_gen.exe'
+$V2 = Join-Path $E4T3035 'tests\t3035-precache-refs\discrimination-v2'
+$refused = "$E4Refs-v1bound-refused"
+if ((Test-Path $E4Refs) -and -not (Test-Path $refused)) { Move-Item $E4Refs $refused }
 $out = Join-Path $E4Refs 'P1-real0p5-flat'; New-Item -ItemType Directory -Force $out | Out-Null
 $tok = 'TokenizerView::Encode(rel10,4da4c4c)'
 foreach ($run in 'run1', 'run2') {
-  E4-Run (E4-Log "B3-P1-$run") $E4Gen @($E4Model05, $E4Prompts, $out, 'flat', $run, $tok, 'ids', (Join-Path $E4Disc 'real0p5-flat'))
+  E4-Run (E4-Log "B3-P1-$run") $Gen @($E4Model05, $E4Prompts, $out, 'flat', $run, $tok, 'ids', (Join-Path $V2 "P1-real0p5-flat\$E4Record"))
 }
 ```
 
 Pass: each run exits 0 and prints `flat00 captured` … `flat09 captured`; 20 files `flatNN-runN.ref`. Each header
-starts `# anchor=1948e1f2ea4528790dc6701e26c47bda5739b003 harness=e8c029ed68f6d3fb0a728673c9a41d16d433916d model_sha256=4b27e2d6… B=128 cap=32768
-decode_modes_available=1`. Expected time: about 4–6 min per run (9,564 prompt tokens, 50 streams of 64). Resume:
-re-run the piece (it overwrites both runs).
+starts `# anchor=1948e1f2ea4528790dc6701e26c47bda5739b003 harness=47bdcc9e24917f91e5f9bf67e8a0141662ca5114
+model_sha256=4b27e2d6… B=128 cap=32768 decode_modes_available=1`. B5 checks the record hashes. About 4–6 min per run.
+Resume: re-run the piece (it overwrites both runs; the set-aside happens only once).
 
-### B4. Regenerate references, P2 real 0.5B nested, run1 and run2 (≤ 8 min) — Dan
+### B4. Regenerate references, P2 real 0.5B nested, run1 and run2 (≤ 8 min) — Dan; needs B3g
 
 ```powershell
 . D:\_scratch\e4\src\tests\precache\e4_box_env.ps1
+$E4Record = ''     # the same value as B3
+if ($E4Record -notin '{id}.stream.json', '{id}.byte.json') { throw 'E4Record is not set: ask the coordinator' }
+$Gen = Join-Path $E4Work 'build-gen\superslm_precache_reference_gen.exe'
+$V2 = Join-Path $E4T3035 'tests\t3035-precache-refs\discrimination-v2'
 $out = Join-Path $E4Refs 'P2-real0p5-nested'; New-Item -ItemType Directory -Force $out | Out-Null
 $tok = 'TokenizerView::Encode(rel10,4da4c4c)'
 foreach ($run in 'run1', 'run2') {
-  E4-Run (E4-Log "B4-P2-$run") $E4Gen @($E4Model05, $E4Prompts, $out, 'nested', $run, $tok, 'ids', (Join-Path $E4Disc 'real0p5-nested'))
+  E4-Run (E4-Log "B4-P2-$run") $Gen @($E4Model05, $E4Prompts, $out, 'nested', $run, $tok, 'ids', (Join-Path $V2 "P2-real0p5-nested\$E4Record"))
 }
 ```
 
@@ -150,25 +209,56 @@ Get-ChildItem $E4Refs -Recurse -Filter '*-run1.ref' | ForEach-Object {
   "{0} {1} {2}" -f $a, ($(if ($a -eq $b) { 'pair-equal' } else { 'PAIR-DIFFERS' })), $_.FullName.Substring($E4Refs.Length + 1)
 } | ForEach-Object { E4-Append $log $_; $_ }
 "pairs differing: $bad" | ForEach-Object { E4-Append $log $_; $_ }
+$E4Record = ''     # the same value as B3
+$V2 = Join-Path $E4T3035 'tests\t3035-precache-refs\discrimination-v2'; $unbound = 0
+Get-ChildItem $E4Refs -Recurse -Filter '*-run1.ref' | ForEach-Object {
+  $stem = $_.Name -replace '-run1\.ref$', ''; $grp = $_.Directory.Name
+  $want = (Get-FileHash (Join-Path $V2 ("$grp\" + $E4Record.Replace('{id}', $stem)))).Hash.ToLower()
+  $got = ([regex]'discrimination_record_sha256=([0-9a-f]{64})').Match((Get-Content $_.FullName -TotalCount 1)).Groups[1].Value
+  if ($got -ne $want) { $unbound++ }
+  "{0} {1} {2}" -f $got, ($(if ($got -eq $want) { 'binds-v2' } else { 'NOT-V2' })), $stem
+} | ForEach-Object { E4-Append $log $_; $_ }
+"headers not bound to their v2 sidecar: $unbound" | ForEach-Object { E4-Append $log $_; $_ }
 ```
 
-Pass: 20 lines, all `pair-equal`, and `pairs differing: 0`. A differing pair is a reproducibility failure: stop and send
+Pass: 20 lines, all `pair-equal`, and `pairs differing: 0`; then 20 `binds-v2` lines and `headers not bound to their
+v2 sidecar: 0`. A differing pair is a reproducibility failure: stop and send
 the log to the test author.
 
-### L1. Licence the regenerated population — **SECOND SEAT: the debunker** (about 10 box min if run on the box)
+### A0. Pre-licence coverage re-audit — **SECOND SEAT: the coverage auditor** (records only, no box time); before L1
 
-Not the test author's. The debunker independently checks the population at `1948e1f2` (B5's log, the headers, the
-T-3071 commissioned discrimination records named by `discrimination_record_sha256`) and writes, if it passes:
+§15.33 (5): the auditor re-audits the re-bound population and its v2 bindings against the cells that will grade it
+(10.1/10.2's exact-state assertions; the 6.1/6.4/6.7/8.4/8.5 rows T-3071 names, where E2's audit has not already
+cleared them at this anchor, cited by record). Inputs: B5's log and the 20 run1 headers. L1 does not issue before it
+clears. It does not replace A1.
+
+### L1. Licence the regenerated population — **SECOND SEAT: the debunker** (about 10 box min if run on the box); after A0
+
+Not the test author's. The debunker independently checks the population at `1948e1f2` (B5's log, the headers, and the
+v2 sidecars named by `discrimination_record_sha256`) and writes, if it passes:
 - `D:\_artifacts\SuperSLM\t3035-precache-refs-post-m1\manifest.json` (the population manifest), and
 - `D:\_artifacts\SuperSLM\t3035-precache-refs-post-m1\license.txt`, the 9-field `PC-DISCRIMINATION-1` licence the
   loader reads (`format`, `status=COMMISSIONED`, `commissioning_verdict=PASS`, `must_accept=PASS`, `must_reject=PASS`,
   `anchor=1948e1f2…`, `population_manifest_sha256`, `instrument_source_sha256` = the SHA-256 of
-  `tests\precache\precache_reference.h` at the pinned commit unless the debunker names another instrument and changes
-  `SUPERSLM_PRECACHE_DISCRIMINATION_INSTRUMENT`, and `record_hashes`, comma-separated, covering every header's
-  `discrimination_record_sha256`).
+  `tests\precache\precache_reference.h` at the pinned commit (the same file at `47bdcc9e`) unless the debunker names
+  another instrument and changes `SUPERSLM_PRECACHE_DISCRIMINATION_INSTRUMENT`, and `record_hashes`, comma-separated,
+  covering every header's `discrimination_record_sha256`).
 
-E4's B6 cannot pass before this exists. The E2 (`6.2/E2:reference`) and E3 (`6.3/E3:reference`) populations at the same
-anchor are not in this sheet.
+**L1 note (rev 1.18.13 §15.33):**
+- **Standing is read from the project registry, never from the sidecar's JSON.** Every v2 sidecar still carries its
+  historical `"status": "QUARANTINED"` label (T-3071 §1). That label is not its standing. The registry lists
+  `T-3035-precache-stream-v2` and `T-3035-precache-byte-v1` as COMMISSIONED (D-SLM8030).
+- Every header's hash must be a v2 sidecar (`discrimination-v2/P1-real0p5-flat/`, `P2-real0p5-nested/`) whose
+  `instrument` the registry lists as COMMISSIONED. No v1 hash (`discrimination/real0p5-*/<stem>.discrimination.json`)
+  may appear in `record_hashes`: v1 is superseded, and nothing licenses against it (§15.33 (b)).
+- **Each record is marked "measured at B = 16".** The sidecars carry `page_positions: 16`, and the population is at
+  B = 128. The licence's manifest records "discrimination measured at B = 16" for every bound record. §15.33 (4)
+  rules that no re-measure is needed for this licence: B8's mutants and A1 carry the B = 128 kill.
+- Hand-edited headers are refused. The references come from B3/B4's generator, or not at all.
+
+The cloud dry-run (`e4-cloud-2026-10-22.md` §6) shows the loader passing with a licence over the v2 hashes and refusing
+one over v1 hashes only. E4's B6 cannot pass before L1 exists. The E2 (`6.2/E2:reference`) and E3
+(`6.3/E3:reference`) populations at the same anchor are not in this sheet.
 
 ### B6. 10.1 and 10.2: the two-process leg (≤ 10 min) — Dan; needs B5 and L1
 
@@ -388,17 +478,20 @@ On B2, B6, B8a–B8d, B9, B10, B11's logs and the cloud record. E4 is not green 
 
 | Who | Pieces | Box minutes (estimate) |
 |---|---|---|
-| Dan, test-author pieces on the home box | B0 3, B1 15, B2 3, B3 12, B4 8, B5 2, B6 10, B7 1, B8a–d 39, B8e 1, B9 3, B10 15 (B11 optional, +15) | **about 112** |
+| Dan, test-author pieces on the home box | B0 3, B1 15, B2 3, B3g 12, B3 12, B4 8, B5 2, B6 10, B7 1, B8a–d 39, B8e 1, B9 3, B10 15 (B11 optional, +15) | **about 124** |
+| Dan, re-run after the L1 refusal (§15.33) | B3g 12, B3 12, B4 8, B5 2, B6 10 | **about 44**, plus L1's ~10 = 54 |
 | Debunker, on the box | L1 ~10, T1a ~12, T1b ~6 (alone) | about 28 |
 | Work machine or long-leg PC | W1 | 60–90 (not home-box time) |
-| Coverage auditor | A1 | none |
+| Coverage auditor | A0 (before L1), A1 | none |
 
 E4's plan row estimated ~45 min; it did not count the reference regeneration, the licence, the commissioning or the
 4.3 job builds.
 
 ## Blockers
 
-- B6 cannot pass until L1 exists; B8 and B9 cannot run until T1 exists. Both are second-seat work that has not been
+- B3 and B4 cannot start until the planner names `RECORD`: the stream-v2 or the byte-v1 sidecar (see *Re-run after
+  the L1 refusal*).
+- B6 cannot pass until A0 and L1 exist; B8 and B9 cannot run until T1 exists. Both are second-seat work that has not been
   requested yet.
 - B9 needs W1 from another machine.
 - If `origin/main` moves and is merged into the branch before B6, the anchor changes and B3–B6 and L1 must be redone at

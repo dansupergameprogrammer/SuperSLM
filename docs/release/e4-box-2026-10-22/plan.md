@@ -1,6 +1,6 @@
 # SuperSLM — Precached Prefixes: Plan of Record
 
-2026-10-22 · planner · **rev 1.18.12** · status: **rev 1.18.3 APPROVED by the principal 2026-10-20 22:52Z ("Go ahead with recommend": approval-summary-rev1.18.md, PC-14 (a) squash early, PC-14 (c) GPU twins labelled unreleased, PC-15 1.13.0 row dropped, all as recommended).** Earlier: **rev 1.4 APPROVED by the principal 2026-09-30 22:08 (PC-1 to PC-12
+2026-10-22 · planner · **rev 1.18.13** · status: **rev 1.18.3 APPROVED by the principal 2026-10-20 22:52Z ("Go ahead with recommend": approval-summary-rev1.18.md, PC-14 (a) squash early, PC-14 (c) GPU twins labelled unreleased, PC-15 1.13.0 row dropped, all as recommended).** Earlier: **rev 1.4 APPROVED by the principal 2026-09-30 22:08 (PC-1 to PC-12
 confirmed as recommended; D-SLM7972..D-SLM7983).** **Rev 1.18 folded the principal's own decisions, nothing else:
 the nine build recommendations accepted 2026-10-17 14:51Z (PC-15), the release numbering and the squash to `main` of
 2026-10-20 (PC-1 as renumbered, PC-14), and the two plugin API additions folded 2026-10-20 20:52Z (PC-16). Rev 1.18.1
@@ -23,7 +23,8 @@ is replaced by an ancestry check run in a full clone. The fixture must refuse a 
 planner's floor (§15.29). Rev 1.18.11 redefines 5.9 (d) as the build's own chunk overruns, with a median-price grade
 in place of "expected 0", and records the cache-chunk price as a calibration follow-up that does not block plugin
 1.3.0 (§15.31). Rev 1.18.12: the `prefix_prefill` arm is timed under the build's own conditions, and a margin
-factor is rejected (§15.32).** Gate loop on rev 1.4 closed (§13). Folded through rev 1.4: plan
+factor is rejected (§15.32). Rev 1.18.13 rules on the refused E4 licence: the v1 discrimination records are
+superseded, and the references are re-bound to the commissioned v2 records (§15.33).** Gate loop on rev 1.4 closed (§13). Folded through rev 1.4: plan
 review and coverage audit rounds 1–2; the strike on rev 1.1 (FRACTURED, colliding schema-name hashes); the re-strike
 on rev 1.3 (held (i) and (ii); FRACTURED the admission claim for private nested restores, folded as text). **Rev
 1.5** folded E0's re-anchor on paged KV's built code (§15.5). **Rev 1.6** folded the re-gate of rev 1.5 (§15.6).
@@ -82,7 +83,8 @@ is kept beside this file as `plan-rev1.18.4.md`), rev 1.18.6 in §15.24 (rev 1.1
 is kept beside this file as `plan-rev1.18.7.md`), rev 1.18.9 in §15.28 (rev 1.18.8 is kept beside this file as
 `plan-rev1.18.8.md`), rev 1.18.10 in §15.29 (rev 1.18.9 is kept beside this file as `plan-rev1.18.9.md`), rev 1.18.11
 in §15.31 (rev 1.18.10 is kept beside this file as `plan-rev1.18.10.md`), rev 1.18.12 in §15.32 (rev 1.18.11 is kept
-beside this file as `plan-rev1.18.11.md`).
+beside this file as `plan-rev1.18.11.md`), rev 1.18.13 in §15.33 (rev 1.18.12 is kept beside this file as
+`plan-rev1.18.12.md`).
 *Rev 1.18 changes promise (i)'s sentence*, on the principal's approval of 2026-10-17 (Q2): the page-size qualifier
 rev 1.13 stated beside it is now in it (§0, §3.4, §13 item 2). Rev 1.17 is kept beside this file as `plan-rev1.17.md`. Earlier revisions are in this file's git history; every finding and where it landed is in §15. Builds on the
 approved paged-KV plan of record, rev 16.1 (`/mnt/project-files/plans/superslm-paged-kv/plan.md`, cited below as
@@ -282,6 +284,7 @@ legs) run on the work machine, never on the home box (§1).
    - 15.29 Round 29 (rev 1.18.10): cell 5.9 (a) read as the chunk planner's rule
    - 15.31 Round 31 (rev 1.18.11): cell 5.9 (d), chunk overruns and the cache-chunk price
    - 15.32 Round 32 (rev 1.18.12): the `prefix_prefill` arm timed under the build's conditions
+   - 15.33 Round 33 (rev 1.18.13): the E4 licence's discrimination records
    - 15.30 Coverage re-audit erratum (2026-10-22): 11.1's `length < 0` exemption, 8.13's A22 legs, 5.10's mutant line
 
 ---
@@ -4974,3 +4977,34 @@ attribution runs below.
 **Does an acceptance form change?** No new form. (d)'s grade is unchanged and stays recorded at U5. The arm's method
 changes, from isolated timing to in-situ timing from the ledger, and three attribution readings are added to that box
 round. No promise changes, and no principal question is needed.
+
+### 15.33 Round 33 (rev 1.18.13): the E4 licence's discrimination records
+
+Source: the box debunker's L1 refusal at SuperSLM `e8c029ed` (run sheet `release-1p14/e4-box-runsheet-2026-10-22.md`,
+L1). Read with the T-3071 record (Popper, D-SLM8030) and the generator, `tests/precache/reference/t3035_reference.cpp`
+at `e8c029ed`. **What is not in question:**
+- The population is clean. An independent recompute found 0 header mismatches, and all 100 streams are
+  token-identical to the `5d5ca58` population.
+
+**What the refusal is about:**
+- All 20 headers' `discrimination_record_sha256` bind the v1 records (`real0p5-*/<stem>.discrimination.json`). Each
+  of those reads QUARANTINED, `thresholds_met` false and `population_adequate` false.
+- The generator hashes only that file (`:128`), so it cannot bind anything else.
+
+One capped loop: the builder changes the generator, the test author re-runs B3–B5, the debunker re-runs L1, then B6.
+
+| Item | Ruling | Dependent gate |
+|---|---|---|
+| (b) v1's standing | **Superseded, not restored.** T-3071 §1 already says v1's §5.4 verdict "is superseded by T-3031 §9", and it leaves only the formal disposition to the conductor; this row is that disposition. The historical `T-3035-precache-discrimination` registration stays QUARANTINED as a record, and nothing licenses against it. §8's rule ("the loader refuses … a population lacking the commissioned discrimination record") is why L1 was right to refuse. A licence that listed v1's hashes would bind a record that itself says its thresholds are not met | L1 |
+| (a) Bind the commissioned records | **Adopted.** `T-3035-precache-stream-v2` and `T-3035-precache-byte-v1` are COMMISSIONED (D-SLM8030). Their per-stem sidecars, the revised stream-vitality and restored-sequence-operand records, are what a header binds. **Build (cloud):** the generator takes the record's file name per stem from an argument, with no default, and hashes exactly that file. The run sheet passes the v2 sidecar. Each sidecar still carries its historical `QUARANTINED` JSON label (T-3071 §1), so standing is read from the project registry, never from that label. At L1 the debunker checks that every header's hash is a v2 sidecar whose instrument the registry lists as COMMISSIONED. No loader change: it already checks only that the hash is in the licence's `record_hashes`. Hand-editing the 100 headers instead is refused: the references come from the generator, or not at all | B3, B4, B5, L1 |
+| (4) v2 was measured at `page_positions` 16; the population is at B = 128 | **No re-measure for this licence; the B = 16 provenance is recorded.** The licensed references are prefill-built streams, and the restore path cannot influence them (§8). They are token-identical across the move to B = 128, which is the B-invariance the licence needs. The commissioned instruments' refusals are exact-state byte refusals, which do not depend on page size. The page-granular constructions (`M-page`, `M-swap`) only get coarser at B = 128, so their changed bytes grow, and a page defect becomes easier to detect, not harder. What B = 128 must still show is that the E4 cells kill restore defects at the rule's B. That is B8's mutants and the A1 re-audit on the actual 10.1/10.2 cells, not a re-measure of the sidecars. The licence's manifest records "discrimination measured at B = 16" | L1 (record), B8, A1 |
+| (5) T-3071's coverage re-audit before grading | **Required before L1 issues, as a records check with no box time.** The coverage auditor re-audits the re-bound population and its v2 bindings against the cells that will grade it (10.1/10.2's exact-state assertions; the 6.1/6.4/6.7/8.4/8.5 rows T-3071 names, where E2's audit has not already cleared them at this anchor, cited by record). The run sheet's A1, after B6–B10, stays as E4's green gate. It does not replace the pre-grading audit | before L1; A1 for green |
+
+**What is built or re-run:**
+- **Cloud:** the generator's record argument, one commit with its code review; the run sheet re-pinned to that
+  commit; then the coverage auditor's pre-licence re-audit.
+- **Box:** B3 (12 min) and B4 (8 min) regenerate with v2 bindings, B5 pair check (2 min), L1 by the debunker
+  (about 10 min), then B6 (10 min). **About 42 box minutes.** B6 is unblocked once L1 passes.
+
+**Does an acceptance form change?** No. The licence binds the record §8 always required, and the population's tokens
+are unchanged. No promise or PC changes, and no principal question is needed.
