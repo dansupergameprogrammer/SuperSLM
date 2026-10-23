@@ -1,0 +1,46 @@
+# M2 squash manifest for 1.14.0: the paths the squash of claude/precache-1p14-post-m1 onto main must leave out.
+#
+# Scope: paths this branch adds or changes relative to the merge-base 1948e1f2 (git diff --name-only 1948e1f2 <tip>).
+# main's existing docs/release/ files (superslm-1.2-public-strike.md, superslm-1.2-review-packet.md,
+# superslm-1.3-review-packet.md) are not touched by the branch and stay as they are. These records stay on the branch.
+# The public record is docs/releases/1.14.0-verification.md.
+#
+# Syntax: one git pathspec per line; '#' starts a comment. A line starting with '!' is kept even though an EXCLUDE
+# glob matches it.
+
+## EXCLUDE: process records (every path the branch adds under docs/release/)
+docs/release/superslm-1.14-box-receipts-2026-10-22.md
+docs/release/longleg-2026-10-22/**
+docs/release/e4-box-2026-10-22/**
+docs/release/e5-box-2026-10-23/**
+docs/release/M2-EXCLUDE.txt
+
+## EXCLUDE: box and drive kits that carry machine paths and are not test code
+tests/precache/e4_box_env.ps1
+tools/longleg_kit/**
+
+## KEEP, but proposed to move first: the G1 reference stems are test inputs main needs
+# 6.2/E2:reference and 6.3/E3:reference read them through SUPERSLM_PRECACHE_REFERENCE_DIR/<group>/<stem>-runN.ref.
+# The licence manifest names them by group, run, stem and SHA-256, with no directory, so a move keeps the licence valid.
+# Proposed home (not moved yet): tests/precache/reference/p6-pkv_def-1948e1f2/, with the same .gitattributes (* -text).
+# Until that move, the squash keeps exactly these files and drops the folder's README.md and SHA256SUMS.txt:
+!docs/release/e5-box-2026-10-23/g1-p6/.gitattributes
+!docs/release/e5-box-2026-10-23/g1-p6/P6-pkv_def-flat/flat00-run1.ref
+!docs/release/e5-box-2026-10-23/g1-p6/P6-pkv_def-flat/flat00-run2.ref
+!docs/release/e5-box-2026-10-23/g1-p6/P6-pkv_def-nested/nested00-run1.ref
+!docs/release/e5-box-2026-10-23/g1-p6/P6-pkv_def-nested/nested00-run2.ref
+
+## KEEP (listed so the squash is checked against it; nothing here is excluded)
+# Release: CHANGELOG.md, CMakeLists.txt, README.md, include/superslm/sslm_version.h, tests/install-consumer/CMakeLists.txt,
+#   docs/releases/1.14.0.md, docs/releases/1.14.0-verification.md
+# Committed test inputs: tests/precache/reference/pins-9.5/** (9.5's 1.14.0 SPX1 blobs and manifest),
+#   tests/precache/reference/pins/v1.13.1_pkv_def_*.zrl and tests/precache/reference/v1.13.1_pkv_def_seqsaves.ref (9.9),
+#   tests/precache-gpu/captures/** (9.10's v1.13.1 RTX 2080 SUPER captures)
+# Test code and its tools: tests/precache/{apply_e2_mutant.py, apply_e4_mutant.py, check_version_values.py,
+#   e2_failures.cpp, e4_real.cpp, precache.cmake, precache_hostile.h, run_e2_mutants.sh, test_merge_base_shallow.py,
+#   write_merge_base.py}, tests/precache/reference/{pin_9p5_spx1.cpp, t3022_precache_reference.cpp, t3035_reference.cpp},
+#   tools/build_precache_9p5_pins.sh
+#
+# Checked: no kept file reads anything under docs/release/ (git grep over the tree outside docs/release/). The 7.17
+# constructions (e5-box-2026-10-23/7.17/run_717_constructions.py) and the 9.1/E2 GNU bundle (e5-box-2026-10-23/g2-91/)
+# are run by hand from a run sheet, never by a test or CMake, so they are excluded as process records.
