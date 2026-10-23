@@ -356,28 +356,30 @@ function Invoke-Logged([string]$Log, [string]$Exe, [string[]]$Arguments) {
 # commit, bundle and folder.
 function Initialize-Source([string]$LongLeg, [string]$Work, [string]$Commit = '', [string]$Bundle = 'source\superslm.bundle', [string]$Dir = 'src') {
     $source = Read-KeyValue (Join-Path $LongLeg 'inputs\source\SOURCE.txt')
-    $commit = $source['commit']
-    if ($Commit) { $commit = $Commit }
-    if (-not $commit -or $commit -notmatch '^[0-9a-f]{40}$') { throw 'inputs\source\SOURCE.txt names no 40-hex commit' }
+    # PowerShell names ignore case: a local $commit would overwrite the $Commit parameter (W1's first run on the spare PC
+    # built SOURCE.txt's commit this way), so the chosen commit is $want and the bundle path $bundlePath.
+    $want = $source['commit']
+    if ($Commit) { $want = $Commit }
+    if (-not $want -or $want -notmatch '^[0-9a-f]{40}$') { throw 'inputs\source\SOURCE.txt names no 40-hex commit' }
     $src = Join-Path $Work $Dir
     $log = Join-Path $Work ($Dir + '.log')
     if ($Dir -eq 'src') { $log = Join-Path $Work 'source.log' }
-    $bundle = Join-Path $LongLeg ('inputs\' + $Bundle)
+    $bundlePath = Join-Path $LongLeg ('inputs\' + $Bundle)
     if (-not (Test-Path -LiteralPath (Join-Path $src '.git'))) {
         New-Item -ItemType Directory -Force -Path $src | Out-Null
         if ((Invoke-Logged $log 'git' @('-C', $src, 'init', '-q')) -ne 0) { throw "git init failed; see $log" }
     }
-    $have = (Invoke-Native 'git' @('-C', $src, 'rev-parse', '-q', '--verify', "$commit^{commit}"))
+    $have = (Invoke-Native 'git' @('-C', $src, 'rev-parse', '-q', '--verify', "$want^{commit}"))
     if (-not $have) {
         Write-Line 'unpacking the source from the drive''s bundle (full history)'
-        if ((Invoke-Logged $log 'git' @('-C', $src, 'fetch', '-q', $bundle, '+refs/*:refs/bundle/*')) -ne 0) { throw "git fetch from the bundle failed; see $log" }
+        if ((Invoke-Logged $log 'git' @('-C', $src, 'fetch', '-q', $bundlePath, '+refs/*:refs/bundle/*')) -ne 0) { throw "git fetch from the bundle failed; see $log" }
     }
-    if ((Invoke-Logged $log 'git' @('-C', $src, 'checkout', '-q', '--detach', '--force', $commit)) -ne 0) { throw "git checkout $commit failed; see $log" }
+    if ((Invoke-Logged $log 'git' @('-C', $src, 'checkout', '-q', '--detach', '--force', $want)) -ne 0) { throw "git checkout $want failed; see $log" }
     $shallow = (& git -C $src rev-parse --is-shallow-repository).Trim()
     if ($shallow -ne 'false') { throw "the clone at $src is shallow ($shallow); the kit needs a full history" }
     $head = (& git -C $src rev-parse HEAD).Trim()
-    if ($head -ne $commit) { throw "HEAD is $head, not $commit" }
-    return @{ Src = $src; Commit = $commit; Branch = $source['branch'] }
+    if ($head -ne $want) { throw "HEAD is $head, not $want" }
+    return @{ Src = $src; Commit = $want; Branch = $source['branch'] }
 }
 
 function Import-VcVars([string]$Vcvars) {
@@ -876,6 +878,26 @@ switch ($Mode) {
     Assert ($again['verdict'] -eq 'CRASHED' -and $again['attempts'] -eq '2') "-RetryCrashed starts the attempt count afresh ($($again['attempts']))"
 
     Assert (@(Get-Pieces @('msvc') @('msvc__T.2')).Count -eq 1) '-Only selects by id prefix'
+
+    # Initialize-Source honours an explicit commit over SOURCE.txt's (W1 builds e8c029ed while SOURCE.txt names the
+    # long legs' commit; the first spare-PC run built SOURCE.txt's because a local $commit overwrote $Commit).
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $repo = Join-Path $root 'repo'
+        $null = & git init -q $repo
+        $null = & git -C $repo -c user.name=t -c user.email=t@t commit -q --allow-empty -m a
+        $a = (& git -C $repo rev-parse HEAD).Trim()
+        $null = & git -C $repo -c user.name=t -c user.email=t@t commit -q --allow-empty -m b
+        $b = (& git -C $repo rev-parse HEAD).Trim()
+        $drive = Join-Path $root 'drive'
+        New-Item -ItemType Directory -Force -Path (Join-Path $drive 'inputs\source') | Out-Null
+        $null = & git -C $repo bundle create (Join-Path $drive 'inputs\source\pin.bundle') --all 2>$null
+        Write-Utf8File (Join-Path $drive 'inputs\source\SOURCE.txt') "commit=$a`nbranch=t`n"
+        $work = Join-Path $root 'work'
+        $pinned = Initialize-Source $drive $work $b 'source\pin.bundle' 'src-pin'
+        Assert ($pinned.Commit -eq $b -and (& git -C $pinned.Src rev-parse HEAD).Trim() -eq $b) "an explicit commit wins over SOURCE.txt's ($($pinned.Commit))"
+        $plain = Initialize-Source $drive $work '' 'source\pin.bundle' 'src-plain'
+        Assert ($plain.Commit -eq $a) "no explicit commit: SOURCE.txt's ($($plain.Commit))"
+    } else { Write-Host 'skip Initialize-Source checks: no git' }
     Remove-Item -LiteralPath $root -Recurse -Force
     if ($fails.Count -gt 0) { Write-Host "self-test: $($fails.Count) failure(s)"; return 1 }
     Write-Host 'self-test: 0 failures'
