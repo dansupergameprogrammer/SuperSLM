@@ -24,9 +24,8 @@ about 7 to 8 hours of that.
 These are not run here, and the summary lists them with the reason:
 
 - The two TSan pkv_32k cells. They are Linux-only, because there is no ThreadSanitizer on Windows.
-- E4's timing and real-artifact cells. They are blocked until the reference re-derivation, the licensed
-  references and the timing instrument exist. The real models go on the drive anyway, so the drive is
-  ready for them.
+- E4's timing and real-artifact cells. They run on the home box under the E4 run sheet. The one exception
+  is W1, the 1.5B cap-length capture, which runs here with `-E4Worst` (see *E4's W1* below).
 
 ## Drive
 
@@ -100,6 +99,7 @@ Pass these to `START.cmd` or `longleg.ps1`:
 | `-Parallel 6` | Runs more pieces at once. The default is 4. |
 | `-Only msvc__4.2` | Runs only the pieces whose id starts with this. |
 | `-RetryCrashed` | Runs again the pieces recorded **CRASHED** (the old record and logs are kept, renamed). |
+| `-E4Worst` | Also runs E4's W1, the 1.5B cap-length capture for the home box's B9 (see below). |
 | `-SelfTest` | Tests the scheduler with stand-in pieces. It builds nothing. |
 
 To run one piece again, delete its `results\<piece>.done` file and start the kit.
@@ -111,3 +111,50 @@ every piece. For the AddressSanitizer build, the kit first copies MSVC 14.34's A
 first. On the first spare-PC run, without this, every ASan piece exited 0xC0000142 (DLL initialization failed)
 at once. To re-run those pieces with the fixed kit, once the rest are done: copy the new kit onto the drive and
 run `START.cmd -Toolchains msvc-asan -RetryCrashed`.
+
+## E4's W1 (`-E4Worst`)
+
+W1 is one prefill of 32,768 tokens on the real 1.5B model, on one thread. It takes about 60 to 90 minutes,
+which is too long for the home box (R12). It saves the resulting prefix as a 448 MiB blob, and the home
+box's B9 times restoring that blob. With `-E4Worst` the kit adds one piece, `msvc-e4__10.3-E4-worst`. It
+goes to the front of the queue, so it starts within minutes and runs beside the other pieces.
+
+- **Build.** It builds only `superslm_precache_e1`, from the E4 run sheet's pinned commit `e8c029ed`
+  rather than the drive's long-leg commit. The source comes from `inputs\source\e4w1.bundle`, cloned into
+  `<work>\src-e4w1`, and is built in `<work>\build-msvc-e4`. The build is MSVC 14.34 Release with the same
+  flags as the run sheet's B1 (`-G Ninja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release`, `cl`). B9 can
+  restore only a blob made from the same source.
+- **Run.** It runs `=10.3/E4:worst` with `SUPERSLM_PRECACHE_WORST_PHASE=capture`, the drive's
+  `inputs\models\qwen2.5-1.5b-instruct-dg-g5.sslm` (SHA-256 `93c8149d…6790`) and
+  `SUPERSLM_PRECACHE_WORST_BLOB=results\e4-w1\cap1p5.spx1`.
+- **Output.** It writes three files to `results\e4-w1\`:
+  - `cap1p5.spx1`, the blob, 469,763,768 bytes;
+  - `cap1p5.spx1.sha256`, its SHA-256;
+  - `W1.txt`, with the commit, the runner's SHA-256, the compiler, the blob's SHA-256 and the runner's
+    capture line.
+
+  The piece is GREEN only if all three hold:
+  - the runner prints `10.3/E4:worst green`;
+  - it prints the capture line `… B=64 bytes_including_digest=… blob_sha256=…`;
+  - the blob on the drive has exactly that size and SHA-256.
+
+  Anything else is RED, with the reason in the summary. A crash leaves only `cap1p5.spx1.partial`, and the
+  piece runs again.
+
+**Adding W1 to a drive that is part-way through its run.** On the home box, with the drive plugged in, run:
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File D:\SuperSLM\tools\longleg_kit\fill_drive.ps1 -Drive F: -KitOnly
+
+This does three things:
+- copies the kit as committed at the branch's head;
+- adds `e4w1.bundle`;
+- adds the 1.5B model if it is not already on the drive.
+
+`SOURCE.txt` and `superslm.bundle` are left alone, so the long-leg pieces, including the ASan re-run,
+keep building the commit they started at. The next run re-verifies the inputs once, which takes a few
+minutes. Then, on the spare PC:
+
+    START.cmd -Toolchains msvc-asan -RetryCrashed -E4Worst
+
+**Bringing the blob back.** Copy the folder `results\e4-w1\` back to the home box as it is. The run sheet's W1
+and B9 say where it goes and what B9 checks.

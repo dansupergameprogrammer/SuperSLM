@@ -60,11 +60,11 @@ B0 worktrees ─ B1 build ─┬─ B2 smoke (6.6 both legs)
                          └─ B11 6.6 matvec mutant on MSVC (optional)
 B0 ─ B3g generator @47bdcc9e ─┬─ B3 refs P1 ─┐
                                └─ B4 refs P2 ─┴─ B5 pair check ─ A0 re-audit [AUDITOR] ─ L1 licence [DEBUNKER] ─ B6 (needs B1)
-W1 cap-length 1.5B capture [WORK MACHINE or the long-leg PC; not the home box]
+W1 cap-length 1.5B capture [SPARE PC via the long-leg kit, -E4Worst; not the home box]
 A1 E4 discrimination re-audit [COVERAGE AUDITOR; no box time] after B6, B8, B9, B10
 ```
 
-Nothing in E4 needs a GPU. The work machine (or the long-leg kit's spare PC) is needed only for W1, because a 32,768-token
+Nothing in E4 needs a GPU. The long-leg kit's spare PC is needed only for W1, because a 32,768-token
 1.5B prefill on one thread runs about an hour (R12).
 
 **Rules for every piece.** Open a **fresh PowerShell window** per piece and dot-source the environment first. Every
@@ -383,39 +383,68 @@ $checks.GetEnumerator() | ForEach-Object { $l = '{0}: {1}' -f $_.Key, $(if ($_.V
 Pass: five `PASS` lines, and the runner SHA in the logs equals the last line (the B1 build). A slice re-run under a
 debunker rule leaves two readings in one log: send it rather than reading this check.
 
-### W1. Cap-length 1.5B capture for 10.3's worst setting — **WORK MACHINE (or the long-leg PC)**; about 60–90 min
+### W1. Cap-length 1.5B capture for 10.3's worst setting — **SPARE PC, through the long-leg drive kit**; about 60–90 min
 
-Not on the home box (R12: one uncheckpointed 32,768-token prefill at 1.5B). CPU only; any Windows machine with MSVC
-14.34. Build the pinned commit exactly as B0–B1 (the same worktree commands and `e4_box_env.ps1`; the artifact paths
-are the same on the long-leg drive's layout, or set `$env:SUPERSLM_PRECACHE_REAL_1P5_MODEL` to the copy of
-`qwen2.5-1.5b-instruct-dg-g5.sslm`, SHA-256 `93c8149d…6790`). Set any path override **after** the dot-source line (the env script sets the defaults). Then:
+This does not run on the home box (R12: one uncheckpointed prefill of 32,768 tokens at 1.5B). It runs on the spare PC
+(i5-14400F) as one more piece of the long-leg kit, `tools/longleg_kit` (README, *E4's W1*). The piece builds
+`superslm_precache_e1` at `e8c029ed68f6d3fb0a728673c9a41d16d433916d` with MSVC 14.34 Release and B1's flags, from the
+drive's `e4w1.bundle`, then runs `=10.3/E4:worst` with `SUPERSLM_PRECACHE_WORST_PHASE=capture` on the drive's 1.5B
+model.
+
+1. Home box, with the drive plugged in (a few minutes). This refreshes the kit and adds W1's source and model. The
+   long legs' source is not touched.
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\SuperSLM\tools\longleg_kit\fill_drive.ps1 -Drive F: -KitOnly
+   ```
+2. Spare PC: run `START.cmd -Toolchains msvc-asan -RetryCrashed -E4Worst` from the drive's root. W1 goes first in the
+   queue, beside the ASan re-run.
+
+Pass: in `results\SUMMARY.md`, the builds table has an `msvc-e4` row with status `ok`, and the piece
+`msvc-e4__10.3-E4-worst` is **GREEN**. Its log `results\msvc-e4__10.3-E4-worst.attempt<N>.out.log` shows:
+- `10.3 real 1.5B: rule B = 64 (engine 64, helpers 64), cap 32768, cap_pages 512, page 917504 bytes`;
+- `10.3 worst capture cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=469763768 blob_sha256=<sha> prefill_ms=…`;
+- `10.3/E4:worst green`.
+
+The kit makes the piece GREEN only when the blob on the drive has exactly that size and SHA-256. It writes
+`results\e4-w1\cap1p5.spx1`, `cap1p5.spx1.sha256` and `W1.txt` (the commit, the runner's SHA-256, the compiler and
+the capture line). A crash leaves only `cap1p5.spx1.partial`, and the kit runs the piece again.
+
+### B9. 10.3 worst setting: restore timing (≤ 5 min) — Dan; needs W1 and T1b; ALONE
+
+When the drive is back, copy `F:\longleg\results\e4-w1\` as a binary copy, then check it before timing:
 
 ```powershell
 . D:\_scratch\e4\src\tests\precache\e4_box_env.ps1
-# $env:SUPERSLM_PRECACHE_REAL_1P5_MODEL = '<path of the 1.5B copy>'   # only if it is not at the box's path
-New-Item -ItemType Directory -Force (Split-Path $env:SUPERSLM_PRECACHE_WORST_BLOB) | Out-Null
-$env:SUPERSLM_PRECACHE_WORST_PHASE = 'capture'
-E4-Run (E4-Log 'W1-worst-capture') $E4Runner @('=10.3/E4:worst')
-```
-
-Pass: `10.3 real 1.5B: rule B = 64 (engine 64, helpers 64), cap 32768, cap_pages 512, page 917504 bytes`, then
-`10.3 worst capture cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=469763768 blob_sha256=<sha>
-prefill_ms=…`, `10.3/E4:worst green`. Copy `cap1p5.spx1` (448 MiB) to the box at
-`D:\_scratch\e4\worst\cap1p5.spx1` and check its SHA-256 against the printed `blob_sha256`. A crash leaves only
-`cap1p5.spx1.partial`: re-run.
-
-### B9. 10.3 worst setting: restore timing (3 min) — Dan; needs W1 and T1b; ALONE
-
-```powershell
-. D:\_scratch\e4\src\tests\precache\e4_box_env.ps1
+$w = Split-Path $env:SUPERSLM_PRECACHE_WORST_BLOB          # D:\_scratch\e4\worst
+New-Item -ItemType Directory -Force $w | Out-Null
+Copy-Item F:\longleg\results\e4-w1\* $w -Force
+$log = E4-Log 'B9-worst-restore'
+Get-Content (Join-Path $w 'W1.txt') | ForEach-Object { E4-Append $log $_; $_ }
+$want = ((Get-Content (Join-Path $w 'cap1p5.spx1.sha256')) -split '\s+')[0]
+$got = (Get-FileHash $env:SUPERSLM_PRECACHE_WORST_BLOB).Hash.ToLower()
+"blob sha256 $got; W1 printed $want; bytes $((Get-Item $env:SUPERSLM_PRECACHE_WORST_BLOB).Length)" | ForEach-Object { E4-Append $log $_; $_ }
+if ($got -ne $want) { throw 'cap1p5.spx1 differs from what W1 recorded: copy it again' }
 $env:SUPERSLM_PRECACHE_WORST_PHASE = 'restore'
-E4-Run (E4-Log 'B9-worst-restore') $E4Runner @('=10.3/E4:worst')
+E4-Run $log $E4Runner @('=10.3/E4:worst')
 ```
 
-Pass: `10.3 receipt=<sha> runner=<B8's runner sha> box=home-3950x threads=1 worst cap=32768 geometry=1p5 28x2x128 B=64
-bytes_including_digest=469763768 blob_sha256=<W1's> restore_ms=… MiB=448.002 MiB/s=…` and `10.3/E4:worst green`.
-Recorded, not graded: these are the plugin cost model's per-MiB figures (R5). A blob from another build or model is
-refused by the restore, not timed.
+Pass:
+- `W1.txt` shows `commit=e8c029ed68f6d3fb0a728673c9a41d16d433916d`;
+- the blob's SHA-256 equals W1's, at 469763768 bytes;
+- the runner prints `10.3 receipt=<sha> runner=<B8's runner sha> box=home-3950x threads=1 worst cap=32768
+  geometry=1p5 28x2x128 B=64 bytes_including_digest=469763768 blob_sha256=<W1's> restore_ms=… MiB=448.002 MiB/s=…`
+  and then `10.3/E4:worst green`.
+
+What B9 checks:
+- The restore runs under the commissioned `PC-TIMING-1` receipt, so `runner=` is the box's runner, B8's.
+- The blob's size must be exactly the header, the hidden state and 32,768 canonical rows.
+- Each of the three timed restores must succeed against the box's mapped 1.5B artifact. A restore validates the blob,
+  digest included, against that model and the producer (engine version, CPU), so a blob from another model or source is refused,
+  not timed.
+- The first restore must re-save the identical bytes.
+
+W1's runner SHA-256 and the box's are recorded side by side, not compared: they are two MSVC builds of one commit on
+two machines. The figures are recorded, not graded: they are the plugin cost model's per-MiB figures (R5).
 
 ### X1 (done in the cloud). 4.3's GNU and Clang compiler jobs
 
@@ -481,7 +510,7 @@ On B2, B6, B8a–B8d, B9, B10, B11's logs and the cloud record. E4 is not green 
 | Dan, test-author pieces on the home box | B0 3, B1 15, B2 3, B3g 12, B3 12, B4 8, B5 2, B6 10, B7 1, B8a–d 39, B8e 1, B9 3, B10 15 (B11 optional, +15) | **about 124** |
 | Dan, re-run after the L1 refusal (§15.33) | B3g 12, B3 12, B4 8, B5 2, B6 10 | **about 44**, plus L1's ~10 = 54 |
 | Debunker, on the box | L1 ~10, T1a ~12, T1b ~6 (alone) | about 28 |
-| Work machine or long-leg PC | W1 | 60–90 (not home-box time) |
+| Spare PC (long-leg kit, `-E4Worst`) | W1 | 60–90 (not home-box time) |
 | Coverage auditor | A0 (before L1), A1 | none |
 
 E4's plan row estimated ~45 min; it did not count the reference regeneration, the licence, the commissioning or the

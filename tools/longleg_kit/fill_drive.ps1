@@ -10,7 +10,8 @@ Writes <Drive>\longleg\:
   inputs\pkv\        pkv_def, pkv_odd, pkv_qk, pkv_32k .sslm (SUPERSLM_PAGED_KV_FIXTURE_DIR)
   inputs\e0\         the E0 debunker's three artifacts (SUPERSLM_PRECACHE_E0_ARTIFACT_DIR)
   inputs\models\     the converted real 0.5B and 1.5B models (for E4 once it is unblocked; no leg reads them yet)
-  inputs\source\     superslm.bundle (full history of the branch and main) and SOURCE.txt (commit=, branch=)
+  inputs\source\     superslm.bundle (full history of the branch and main) and SOURCE.txt (commit=, branch=);
+                     e4w1.bundle (full history to E4's pinned commit e8c029ed, which longleg.ps1 -E4Worst builds for W1)
   inputs\MANIFEST.tsv  path, bytes, sha256 of every input; longleg.ps1 verifies against it once
   kit\               this folder, as committed at the bundled commit
   START.cmd, LONGLEG_DRIVE.txt
@@ -31,7 +32,12 @@ A full (not shallow) clone of SuperSLM. Default D:\SuperSLM.
 The branch the kit builds. Default claude/precache-1p14-post-m1.
 
 .PARAMETER SkipModels
-Leave the real models off the drive (no leg reads them until E4 is unblocked). Saves about 4 GB.
+Leave the real models off the drive (only -E4Worst's W1 reads one, the 1.5B). Saves about 4 GB.
+
+.PARAMETER KitOnly
+Refresh a drive that is part-way through its long legs, for longleg.ps1 -E4Worst: copy the kit as committed at the
+branch's head, add e4w1.bundle and the 1.5B model if it is not there, and keep everything else as it is. SOURCE.txt and
+superslm.bundle are not touched, so the long-leg pieces keep building the commit they were started at.
 #>
 [CmdletBinding()]
 param(
@@ -39,7 +45,8 @@ param(
     [string]$Artifacts = 'D:\_artifacts\SuperSLM',
     [string]$Repo = 'D:\SuperSLM',
     [string]$Branch = 'claude/precache-1p14-post-m1',
-    [switch]$SkipModels
+    [switch]$SkipModels,
+    [switch]$KitOnly
 )
 
 Set-StrictMode -Version 2.0
@@ -79,6 +86,14 @@ if (-not $SkipModels) {
     )
 }
 
+# E4's W1 (longleg.ps1 -E4Worst) builds the E4 run sheet's pinned commit, so B9's restore on the home box accepts its blob.
+$e4Commit = 'e8c029ed68f6d3fb0a728673c9a41d16d433916d'
+$e4Model = 'models\qwen2.5-1.5b-instruct-dg-g5.sslm'
+if ($KitOnly) {
+    if ($SkipModels) { throw '-KitOnly adds the 1.5B model for W1; do not pass -SkipModels with it' }
+    $copies = @($copies | Where-Object { $_.To -eq $e4Model })
+}
+
 # ---------------------------------------------------------------------------------------------------------------
 # Check everything before writing anything
 # ---------------------------------------------------------------------------------------------------------------
@@ -97,7 +112,9 @@ Write-Line "fetching $Branch and main into $Repo"
 Invoke-Git @('fetch', '-q', 'origin', "+refs/heads/${Branch}:refs/remotes/origin/$Branch", '+refs/heads/main:refs/remotes/origin/main') | Out-Null
 $commit = (Invoke-Git @('rev-parse', "refs/remotes/origin/$Branch^{commit}")).Trim()
 Invoke-Git @('cat-file', '-e', "${commit}:tools/longleg_kit/longleg.ps1") | Out-Null
-Write-Line "the kit builds $Branch at $commit"
+Invoke-Git @('merge-base', '--is-ancestor', $e4Commit, $commit) | Out-Null
+if ($KitOnly) { Write-Line "refreshing the kit to $Branch at $commit; the long legs' source is kept" }
+else { Write-Line "the kit builds $Branch at $commit" }
 
 $volume = Get-Volume -DriveLetter $Drive.Substring(0, 1)
 $fs = [string]$volume.FileSystem
@@ -119,7 +136,17 @@ foreach ($d in @('synthetic', 'pkv', 'e0', 'models', 'source')) { New-Item -Item
 New-Item -ItemType Directory -Force -Path (Join-Path $longLeg 'results') | Out-Null
 
 $manifest = New-Object System.Collections.Generic.List[string]
-$manifest.Add("# path`tbytes`tsha256 (written by fill_drive.ps1 for $commit)")
+$rewritten = @($copies | ForEach-Object { $_.To }) + @('source\e4w1.bundle')
+if ($KitOnly) {
+    $oldManifest = Join-Path $inputs 'MANIFEST.tsv'
+    if (-not (Test-Path -LiteralPath $oldManifest)) { throw "$oldManifest is missing: fill the drive in full first (no -KitOnly)" }
+    foreach ($line in [System.IO.File]::ReadAllLines($oldManifest)) {
+        if ($line -and -not $line.StartsWith('#') -and $rewritten -notcontains $line.Split("`t")[0]) { $manifest.Add($line) }
+    }
+    $manifest.Insert(0, "# path`tbytes`tsha256 (kit refreshed by fill_drive.ps1 -KitOnly at $commit)")
+} else {
+    $manifest.Add("# path`tbytes`tsha256 (written by fill_drive.ps1 for $commit)")
+}
 foreach ($c in $copies) {
     $src = Get-Item -LiteralPath $c.From
     $srcSha = Get-Sha256 $src.FullName
@@ -137,13 +164,27 @@ foreach ($c in $copies) {
 }
 
 # Source: a bundle with the full history of the branch and main, so the PC clones with no network or credentials.
-$bundle = Join-Path $inputs 'source\superslm.bundle'
-Write-Line 'writing the source bundle (full history)'
-Invoke-Git @('bundle', 'create', $bundle, "refs/remotes/origin/$Branch", 'refs/remotes/origin/main') | Out-Null
-Invoke-Git @('bundle', 'verify', '-q', $bundle) | Out-Null
-$sourceTxt = Join-Path $inputs 'source\SOURCE.txt'
-Write-Utf8File $sourceTxt ("commit=$commit`nbranch=$Branch`nfilled=" + (Get-Date).ToString('s') + "`n")
-foreach ($f in @('source\superslm.bundle', 'source\SOURCE.txt')) {
+$sourceFiles = @('source\e4w1.bundle')
+if (-not $KitOnly) {
+    $bundle = Join-Path $inputs 'source\superslm.bundle'
+    Write-Line 'writing the source bundle (full history)'
+    Invoke-Git @('bundle', 'create', $bundle, "refs/remotes/origin/$Branch", 'refs/remotes/origin/main') | Out-Null
+    Invoke-Git @('bundle', 'verify', '-q', $bundle) | Out-Null
+    $sourceTxt = Join-Path $inputs 'source\SOURCE.txt'
+    Write-Utf8File $sourceTxt ("commit=$commit`nbranch=$Branch`nfilled=" + (Get-Date).ToString('s') + "`n")
+    $sourceFiles = @('source\superslm.bundle', 'source\SOURCE.txt') + $sourceFiles
+}
+# W1's source: E4's pinned commit, under a ref of its own (a bundle carries refs, not bare commits).
+$e4Bundle = Join-Path $inputs 'source\e4w1.bundle'
+Write-Line "writing the W1 source bundle ($e4Commit, full history)"
+Invoke-Git @('update-ref', 'refs/longleg/e4w1', $e4Commit) | Out-Null
+try {
+    Invoke-Git @('bundle', 'create', $e4Bundle, 'refs/longleg/e4w1') | Out-Null
+} finally {
+    Invoke-Git @('update-ref', '-d', 'refs/longleg/e4w1') | Out-Null
+}
+Invoke-Git @('bundle', 'verify', '-q', $e4Bundle) | Out-Null
+foreach ($f in $sourceFiles) {
     $p = Join-Path $inputs $f
     $manifest.Add($f + "`t" + (Get-Item -LiteralPath $p).Length + "`t" + (Get-Sha256 $p))
 }
@@ -163,7 +204,7 @@ try {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Utf8File (Join-Path $longLeg 'LONGLEG_DRIVE.txt') ("SuperSLM 1.14.0 long-leg drive`ncommit=$commit`n")
+if (-not $KitOnly) { Write-Utf8File (Join-Path $longLeg 'LONGLEG_DRIVE.txt') ("SuperSLM 1.14.0 long-leg drive`ncommit=$commit`n") }
 $start = "@echo off`r`n" +
     "rem Runs the SuperSLM long legs from this drive. Safe to run again at any time; finished pieces are skipped.`r`n" +
     "powershell -NoProfile -ExecutionPolicy Bypass -File `"%~d0\longleg\kit\longleg.ps1`" %*`r`n" +

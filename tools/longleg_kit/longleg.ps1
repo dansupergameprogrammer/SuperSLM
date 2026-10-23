@@ -45,6 +45,13 @@ Pieces at once. Each piece is one single-threaded process. Default 4 (the i5-144
 .PARAMETER RetryCrashed
 Run again the selected pieces recorded CRASHED. Their old .done, .attempts and log files are kept, renamed with the time.
 
+.PARAMETER E4Worst
+Also run E4's W1 (plan section 9 E4, run sheet W1): the cap-length 32,768-token 1.5B capture for 10.3's worst setting.
+It is one more piece, msvc-e4__10.3-E4-worst, on its own toolchain msvc-e4: MSVC 14.34 Release with the same flags as the
+msvc build, but built from the E4 pinned commit (e8c029ed, from inputs\source\e4w1.bundle) in its own clone and build
+folder. It writes results\e4-w1\cap1p5.spx1 with cap1p5.spx1.sha256 and W1.txt. It needs the real 1.5B model on the
+drive. Without this switch the kit does exactly what it did before.
+
 .PARAMETER SelfTest
 Exercise the piece scheduler, resume and summary with stand-in pieces in a temporary folder (any OS). Builds nothing.
 #>
@@ -58,6 +65,7 @@ param(
     [string[]]$Only = @(),
     [ValidateRange(1, 16)][int]$Parallel = 4,
     [switch]$RetryCrashed,
+    [switch]$E4Worst,
     [switch]$SelfTest
 )
 
@@ -75,15 +83,23 @@ $script:CellTable = @(
     @{ Cell = '4.7/E2:synthetic1p5';     Binary = 'unpinned'; Checkpointed = $false; Hours = 2.3;  Toolchains = @('msvc', 'clangcl', 'msvc-asan') },
     @{ Cell = '9.8/E2:synthetic1p5';     Binary = 'unpinned'; Checkpointed = $false; Hours = 2.0;  Toolchains = @('msvc', 'clangcl', 'msvc-asan') },
     @{ Cell = '4.7/E3:synthetic1p5';     Binary = 'unpinned'; Checkpointed = $false; Hours = 1.0;  Toolchains = @('msvc', 'clangcl', 'msvc-asan') },
-    @{ Cell = '9.8/E3:synthetic1p5';     Binary = 'unpinned'; Checkpointed = $false; Hours = 0.75; Toolchains = @('msvc', 'clangcl', 'msvc-asan') }
+    @{ Cell = '9.8/E3:synthetic1p5';     Binary = 'unpinned'; Checkpointed = $false; Hours = 0.75; Toolchains = @('msvc', 'clangcl', 'msvc-asan') },
+    # E4's W1, only with -E4Worst (msvc-e4 is in no default toolchain list): the 1.5B cap-length capture for B9.
+    @{ Cell = '10.3/E4:worst';           Binary = 'e1';       Checkpointed = $false; Hours = 1.5;  Toolchains = @('msvc-e4') }
 )
-$script:ToolchainOrder = @('msvc', 'clangcl', 'msvc-asan')
-$script:HourScale = @{ 'msvc' = 1.0; 'clangcl' = 1.0; 'msvc-asan' = 2.5 }
+$script:ToolchainOrder = @('msvc', 'clangcl', 'msvc-asan', 'msvc-e4')
+$script:HourScale = @{ 'msvc' = 1.0; 'clangcl' = 1.0; 'msvc-asan' = 2.5; 'msvc-e4' = 1.0 }
+# msvc-e4 (W1): built from the E4 run sheet's pinned commit, not the drive's long-leg commit, so B9 on the home box can
+# restore its blob (the restore refuses a blob from another source's producer). Only the runner is built.
+$script:E4Commit = 'e8c029ed68f6d3fb0a728673c9a41d16d433916d'
+$script:E4Model = 'models\qwen2.5-1.5b-instruct-dg-g5.sslm'
+$script:E4Bundle = 'source\e4w1.bundle'
+$script:BuildBinaries = @{ 'msvc' = @('e1', 'unpinned'); 'clangcl' = @('e1', 'unpinned'); 'msvc-asan' = @('e1', 'unpinned'); 'msvc-e4' = @('e1') }
 $script:NotRun = @(
     @{ What = 'TSan 4.7/E2:pkv_32k and 9.8/E2:pkv_32k'
        Why  = 'Linux only. ThreadSanitizer has no Windows runtime for MSVC or clang-cl. Each cell needs more than 2 hours under TSan; run them on Linux (GCC 13, -fsanitize=thread) with no time limit.' },
     @{ What = 'E4: 4.3, 6.6/E4, 6.6/E4:rule-b, 10.1-10.3/E4, real_two_process'
-       Why  = 'No GPU needed, but not ready: the E4 re-derivation to the rule B (10.1, 10.2) is not written, the real-artifact references at the post-M1 anchor are not regenerated or licensed (box B3), the timing instrument (10.3) is not commissioned, and 4.3 needs the three compilers'' blobs. The drive carries the real 0.5B and 1.5B models for when they are.' }
+       Why  = 'Run on the home box under the E4 run sheet (timings need its commissioned receipt). Only W1, the 1.5B cap-length capture, runs here, with -E4Worst.' }
 )
 $script:MaxCrashes = 2            # a piece that crashes twice is recorded CRASHED and the queue moves on
 $script:PollSeconds = 20
@@ -151,9 +167,10 @@ function Get-Pieces([string[]]$Wanted, [string[]]$Prefixes) {
 }
 
 # The queue: msvc first (the plan's own list), then clang-cl and msvc-asan together; longest first inside each
-# phase, so the wall clock is set by the longest piece rather than by the order.
+# phase, so the wall clock is set by the longest piece rather than by the order. W1 (-E4Worst) goes ahead of all of
+# them: the home box's B9 waits on its blob.
 function Get-QueueOrder($Pieces) {
-    return @($Pieces | Sort-Object -Property @{ Expression = { if ($_.Phase -eq 0) { 0 } else { 1 } } }, @{ Expression = 'Hours'; Descending = $true }, 'Id')
+    return @($Pieces | Sort-Object -Property @{ Expression = { if ($_.Toolchain -eq 'msvc-e4') { -1 } elseif ($_.Phase -eq 0) { 0 } else { 1 } } }, @{ Expression = 'Hours'; Descending = $true }, 'Id')
 }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -288,7 +305,7 @@ function Install-Missing($Missing) {
 # ---------------------------------------------------------------------------------------------------------------
 # Inputs on the drive (fill_drive.ps1 writes inputs\MANIFEST.tsv: path, bytes, sha256)
 # ---------------------------------------------------------------------------------------------------------------
-function Test-Inputs([string]$LongLeg, [string]$Results) {
+function Test-Inputs([string]$LongLeg, [string]$Results, [string[]]$Extra = @()) {
     $inputs = Join-Path $LongLeg 'inputs'
     $manifest = Join-Path $inputs 'MANIFEST.tsv'
     $problems = @()
@@ -299,8 +316,8 @@ function Test-Inputs([string]$LongLeg, [string]$Results) {
         $f = $line.Split("`t")
         $entries += [pscustomobject]@{ Path = $f[0]; Bytes = [int64]$f[1]; Sha = $f[2] }
     }
-    foreach ($required in @('synthetic\synthetic0p5.sslm', 'synthetic\synthetic1p5.sslm', 'source\superslm.bundle', 'source\SOURCE.txt')) {
-        if (-not ($entries | Where-Object { $_.Path -eq $required })) { $problems += "inputs\$required is not in the manifest" }
+    foreach ($required in (@('synthetic\synthetic0p5.sslm', 'synthetic\synthetic1p5.sslm', 'source\superslm.bundle', 'source\SOURCE.txt') + $Extra)) {
+        if (-not ($entries | Where-Object { $_.Path -eq $required })) { $problems += "inputs\$required is not in the manifest (refill the drive with fill_drive.ps1)" }
     }
     $stamp = Join-Path $Results 'inputs.verified'
     $manifestSha = Get-Sha256 $manifest
@@ -335,13 +352,17 @@ function Invoke-Logged([string]$Log, [string]$Exe, [string[]]$Arguments) {
     return $code
 }
 
-function Initialize-Source([string]$LongLeg, [string]$Work) {
+# The long legs build the commit SOURCE.txt names, from superslm.bundle, in <work>\src. W1 (-E4Worst) passes its own
+# commit, bundle and folder.
+function Initialize-Source([string]$LongLeg, [string]$Work, [string]$Commit = '', [string]$Bundle = 'source\superslm.bundle', [string]$Dir = 'src') {
     $source = Read-KeyValue (Join-Path $LongLeg 'inputs\source\SOURCE.txt')
     $commit = $source['commit']
+    if ($Commit) { $commit = $Commit }
     if (-not $commit -or $commit -notmatch '^[0-9a-f]{40}$') { throw 'inputs\source\SOURCE.txt names no 40-hex commit' }
-    $src = Join-Path $Work 'src'
-    $log = Join-Path $Work 'source.log'
-    $bundle = Join-Path $LongLeg 'inputs\source\superslm.bundle'
+    $src = Join-Path $Work $Dir
+    $log = Join-Path $Work ($Dir + '.log')
+    if ($Dir -eq 'src') { $log = Join-Path $Work 'source.log' }
+    $bundle = Join-Path $LongLeg ('inputs\' + $Bundle)
     if (-not (Test-Path -LiteralPath (Join-Path $src '.git'))) {
         New-Item -ItemType Directory -Force -Path $src | Out-Null
         if ((Invoke-Logged $log 'git' @('-C', $src, 'init', '-q')) -ne 0) { throw "git init failed; see $log" }
@@ -396,7 +417,7 @@ function Test-BuiltBinaries([string]$Work, [string]$Toolchain, [string]$Results)
         Copy-Item -LiteralPath $dll -Destination (Get-BuildDir $Work $Toolchain) -Force
         [System.IO.File]::AppendAllText($log, "copied $dll beside the programs`n")
     }
-    foreach ($b in @('e1', 'unpinned')) {
+    foreach ($b in $script:BuildBinaries[$Toolchain]) {
         $exe = Get-BinaryPath $Work $Toolchain $b
         $code = Invoke-Logged $log $exe @('--list')
         if ($code -ne 0) {
@@ -430,6 +451,7 @@ function Invoke-Build([string]$Work, [string]$Src, [string]$Commit, [string]$Too
     $common = @('-S', $Src, '-B', $dir, '-G', 'Ninja', '-DBUILD_TESTING=ON')
     switch ($Toolchain) {
         'msvc' { $cfg = @('-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl') }
+        'msvc-e4' { $cfg = @('-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl') }   # the run sheet's B1 flags
         'clangcl' {
             # Forward slashes: CMake reads a backslash in a -D value as an escape ("Syntax error in cmake code").
             $cc = (Join-Path $script:LlvmBin 'clang-cl.exe').Replace('\', '/')
@@ -446,7 +468,8 @@ function Invoke-Build([string]$Work, [string]$Src, [string]$Commit, [string]$Too
     }
     $code = Invoke-Logged $log 'cmake' ($common + $cfg)
     if ($code -eq 0) {
-        $code = Invoke-Logged $log 'cmake' @('--build', $dir, '--target', 'superslm_precache_e1', 'superslm_precache_unpinned', '--parallel')
+        $targets = @($script:BuildBinaries[$Toolchain] | ForEach-Object { 'superslm_precache_' + $_ })
+        $code = Invoke-Logged $log 'cmake' (@('--build', $dir, '--target') + $targets + @('--parallel'))
     }
     $result = @{ commit = $Commit; toolchain = $Toolchain; finished = (Get-Date).ToString('s') }
     if ($code -ne 0) {
@@ -455,7 +478,7 @@ function Invoke-Build([string]$Work, [string]$Src, [string]$Commit, [string]$Too
         Write-Line "BUILD FAILED for $Toolchain (its pieces are skipped); see $log"
     } else {
         $result['status'] = 'ok'
-        foreach ($b in @('e1', 'unpinned')) { $result["sha256_$b"] = Get-Sha256 (Get-BinaryPath $Work $Toolchain $b) }
+        foreach ($b in $script:BuildBinaries[$Toolchain]) { $result["sha256_$b"] = Get-Sha256 (Get-BinaryPath $Work $Toolchain $b) }
         $result['cmake'] = ((& cmake --version) | Select-Object -First 1)
         $clLine = ((& cmd.exe /d /c 'cl 2>&1') | Select-Object -First 1)
         $result['cl'] = $clLine
@@ -528,6 +551,9 @@ function Complete-Piece($Run, [string]$Results) {
     }
     Remove-Item -LiteralPath (Get-PieceFile $Results $piece.Id '.running') -ErrorAction SilentlyContinue
     $hours = ((Get-Date) - $Run.Started).TotalHours
+    $w1Problem = $null
+    if ($verdict -eq 'GREEN' -and $piece.Toolchain -eq 'msvc-e4') { $w1Problem = Complete-W1 $text $Results }
+    if ($w1Problem) { $verdict = 'RED' }
     if (-not $verdict) {
         Add-Content -LiteralPath (Get-PieceFile $Results $piece.Id '.attempts') -Value ("crash " + (Get-Date).ToString('s') + " exit $code")
         if ((Get-CrashCount $Results $piece.Id) -lt $script:MaxCrashes) {
@@ -541,6 +567,7 @@ function Complete-Piece($Run, [string]$Results) {
         if (Test-Path -LiteralPath $f) { $fails += @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ -match '^FAIL |ERROR: AddressSanitizer|^SUMMARY: AddressSanitizer' }) }
     }
     $resultLines = @("piece: $($piece.Id)", "cell: $($piece.Cell)", "verdict: $verdict", "exit: $code", "checks: $checks", "failures: $failures")
+    if ($w1Problem) { $resultLines += "W1: $w1Problem" }
     if ($m.Count -gt 0) { $resultLines += ('line: ' + $m[$m.Count - 1].Value) }
     $resultLines += ($fails | Select-Object -First 200)
     Write-Utf8File (Get-PieceFile $Results $piece.Id '.result.txt') (($resultLines -join "`n") + "`n")
@@ -552,6 +579,28 @@ function Complete-Piece($Run, [string]$Results) {
     if ($m.Count -gt 0) { Write-Line ("finished {0}: {1} ({2} checks, {3} failed, {4:N1} h)" -f $piece.Id, $verdict, $checks, $failures, $hours) }
     else { Write-Line ("finished {0}: {1} (exit {2}, no verdict line, {3:N1} h)" -f $piece.Id, $verdict, $code, $hours) }
     return $true
+}
+
+function Get-W1Dir([string]$Results) { return (Join-Path $Results 'e4-w1') }
+
+# W1's green line is not enough: the blob must be on the drive and hash to what the runner printed. Writes
+# cap1p5.spx1.sha256 (Get-FileHash-checkable) and W1.txt beside it. Returns $null, or why W1 is RED.
+function Complete-W1([string]$Text, [string]$Results) {
+    $m = [regex]::Match($Text, '10\.3 worst capture cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=(\d+) blob_sha256=([0-9a-f]{64}) prefill_ms=[0-9.]+')
+    if (-not $m.Success) { return 'no "10.3 worst capture ... B=64 ... blob_sha256=" line (was the 1.5B model found?)' }
+    $dir = Get-W1Dir $Results
+    $blob = Join-Path $dir 'cap1p5.spx1'
+    if (-not (Test-Path -LiteralPath $blob)) { return "the runner printed a capture line but $blob is missing" }
+    $bytes = (Get-Item -LiteralPath $blob).Length
+    $sha = Get-Sha256 $blob
+    if ([string]$bytes -ne $m.Groups[1].Value -or $sha -ne $m.Groups[2].Value) { return "cap1p5.spx1 is $bytes bytes, SHA-256 $sha; the runner printed $($m.Groups[1].Value) bytes, $($m.Groups[2].Value)" }
+    Write-Utf8File (Join-Path $dir 'cap1p5.spx1.sha256') ("$sha  cap1p5.spx1`n")
+    $build = Read-KeyValue (Join-Path $Results 'build-msvc-e4.done')
+    Write-KeyValue (Join-Path $dir 'W1.txt') @{
+        commit = $build['commit']; runner_sha256 = $build['sha256_e1']; cl = $build['cl']; vcvars = $build['vcvars']
+        blob_sha256 = $sha; blob_bytes = $bytes; line = $m.Value; finished = (Get-Date).ToString('s')
+    }
+    return $null
 }
 
 # -RetryCrashed: a CRASHED piece runs again with a fresh attempt count; its old .done, .attempts and logs are kept, renamed.
@@ -743,18 +792,29 @@ switch ($Mode) {
   'red'   { [Console]::Error.WriteLine("FAIL [$cell] x.cpp:1: stand-in failure"); Write-Output "[E1] $cell RED (12 checks, 1 failed)"; exit 1 }
   'crash-once' { if (-not (Test-Path $Flag)) { Set-Content $Flag 'x'; exit 3 }; Write-Output "[E1] $cell green (7 checks, 0 failed)"; exit 0 }
   'crash' { exit 5 }
+  'w1' { $blob = $env:SUPERSLM_PRECACHE_WORST_BLOB; [System.IO.File]::WriteAllBytes($blob, [byte[]](1..200))
+         $h = (Get-FileHash -LiteralPath $blob -Algorithm SHA256).Hash.ToLowerInvariant()
+         Write-Output "10.3 worst capture cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=200 blob_sha256=$h prefill_ms=12.5"
+         Write-Output "[E4] $cell green (9 checks, 0 failed)"; exit 0 }
 }
 '@
+    # The real table: -E4Worst's piece exists only when msvc-e4 is asked for.
+    $defaultIds = @(Get-Pieces @('msvc', 'clangcl', 'msvc-asan') @() | ForEach-Object { $_.Id })
+    $e4Ids = @(Get-Pieces @('msvc-asan', 'msvc-e4') @() | Where-Object { $_.Toolchain -eq 'msvc-e4' } | ForEach-Object { $_.Id })
     $script:CellTable = @(
         @{ Cell = 'T.1/E2:green'; Binary = 'green'; Checkpointed = $true; Hours = 3.0; Toolchains = @('msvc', 'clangcl') },
         @{ Cell = 'T.2/E3:red'; Binary = 'red'; Checkpointed = $false; Hours = 2.0; Toolchains = @('msvc') },
         @{ Cell = 'T.3/E2:crash-once'; Binary = 'crash-once'; Checkpointed = $false; Hours = 1.0; Toolchains = @('msvc') },
-        @{ Cell = 'T.4/E2:crash'; Binary = 'crash'; Checkpointed = $false; Hours = 0.5; Toolchains = @('msvc-asan') }
+        @{ Cell = 'T.4/E2:crash'; Binary = 'crash'; Checkpointed = $false; Hours = 0.5; Toolchains = @('msvc-asan') },
+        @{ Cell = 'T.5/E4:w1'; Binary = 'w1'; Checkpointed = $false; Hours = 2.0; Toolchains = @('msvc-e4') }
     )
-    $pieces = Get-Pieces @('msvc', 'clangcl', 'msvc-asan') @()
+    $pieces = Get-Pieces @('msvc', 'clangcl', 'msvc-asan', 'msvc-e4') @()
+    $w1Dir = Get-W1Dir $results
+    New-Item -ItemType Directory -Force -Path $w1Dir | Out-Null
+    $w1Blob = Join-Path $w1Dir 'cap1p5.spx1'
     $launch = {
         param($p)
-        @{ Exe = $shell; Dir = $root; Env = @{ LONGLEG_SELFTEST = $p.Id }
+        @{ Exe = $shell; Dir = $root; Env = @{ LONGLEG_SELFTEST = $p.Id; SUPERSLM_PRECACHE_WORST_BLOB = $w1Blob }
            Arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $fake + '"'), ('=' + $p.Cell), $p.Binary,
                          ('"' + (Join-Path $root ($p.Id + '.flag')) + '"')) }   # Start-Process joins these unquoted; %TEMP% may hold a space
     }.GetNewClosure()
@@ -762,8 +822,10 @@ switch ($Mode) {
     $fails = New-Object System.Collections.Generic.List[string]
     function Assert([bool]$Cond, [string]$What) { if ($Cond) { Write-Host "ok   $What" } else { Write-Host "FAIL $What"; $fails.Add($What) } }
 
+    Assert ($defaultIds.Count -eq 16 -and -not ($defaultIds | Where-Object { $_ -like 'msvc-e4*' })) "default toolchains: the 16 long-leg pieces, no W1 ($($defaultIds.Count))"
+    Assert ($e4Ids.Count -eq 1 -and $e4Ids[0] -eq 'msvc-e4__10.3-E4-worst') "-E4Worst adds exactly the W1 piece ($($e4Ids -join ', '))"
     $order = @(Get-QueueOrder $pieces | ForEach-Object { $_.Id })
-    Assert ($order[0] -eq 'msvc__T.1-E2-green' -and $order[-1] -eq 'msvc-asan__T.4-E2-crash') "queue: msvc first, longest first ($($order -join ', '))"
+    Assert ($order[0] -eq 'msvc-e4__T.5-E4-w1' -and $order[1] -eq 'msvc__T.1-E2-green' -and $order[-1] -eq 'msvc-asan__T.4-E2-crash') "queue: W1, then msvc, longest first ($($order -join ', '))"
 
     # A piece left running by an interrupted run (no .done) must start again and record the interruption.
     Write-KeyValue (Get-PieceFile $results 'msvc__T.2-E3-red' '.running') @{ attempt = 1; pid = 1 }
@@ -778,6 +840,15 @@ switch ($Mode) {
     Assert ($v['msvc__T.2-E3-red'] -eq 'RED') 'red piece recorded RED'
     Assert ($v['msvc__T.3-E2-crash-once'] -eq 'GREEN') 'a crash reruns the piece, which then finishes'
     Assert ($v['msvc-asan__T.4-E2-crash'] -eq 'CRASHED') "a piece that crashes $script:MaxCrashes times is recorded CRASHED"
+    Assert ($v['msvc-e4__T.5-E4-w1'] -eq 'GREEN') 'W1 piece recorded GREEN'
+    $w1Sha = Get-Sha256 $w1Blob
+    Assert (([System.IO.File]::ReadAllText((Join-Path $w1Dir 'cap1p5.spx1.sha256'))) -eq "$w1Sha  cap1p5.spx1`n") 'W1 writes cap1p5.spx1.sha256 for the blob it left'
+    Assert ((Read-KeyValue (Join-Path $w1Dir 'W1.txt'))['blob_sha256'] -eq $w1Sha) 'W1.txt records the blob SHA-256'
+    $wrong = "10.3 worst capture cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=200 blob_sha256=$('0' * 64) prefill_ms=1.0"
+    Assert ([bool](Complete-W1 $wrong $results)) 'W1: a printed SHA-256 the blob does not have is RED'
+    Assert ([bool](Complete-W1 '[E4] 10.3/E4:worst green (0 checks, 0 failed)' $results)) 'W1: green with no capture line (model not found) is RED'
+    Remove-Item -LiteralPath $w1Blob
+    Assert ([bool](Complete-W1 ("10.3 worst capture cap=32768 geometry=1p5 28x2x128 B=64 bytes_including_digest=200 blob_sha256=$w1Sha prefill_ms=1.0") $results)) 'W1: a missing blob is RED' 
     Assert ((Get-AttemptCount $results 'msvc__T.2-E3-red') -eq 2) 'the interrupted attempt is counted and the piece ran again'
     Assert (([System.IO.File]::ReadAllText((Get-PieceFile $results 'msvc__T.2-E3-red' '.attempts'))) -match 'interrupted') 'the interruption is recorded'
     Assert ($open -eq 0) 'summary: nothing open'
@@ -815,6 +886,7 @@ switch ($Mode) {
 # Main
 # ---------------------------------------------------------------------------------------------------------------
 if ($SelfTest) { exit (Invoke-SelfTest) }
+if ($E4Worst -and $Toolchains -notcontains 'msvc-e4') { $Toolchains = @($Toolchains) + @('msvc-e4') }
 
 $bad = @($Toolchains | Where-Object { $script:ToolchainOrder -notcontains $_ })
 if ($bad.Count -gt 0) { throw "unknown toolchain(s): $($bad -join ', ') (use msvc, clangcl, msvc-asan)" }
@@ -843,7 +915,9 @@ try {
         if ($missing.Count -gt 0) { Write-Line 'still missing after the install; open a new window and run the kit again'; exit 2 }
     }
     Write-Line 'checking the drive''s inputs'
-    $problems = @(Test-Inputs $longLeg $results)
+    $extraInputs = @()
+    if ($Toolchains -contains 'msvc-e4') { $extraInputs = @($script:E4Model, $script:E4Bundle) }
+    $problems = @(Test-Inputs $longLeg $results $extraInputs)
     if ($problems.Count -gt 0) { $problems | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }; exit 3 }
     if ($CheckOnly) { Write-Line 'prerequisites and inputs are in place'; exit 0 }
 
@@ -874,7 +948,9 @@ try {
     $built = @{}
     foreach ($tc in ($script:ToolchainOrder | Where-Object { $Toolchains -contains $_ })) {
         if (-not ($pieces | Where-Object { $_.Toolchain -eq $tc })) { continue }
-        $b = Invoke-Build $work $source.Src $source.Commit $tc $results
+        $tcSource = $source
+        if ($tc -eq 'msvc-e4') { $tcSource = Initialize-Source $longLeg $work $script:E4Commit $script:E4Bundle 'src-e4w1' }
+        $b = Invoke-Build $work $tcSource.Src $tcSource.Commit $tc $results
         $built[$tc] = ($b['status'] -eq 'ok')
     }
     $runnable = @($pieces | Where-Object { $built[$_.Toolchain] })
@@ -885,6 +961,7 @@ try {
     [void](Write-Summary $longLeg $results $pieces $source $work)
 
     $inputs = Join-Path $longLeg 'inputs'
+    $e4Model = $script:E4Model    # a local: $script: inside a GetNewClosure block is the closure's own scope
     $launchFor = {
         param($p)
         $env = @{
@@ -892,6 +969,16 @@ try {
             SUPERSLM_PAGED_KV_FIXTURE_DIR     = (Join-Path $inputs 'pkv')
             SUPERSLM_PRECACHE_E0_ARTIFACT_DIR = (Join-Path $inputs 'e0')
             SUPERSLM_PRECACHE_CHECKPOINT_DIR  = $null
+            SUPERSLM_PRECACHE_REAL_1P5_MODEL  = $null
+            SUPERSLM_PRECACHE_WORST_BLOB      = $null
+            SUPERSLM_PRECACHE_WORST_PHASE     = $null
+        }
+        if ($p.Toolchain -eq 'msvc-e4') {
+            $w1 = Get-W1Dir $results
+            New-Item -ItemType Directory -Force -Path $w1 | Out-Null
+            $env['SUPERSLM_PRECACHE_REAL_1P5_MODEL'] = (Join-Path $inputs $e4Model)
+            $env['SUPERSLM_PRECACHE_WORST_BLOB'] = (Join-Path $w1 'cap1p5.spx1')
+            $env['SUPERSLM_PRECACHE_WORST_PHASE'] = 'capture'
         }
         if ($p.Checkpointed) { $env['SUPERSLM_PRECACHE_CHECKPOINT_DIR'] = (Join-Path $work ('checkpoints\' + $p.Id)) }
         @{ Exe = (Get-BinaryPath $work $p.Toolchain $p.Binary); Dir = (Get-BuildDir $work $p.Toolchain)
