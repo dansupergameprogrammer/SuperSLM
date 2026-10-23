@@ -633,7 +633,12 @@ void Real102() {
             }
         }
     }
-    if(phase=="restore") PKV_CHECK_EQ(graded,50);
+    if(phase=="restore") {
+        PKV_CHECK_EQ(graded,50);
+        // A1 G1 (coverage re-audit 2026-10-23): as 10.1 at its restore, no prefix prefill may have run in this process,
+        // so a nested restore that recomputes the persona by a scratch prefill is red, not green.
+        PKV_CHECK_EQ(sslm_pc_test_only_prefix_prefill_calls(),0u);
+    }
 }
 PKV_CELL("10.2/E4", "E1", Real102);
 
