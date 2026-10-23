@@ -1,0 +1,638 @@
+{
+  "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+  "b5_log_sha256": "a09b11044acb9c34a1509145731d0c882b85a20fd266672c72c13f0d8324b589",
+  "byte_provenance": [
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat00.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "a129e62b98b2c3c7f15b4835130ca5c68a09152c48f79c48e459d02ecdc81ffb",
+      "stem": "flat00"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat01.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "c4ada2feee9f1c9965c3e69765081ed48c66a852546156d031a111fd1cfb41c6",
+      "stem": "flat01"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat02.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "236a9649b733290e8eea5e86b5b54b57badf3d59e16ebbb290a7f39d3b95ba47",
+      "stem": "flat02"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat03.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "7e9baa877a86f1b9ecf1d4b90fe0d1007f3ebc8a1b6dbe0c1dbe576dacc482f3",
+      "stem": "flat03"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat04.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "d1dd5a2991c2c714a81e7b3a22cdf10805338abeacfffdcfa8c5e83bbe5396be",
+      "stem": "flat04"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat05.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "043749ee89de9d514f05a45f2eb49ffe7751e02d1e50631940966771a6dfcf34",
+      "stem": "flat05"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat06.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "c2563cdbf16158828149cc0805832ac10485cc1b3f70b78f1728ee98774eb09f",
+      "stem": "flat06"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat07.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "c3ebb305680b8f9b78f2f3bc7bf28b02c87436eb083fcf4c7372d9d097fa74ef",
+      "stem": "flat07"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat08.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "b3b8f53b59a9f50ab6571a878508a36c83f65fc9fb87fa3356ce8c6085cff370",
+      "stem": "flat08"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P1-real0p5-flat/flat09.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "41d2b8401a457f779053007412d97ae1ed33fccce3dd1cdb711a41992df3ed41",
+      "stem": "flat09"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested00.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "c28c26e2ce1797c076a21ed66edec6712a0b11a318999a39f2c02902ff4f92f0",
+      "stem": "nested00"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested01.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "64a2fb08c86c912dbace42ddb8718683664bfb77f1eaa60ad091c2ab15deeb85",
+      "stem": "nested01"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested02.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "7c893af2212e54ce170c53499f5b5a10d749185cfe637dadd283f174a312cf0c",
+      "stem": "nested02"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested03.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "7a9b3b4c8ba5d6712d5eb4dfc231d283f9bfbe365169960fbbbd5ee11f574bd3",
+      "stem": "nested03"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested04.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "9856749d71d6ae2ecbc8d3dfb0c54c76398e8e98c7a4191d6395c71fef37ad81",
+      "stem": "nested04"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested05.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "51a3ca55af9767d10c063da5b0e8acf1a7a55d2e2e1d60b191b5f0d26597a10b",
+      "stem": "nested05"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested06.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "2be81b439c5d55076b7086289bbd5ebbbe41fe5b42ebf58990e531d5f4eeb809",
+      "stem": "nested06"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested07.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "c46ecefad6331547baa1e0d5599a3fe0804d354352a094218b5d4f4c94fc8065",
+      "stem": "nested07"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested08.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "333132f6b0244e2f13c916b7fe945640f68cc5cfd94d493423c8256ce4952abd",
+      "stem": "nested08"
+    },
+    {
+      "instrument": "T-3035-precache-byte-v1",
+      "path": "discrimination-v2/P2-real0p5-nested/nested09.byte.json",
+      "role": "provenance (exact-state operand), not in record_hashes",
+      "sha256": "2bbccdfb3e9fbb67da336d1426904aa47ef0de6a6fa43a5984d36c3e79fc4088",
+      "stem": "nested09"
+    }
+  ],
+  "discrimination_note": "discrimination measured at B = 16 (page_positions 16), one legacy greedy SSB5 adopter per stem; the population is at B = 128 (plan rev 1.18.13 \u00a715.33 (4)); B = 128 exact-state kills are carried by other cells (A0 \u00a73)",
+  "files": [
+    {
+      "discrimination_record_sha256": "e120b5b85131dc883028ab5b70a7a7a56bc456fbb61b487af199dee43007e4e5",
+      "path": "P1-real0p5-flat/flat00-run1.ref",
+      "run": "run1",
+      "sha256": "c353bb1909a6a01b650c3104765e4dd95dcdbc982af486daec8e9058121ec06c",
+      "stem": "flat00"
+    },
+    {
+      "discrimination_record_sha256": "e120b5b85131dc883028ab5b70a7a7a56bc456fbb61b487af199dee43007e4e5",
+      "path": "P1-real0p5-flat/flat00-run2.ref",
+      "run": "run2",
+      "sha256": "c353bb1909a6a01b650c3104765e4dd95dcdbc982af486daec8e9058121ec06c",
+      "stem": "flat00"
+    },
+    {
+      "discrimination_record_sha256": "b87cfe9ce9b0c28686ae8007d458187052e7223df17ca8e3ce2e1ae429a7fdcc",
+      "path": "P1-real0p5-flat/flat01-run1.ref",
+      "run": "run1",
+      "sha256": "9f6a5b74227285c9648816b4c112b2466fa2826938431f8733b7d3e3d73d4cb2",
+      "stem": "flat01"
+    },
+    {
+      "discrimination_record_sha256": "b87cfe9ce9b0c28686ae8007d458187052e7223df17ca8e3ce2e1ae429a7fdcc",
+      "path": "P1-real0p5-flat/flat01-run2.ref",
+      "run": "run2",
+      "sha256": "9f6a5b74227285c9648816b4c112b2466fa2826938431f8733b7d3e3d73d4cb2",
+      "stem": "flat01"
+    },
+    {
+      "discrimination_record_sha256": "e933504d27fa85ffac710abaa3a9e51bc64d47ebfb0ff25894f38bb0316653e5",
+      "path": "P1-real0p5-flat/flat02-run1.ref",
+      "run": "run1",
+      "sha256": "1bdb3c79d6027977c29e7bcde477b3635f46ef8b805183a0d14a51031a922432",
+      "stem": "flat02"
+    },
+    {
+      "discrimination_record_sha256": "e933504d27fa85ffac710abaa3a9e51bc64d47ebfb0ff25894f38bb0316653e5",
+      "path": "P1-real0p5-flat/flat02-run2.ref",
+      "run": "run2",
+      "sha256": "1bdb3c79d6027977c29e7bcde477b3635f46ef8b805183a0d14a51031a922432",
+      "stem": "flat02"
+    },
+    {
+      "discrimination_record_sha256": "fdfbc7f5141ab4d9e51bd2414e841f22ca9c14a36686b521215d92b93844d995",
+      "path": "P1-real0p5-flat/flat03-run1.ref",
+      "run": "run1",
+      "sha256": "5fb6ac8df6aea9536f7b7ad0ca72967b2793409226a2d6cd20b1501933576d44",
+      "stem": "flat03"
+    },
+    {
+      "discrimination_record_sha256": "fdfbc7f5141ab4d9e51bd2414e841f22ca9c14a36686b521215d92b93844d995",
+      "path": "P1-real0p5-flat/flat03-run2.ref",
+      "run": "run2",
+      "sha256": "5fb6ac8df6aea9536f7b7ad0ca72967b2793409226a2d6cd20b1501933576d44",
+      "stem": "flat03"
+    },
+    {
+      "discrimination_record_sha256": "4ed747eb23c8f3c34dd4d777b544cb5b5d2385a65393963d4fc6565403869e62",
+      "path": "P1-real0p5-flat/flat04-run1.ref",
+      "run": "run1",
+      "sha256": "62137eeddfeeebe4c41f4753c8c0034b87f618f6fbdccd500abef1918ffbfe6c",
+      "stem": "flat04"
+    },
+    {
+      "discrimination_record_sha256": "4ed747eb23c8f3c34dd4d777b544cb5b5d2385a65393963d4fc6565403869e62",
+      "path": "P1-real0p5-flat/flat04-run2.ref",
+      "run": "run2",
+      "sha256": "62137eeddfeeebe4c41f4753c8c0034b87f618f6fbdccd500abef1918ffbfe6c",
+      "stem": "flat04"
+    },
+    {
+      "discrimination_record_sha256": "13c02870c91628c046af0bea8805cb45f8b3dee658d390535737243ce1a0d182",
+      "path": "P1-real0p5-flat/flat05-run1.ref",
+      "run": "run1",
+      "sha256": "90d8635e5bafb6d20a8b03d152f102e18646f3c42cee427343e03deb87f011fb",
+      "stem": "flat05"
+    },
+    {
+      "discrimination_record_sha256": "13c02870c91628c046af0bea8805cb45f8b3dee658d390535737243ce1a0d182",
+      "path": "P1-real0p5-flat/flat05-run2.ref",
+      "run": "run2",
+      "sha256": "90d8635e5bafb6d20a8b03d152f102e18646f3c42cee427343e03deb87f011fb",
+      "stem": "flat05"
+    },
+    {
+      "discrimination_record_sha256": "db12c48fefbbd95e16727c4457072b766ce66609918a6597f8c04b3645255298",
+      "path": "P1-real0p5-flat/flat06-run1.ref",
+      "run": "run1",
+      "sha256": "d3998825b639b6e737665269698a6a44ea52473d7d37298d21f6f3d1bbf64101",
+      "stem": "flat06"
+    },
+    {
+      "discrimination_record_sha256": "db12c48fefbbd95e16727c4457072b766ce66609918a6597f8c04b3645255298",
+      "path": "P1-real0p5-flat/flat06-run2.ref",
+      "run": "run2",
+      "sha256": "d3998825b639b6e737665269698a6a44ea52473d7d37298d21f6f3d1bbf64101",
+      "stem": "flat06"
+    },
+    {
+      "discrimination_record_sha256": "c2e6bf1e52a836608c027bbbdd4c244907a8df71201ebdef019563631c554b4e",
+      "path": "P1-real0p5-flat/flat07-run1.ref",
+      "run": "run1",
+      "sha256": "cb9d42d102d2aa0d26e79bac4254c9634159531937a19b83dd3381a35cdaab63",
+      "stem": "flat07"
+    },
+    {
+      "discrimination_record_sha256": "c2e6bf1e52a836608c027bbbdd4c244907a8df71201ebdef019563631c554b4e",
+      "path": "P1-real0p5-flat/flat07-run2.ref",
+      "run": "run2",
+      "sha256": "cb9d42d102d2aa0d26e79bac4254c9634159531937a19b83dd3381a35cdaab63",
+      "stem": "flat07"
+    },
+    {
+      "discrimination_record_sha256": "457f72e6512a17e2e14ecf2223d29c7a3ca197e94345d7ca156f3c0f32aab488",
+      "path": "P1-real0p5-flat/flat08-run1.ref",
+      "run": "run1",
+      "sha256": "61e5cf4c830ee5abc6e03ddd50f842fdba5bba075210a1ab171bf4da443de015",
+      "stem": "flat08"
+    },
+    {
+      "discrimination_record_sha256": "457f72e6512a17e2e14ecf2223d29c7a3ca197e94345d7ca156f3c0f32aab488",
+      "path": "P1-real0p5-flat/flat08-run2.ref",
+      "run": "run2",
+      "sha256": "61e5cf4c830ee5abc6e03ddd50f842fdba5bba075210a1ab171bf4da443de015",
+      "stem": "flat08"
+    },
+    {
+      "discrimination_record_sha256": "11e21ef8a6c406c3a072ef8fb1ad6952eefd92fe8199a0616787c534df8503d6",
+      "path": "P1-real0p5-flat/flat09-run1.ref",
+      "run": "run1",
+      "sha256": "e238edd7a2f08a90c613dc6c67b903fe1b72bee0e405d4044f47f4a0f8065286",
+      "stem": "flat09"
+    },
+    {
+      "discrimination_record_sha256": "11e21ef8a6c406c3a072ef8fb1ad6952eefd92fe8199a0616787c534df8503d6",
+      "path": "P1-real0p5-flat/flat09-run2.ref",
+      "run": "run2",
+      "sha256": "e238edd7a2f08a90c613dc6c67b903fe1b72bee0e405d4044f47f4a0f8065286",
+      "stem": "flat09"
+    },
+    {
+      "discrimination_record_sha256": "00d3a92dab4bd8e5de14011985f5938b2927048dcb8b0710183d54770f4136f9",
+      "path": "P2-real0p5-nested/nested00-run1.ref",
+      "run": "run1",
+      "sha256": "67d1466c36901090cf0c3bd46262f787fa8c650cfe083139dc121598d076c28b",
+      "stem": "nested00"
+    },
+    {
+      "discrimination_record_sha256": "00d3a92dab4bd8e5de14011985f5938b2927048dcb8b0710183d54770f4136f9",
+      "path": "P2-real0p5-nested/nested00-run2.ref",
+      "run": "run2",
+      "sha256": "67d1466c36901090cf0c3bd46262f787fa8c650cfe083139dc121598d076c28b",
+      "stem": "nested00"
+    },
+    {
+      "discrimination_record_sha256": "8048fa69ab7250357437b7d2a946227623db0886d2346268df1fd50476c935f5",
+      "path": "P2-real0p5-nested/nested01-run1.ref",
+      "run": "run1",
+      "sha256": "9137948475645f6f388a9c2d72ee4e631c7c51bfc9153dbcdb19b7faac95f4d7",
+      "stem": "nested01"
+    },
+    {
+      "discrimination_record_sha256": "8048fa69ab7250357437b7d2a946227623db0886d2346268df1fd50476c935f5",
+      "path": "P2-real0p5-nested/nested01-run2.ref",
+      "run": "run2",
+      "sha256": "9137948475645f6f388a9c2d72ee4e631c7c51bfc9153dbcdb19b7faac95f4d7",
+      "stem": "nested01"
+    },
+    {
+      "discrimination_record_sha256": "368568e5c1532e6080f42b6a6f974e0d6ba826b377199fbb2866ed3c3f59f439",
+      "path": "P2-real0p5-nested/nested02-run1.ref",
+      "run": "run1",
+      "sha256": "6bb09ef33031a697376cfce7609b14d841654b610f030639556cf365d4abcd21",
+      "stem": "nested02"
+    },
+    {
+      "discrimination_record_sha256": "368568e5c1532e6080f42b6a6f974e0d6ba826b377199fbb2866ed3c3f59f439",
+      "path": "P2-real0p5-nested/nested02-run2.ref",
+      "run": "run2",
+      "sha256": "6bb09ef33031a697376cfce7609b14d841654b610f030639556cf365d4abcd21",
+      "stem": "nested02"
+    },
+    {
+      "discrimination_record_sha256": "f401a4209df49c9d8c878a30a1dcae137e8d15342bf24e577606c8e729029e98",
+      "path": "P2-real0p5-nested/nested03-run1.ref",
+      "run": "run1",
+      "sha256": "11e070d33f9102de8cf7c1b0e8b95a90000d7ac5f88dd0ceee0628512fbad997",
+      "stem": "nested03"
+    },
+    {
+      "discrimination_record_sha256": "f401a4209df49c9d8c878a30a1dcae137e8d15342bf24e577606c8e729029e98",
+      "path": "P2-real0p5-nested/nested03-run2.ref",
+      "run": "run2",
+      "sha256": "11e070d33f9102de8cf7c1b0e8b95a90000d7ac5f88dd0ceee0628512fbad997",
+      "stem": "nested03"
+    },
+    {
+      "discrimination_record_sha256": "f1b0cd4d9006dc8d43c609fdf7f52108c717b28ea9e25a705ddf2a1f6290cc2e",
+      "path": "P2-real0p5-nested/nested04-run1.ref",
+      "run": "run1",
+      "sha256": "800c7c4cd679eac11baeaf45266bfa745f4dac5f1dab680be11ea9018fab0659",
+      "stem": "nested04"
+    },
+    {
+      "discrimination_record_sha256": "f1b0cd4d9006dc8d43c609fdf7f52108c717b28ea9e25a705ddf2a1f6290cc2e",
+      "path": "P2-real0p5-nested/nested04-run2.ref",
+      "run": "run2",
+      "sha256": "800c7c4cd679eac11baeaf45266bfa745f4dac5f1dab680be11ea9018fab0659",
+      "stem": "nested04"
+    },
+    {
+      "discrimination_record_sha256": "20c04599ccef4e8f7508b89bd44633a8e42cf15b53e20c036af11dbac6242589",
+      "path": "P2-real0p5-nested/nested05-run1.ref",
+      "run": "run1",
+      "sha256": "36a4593eb557ac58d7ca1dad9831e62897d65d6dfc744558fb9124c5fa08fa6e",
+      "stem": "nested05"
+    },
+    {
+      "discrimination_record_sha256": "20c04599ccef4e8f7508b89bd44633a8e42cf15b53e20c036af11dbac6242589",
+      "path": "P2-real0p5-nested/nested05-run2.ref",
+      "run": "run2",
+      "sha256": "36a4593eb557ac58d7ca1dad9831e62897d65d6dfc744558fb9124c5fa08fa6e",
+      "stem": "nested05"
+    },
+    {
+      "discrimination_record_sha256": "36ee1387febe9c5f72665dc69810e222d405c2a06bbdf3aa39363783935af8e3",
+      "path": "P2-real0p5-nested/nested06-run1.ref",
+      "run": "run1",
+      "sha256": "d59128ab0e714db1adf72a715aadd185908f800435770e6dfd8d661a71da399f",
+      "stem": "nested06"
+    },
+    {
+      "discrimination_record_sha256": "36ee1387febe9c5f72665dc69810e222d405c2a06bbdf3aa39363783935af8e3",
+      "path": "P2-real0p5-nested/nested06-run2.ref",
+      "run": "run2",
+      "sha256": "d59128ab0e714db1adf72a715aadd185908f800435770e6dfd8d661a71da399f",
+      "stem": "nested06"
+    },
+    {
+      "discrimination_record_sha256": "c2d4f5146091baa6a8e12d3558431f2f93fe6461a87612295542568e521434f8",
+      "path": "P2-real0p5-nested/nested07-run1.ref",
+      "run": "run1",
+      "sha256": "c780af2d765130abe790744b4cd9b28c916d2b65e141c24ea29e46c82c1de769",
+      "stem": "nested07"
+    },
+    {
+      "discrimination_record_sha256": "c2d4f5146091baa6a8e12d3558431f2f93fe6461a87612295542568e521434f8",
+      "path": "P2-real0p5-nested/nested07-run2.ref",
+      "run": "run2",
+      "sha256": "c780af2d765130abe790744b4cd9b28c916d2b65e141c24ea29e46c82c1de769",
+      "stem": "nested07"
+    },
+    {
+      "discrimination_record_sha256": "5d9fd1b7a276801cc05f2609b93c7886d97202d69856c11680271aac4838c7dc",
+      "path": "P2-real0p5-nested/nested08-run1.ref",
+      "run": "run1",
+      "sha256": "b3f628f5309848885c017c93637b385827705c1d628dbb5cc56e6fb738495937",
+      "stem": "nested08"
+    },
+    {
+      "discrimination_record_sha256": "5d9fd1b7a276801cc05f2609b93c7886d97202d69856c11680271aac4838c7dc",
+      "path": "P2-real0p5-nested/nested08-run2.ref",
+      "run": "run2",
+      "sha256": "b3f628f5309848885c017c93637b385827705c1d628dbb5cc56e6fb738495937",
+      "stem": "nested08"
+    },
+    {
+      "discrimination_record_sha256": "e640a536ce48ada42223e3eb696eca7f60b9bf6e8036a519969652e2ccc3de67",
+      "path": "P2-real0p5-nested/nested09-run1.ref",
+      "run": "run1",
+      "sha256": "dce356e64325ac28d97ae219332a9a895c077d84f9669383faf5cf69766a63dc",
+      "stem": "nested09"
+    },
+    {
+      "discrimination_record_sha256": "e640a536ce48ada42223e3eb696eca7f60b9bf6e8036a519969652e2ccc3de67",
+      "path": "P2-real0p5-nested/nested09-run2.ref",
+      "run": "run2",
+      "sha256": "dce356e64325ac28d97ae219332a9a895c077d84f9669383faf5cf69766a63dc",
+      "stem": "nested09"
+    }
+  ],
+  "format": "PC-POPULATION-MANIFEST-1",
+  "generator_commit": "47bdcc9e24917f91e5f9bf67e8a0141662ca5114",
+  "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+  "population": "t3035-precache-refs-post-m1 (P1-real0p5-flat, P2-real0p5-nested)",
+  "provenance_instrument": "T-3035-precache-byte-v1 (registry: COMMISSIONED, D-SLM8030)",
+  "record_instrument": "T-3035-precache-stream-v2 (registry: COMMISSIONED, D-SLM8030)",
+  "records": [
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat00.stream.json",
+      "reference_sha256_5d5ca58": "91dfbe91af5ef6bbf6f7e43189024a449e3a394899204ad7a374264f99d19df1",
+      "sha256": "e120b5b85131dc883028ab5b70a7a7a56bc456fbb61b487af199dee43007e4e5",
+      "stem": "flat00",
+      "tail16_distinct_min": 13
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat01.stream.json",
+      "reference_sha256_5d5ca58": "3e459340a007a39510634896a07616ca0dd3482f0bab4fac421e0abaf7a9f61d",
+      "sha256": "b87cfe9ce9b0c28686ae8007d458187052e7223df17ca8e3ce2e1ae429a7fdcc",
+      "stem": "flat01",
+      "tail16_distinct_min": 11
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat02.stream.json",
+      "reference_sha256_5d5ca58": "64d2da8deb771ff1450d55199937537786940385c6f97cbe49c99be58c7c65ae",
+      "sha256": "e933504d27fa85ffac710abaa3a9e51bc64d47ebfb0ff25894f38bb0316653e5",
+      "stem": "flat02",
+      "tail16_distinct_min": 14
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat03.stream.json",
+      "reference_sha256_5d5ca58": "2d804467e706ea42f3997db9ce42343b1a547e8d6326950b71997000a3932f49",
+      "sha256": "fdfbc7f5141ab4d9e51bd2414e841f22ca9c14a36686b521215d92b93844d995",
+      "stem": "flat03",
+      "tail16_distinct_min": 14
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat04.stream.json",
+      "reference_sha256_5d5ca58": "6ab69b59a850a99c4d7c19e24923a323006a5cd257455f7a09144f8c6a587cc0",
+      "sha256": "4ed747eb23c8f3c34dd4d777b544cb5b5d2385a65393963d4fc6565403869e62",
+      "stem": "flat04",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat05.stream.json",
+      "reference_sha256_5d5ca58": "bbb8fcbfbfdbaf322d6b8a2d546703cb1f953263a71d8521981c09b2e824eeeb",
+      "sha256": "13c02870c91628c046af0bea8805cb45f8b3dee658d390535737243ce1a0d182",
+      "stem": "flat05",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat06.stream.json",
+      "reference_sha256_5d5ca58": "428344d22338ae9231efa738f78076d4243c37cf5546210b144e41bd884e396b",
+      "sha256": "db12c48fefbbd95e16727c4457072b766ce66609918a6597f8c04b3645255298",
+      "stem": "flat06",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat07.stream.json",
+      "reference_sha256_5d5ca58": "4200fab3f64145e3b0b74939c3e861b9ea4575c5ee37b99394856f9bf7b20bba",
+      "sha256": "c2e6bf1e52a836608c027bbbdd4c244907a8df71201ebdef019563631c554b4e",
+      "stem": "flat07",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat08.stream.json",
+      "reference_sha256_5d5ca58": "6970daf23b1704edfeb53b84c97bb91d7c91790f29c59b5b597609516a49d77c",
+      "sha256": "457f72e6512a17e2e14ecf2223d29c7a3ca197e94345d7ca156f3c0f32aab488",
+      "stem": "flat08",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P1-real0p5-flat/flat09.stream.json",
+      "reference_sha256_5d5ca58": "805b47a2b02c90ec5f2f9c056187fc098ea937b783c21b7888afd71556154537",
+      "sha256": "11e21ef8a6c406c3a072ef8fb1ad6952eefd92fe8199a0616787c534df8503d6",
+      "stem": "flat09",
+      "tail16_distinct_min": 11
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested00.stream.json",
+      "reference_sha256_5d5ca58": "a80486d1a99e9f9268c28974c8a4650ebbc08704f5ea5197af5b9d9767ce11b7",
+      "sha256": "00d3a92dab4bd8e5de14011985f5938b2927048dcb8b0710183d54770f4136f9",
+      "stem": "nested00",
+      "tail16_distinct_min": 14
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested01.stream.json",
+      "reference_sha256_5d5ca58": "9bb91b9e68d4d9c531574864409799dfb266e9c9cb2d1bb401f6e86102b26c1f",
+      "sha256": "8048fa69ab7250357437b7d2a946227623db0886d2346268df1fd50476c935f5",
+      "stem": "nested01",
+      "tail16_distinct_min": 14
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested02.stream.json",
+      "reference_sha256_5d5ca58": "eb3100c35148dce4d0b7af3cbe90cb46419ffe93dd5375e7bae25140d29b462b",
+      "sha256": "368568e5c1532e6080f42b6a6f974e0d6ba826b377199fbb2866ed3c3f59f439",
+      "stem": "nested02",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested03.stream.json",
+      "reference_sha256_5d5ca58": "7b7e6c6c9cccb3bf14a5fe11153da6ed440902a68087587222987b8313f2fc80",
+      "sha256": "f401a4209df49c9d8c878a30a1dcae137e8d15342bf24e577606c8e729029e98",
+      "stem": "nested03",
+      "tail16_distinct_min": 16
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested04.stream.json",
+      "reference_sha256_5d5ca58": "03259f099b4569f346fbffa719027ef39d0c9dea7d638b20adcbfedce9ff99f1",
+      "sha256": "f1b0cd4d9006dc8d43c609fdf7f52108c717b28ea9e25a705ddf2a1f6290cc2e",
+      "stem": "nested04",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested05.stream.json",
+      "reference_sha256_5d5ca58": "2ee95b9e3ea572845300abcfe08ededef6ad0b308fe7714d01cad56925491f5f",
+      "sha256": "20c04599ccef4e8f7508b89bd44633a8e42cf15b53e20c036af11dbac6242589",
+      "stem": "nested05",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested06.stream.json",
+      "reference_sha256_5d5ca58": "4a0369564ada50e53ac8875ee462f7bab325265cc411ce86b701695c31619b07",
+      "sha256": "36ee1387febe9c5f72665dc69810e222d405c2a06bbdf3aa39363783935af8e3",
+      "stem": "nested06",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested07.stream.json",
+      "reference_sha256_5d5ca58": "a1b936eaa55e9ce8ba70063274d631b6d42228ca22aaebdb025e0fc1693f9c44",
+      "sha256": "c2d4f5146091baa6a8e12d3558431f2f93fe6461a87612295542568e521434f8",
+      "stem": "nested07",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested08.stream.json",
+      "reference_sha256_5d5ca58": "7a65266e071316b9024dc9115f933748009c696b69b552230616aab9cf165472",
+      "sha256": "5d9fd1b7a276801cc05f2609b93c7886d97202d69856c11680271aac4838c7dc",
+      "stem": "nested08",
+      "tail16_distinct_min": 15
+    },
+    {
+      "adopter": "SSB5 legacy greedy",
+      "instrument": "T-3035-precache-stream-v2",
+      "page_positions": 16,
+      "path": "discrimination-v2/P2-real0p5-nested/nested09.stream.json",
+      "reference_sha256_5d5ca58": "cf5f4089ead7a6badc5db48d4c811218c3b1eb6c783c2a2dbb33447a7d43efba",
+      "sha256": "e640a536ce48ada42223e3eb696eca7f60b9bf6e8036a519969652e2ccc3de67",
+      "stem": "nested09",
+      "tail16_distinct_min": 15
+    }
+  ],
+  "sidecar_source": "origin/curie/t3035-precache-refs 972d5b7b tests/t3035-precache-refs/discrimination-v2"
+}

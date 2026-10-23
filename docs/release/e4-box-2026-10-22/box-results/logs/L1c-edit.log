@@ -1,0 +1,14 @@
+[2026-10-22T17:43:52] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\_scratch\e4\src\tests\precache\write_merge_base.py D:\_scratch\e4\src origin/main D:\_scratch\e4\l1c\merge-base.txt
+reference merge-base fixture: origin/main -> 1948e1f2ea4528790dc6701e26c47bda5739b003
+[2026-10-22T17:43:52] exit 0
+[2026-10-22T17:43:52] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\_scratch\e4\l1\variant.py D:\_artifacts\SuperSLM\t3035-precache-refs-post-m1 D:\_scratch\e4\l1\candidate D:\_scratch\e4\l1c\pop-edit edit
+edit -> D:\_scratch\e4\l1c\pop-edit manifest 9ab469ca427af7e608fa859ae44757d07ad6dd145dc73297b02487219a9ee156 licence f131b35be48e79e1674579803feb62215ab7ab8047741b8f5ed179efd650ea3f
+[2026-10-22T17:43:52] exit 0
+[2026-10-22T17:43:52] D:\_scratch\e4\build-msvc\superslm_precache_e1.exe =10.1/E4
+[E1] 10.1/E4 ...
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat05 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:221: graded == 50 (49 vs 50)
+10.1 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+[E1] 10.1/E4 RED (4184 checks, 2 failed)
+1 cells, 1 red; 4184 checks, 2 failures
+[2026-10-22T17:46:30] exit 1

@@ -1,0 +1,6 @@
+ten distinct prefixes 00-09: PASS
+every lower >= 1000: PASS
+one receipt: PASS
+one runner: PASS
+four slices, each N of N: PASS
+runner = aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e

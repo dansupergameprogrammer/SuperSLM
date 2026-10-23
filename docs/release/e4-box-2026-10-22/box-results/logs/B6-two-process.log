@@ -1,0 +1,74 @@
+[2026-10-22T17:49:44] ctest -R ^superslm_precache_real_two_process$ -V --timeout 1500
+UpdateCTestConfiguration  from :D:/_scratch/e4/build-msvc/DartConfiguration.tcl
+Parse Config file:D:/_scratch/e4/build-msvc/DartConfiguration.tcl
+UpdateCTestConfiguration  from :D:/_scratch/e4/build-msvc/DartConfiguration.tcl
+Parse Config file:D:/_scratch/e4/build-msvc/DartConfiguration.tcl
+Test project D:/_scratch/e4/build-msvc
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added setup test superslm_precache_reference_header_identity required by fixture precache_header_identity
+Added setup test superslm_precache_reference_anchor required by fixture precache_reference
+Added 2 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 10
+    Start 10: superslm_precache_reference_header_identity
+
+10: Test command: D:\_scratch\e4\build-msvc\superslm_precache_reference_header.exe
+10: Working Directory: D:/_scratch/e4/build-msvc
+10: Test timeout computed to be: 1500
+10: reference header: exact must-accept; four misnamed, duplicate and unknown must-reject; reference row: exact must-accept; suffix-key and duplicate-key must-reject
+1/3 Test #10: superslm_precache_reference_header_identity ...   Passed    0.03 sec
+test 12
+    Start 12: superslm_precache_reference_anchor
+
+12: Test command: C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe "D:/_scratch/e4/src/tests/precache/write_merge_base.py" "D:/_scratch/e4/src" "origin/main" "D:/_scratch/e4/build-msvc/precache-reference-merge-base.txt"
+12: Working Directory: D:/_scratch/e4/build-msvc
+12: Test timeout computed to be: 1500
+12: reference merge-base fixture: origin/main -> 1948e1f2ea4528790dc6701e26c47bda5739b003
+2/3 Test #12: superslm_precache_reference_anchor ............   Passed    0.13 sec
+test 14
+    Start 14: superslm_precache_real_two_process
+
+14: Test command: C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe "D:/_scratch/e4/src/tests/precache/run_real_two_process.py" "D:/_scratch/e4/build-msvc/superslm_precache_e1.exe"
+14: Working Directory: D:/_scratch/e4/build-msvc
+14: Environment variables: 
+14:  SUPERSLM_PRECACHE_MERGE_BASE_FILE=D:/_scratch/e4/build-msvc/precache-reference-merge-base.txt
+14: Test timeout computed to be: 1500
+14: [E1] 10.1/E4 ...
+14: 10.1 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+14: [E1] 10.1/E4 green (142 checks, 0 failed)
+14: [E1] 10.2/E4 ...
+14: 10.2 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+14: [E1] 10.2/E4 green (142 checks, 0 failed)
+14: 2 cells, 0 red; 284 checks, 0 failures
+14: [E1] 10.1/E4 ...
+14: 10.1 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+14: [E1] 10.1/E4 green (4184 checks, 0 failed)
+14: [E1] 10.2/E4 ...
+14: 10.2 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+14: 10.2 nested00: B = 128, s = 7, draw = 3 (world 1012, persona 183)
+14: 10.2 nested01: B = 128, s = 7, draw = 3 (world 1012, persona 209)
+14: 10.2 nested02: B = 128, s = 7, draw = 3 (world 1012, persona 183)
+14: 10.2 nested03: B = 128, s = 7, draw = 3 (world 1012, persona 211)
+14: 10.2 nested04: B = 128, s = 7, draw = 3 (world 1012, persona 185)
+14: 10.2 nested05: B = 128, s = 7, draw = 3 (world 1012, persona 210)
+14: 10.2 nested06: B = 128, s = 7, draw = 3 (world 1012, persona 184)
+14: 10.2 nested07: B = 128, s = 7, draw = 3 (world 1012, persona 211)
+14: 10.2 nested08: B = 128, s = 7, draw = 3 (world 1012, persona 185)
+14: 10.2 nested09: B = 128, s = 7, draw = 3 (world 1012, persona 211)
+14: [E1] 10.2/E4 green (4377 checks, 0 failed)
+14: 2 cells, 0 red; 8561 checks, 0 failures
+14: two-process gate: capture exited, 21 hashes pinned, restore exited, 100 graded adopters
+3/3 Test #14: superslm_precache_real_two_process ............   Passed  526.38 sec
+
+The following tests passed:
+	superslm_precache_reference_header_identity
+	superslm_precache_reference_anchor
+	superslm_precache_real_two_process
+
+100% tests passed, 0 tests failed out of 3
+
+Total Test time (real) = 526.55 sec
+[2026-10-22T17:58:31] exit 0

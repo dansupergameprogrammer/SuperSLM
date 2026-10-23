@@ -1,0 +1,1096 @@
+{
+  "distinct_record_standings": [
+    {
+      "instrument": "T-3035-precache-discrimination",
+      "page_positions": 16,
+      "population_adequate": false,
+      "status": "QUARANTINED",
+      "target_ids_sha256_matches": true,
+      "thresholds_met": false
+    }
+  ],
+  "files": [
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "0c4a321b7931bbdb619c4380aeecdc4c4ccef0f62699c5e3430b618195a740a8",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "ef7fae58fd1935ff15bf5ab5ece91b262c4eecd608dbe99d71b9593846393abe",
+        "prompt_source_sha256": "c251d90dba034c03e2319f684bb1892b997653e4b6b49fafc2573ed2319ee04b",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 13,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat00.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat00",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "61918bb15c31452e443b4eada491edc967056912f53e67fb8731ac2fe736784a",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "9278830bfa301291c7be49704711b69931a498874a0722512ecdd5364e785699",
+        "prompt_source_sha256": "606c384fa47dbbaffa9ec9dc1a835bff1e13410ad2eb4928c10bca713277df8e",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 11,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat01.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat01",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "9ca33f96f59966d6f9d0889c95ee453a778f8a10fee0880c55228cbe69adef6b",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "e65decb80c35289a47af927a1273d6a352419899113623355486dbe734eb703a",
+        "prompt_source_sha256": "2cbc87e9a57e96d5cc6325b8f0ba62f911d5bca333f157b8c8a9216f4b4b7ac2",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 14,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat02.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat02",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "d07c04bd195553a74f5e7c88eb18d6cf3e74e0495590c68ecb2aa8c35ed9aec3",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "bec0edd3d0570947c14e88ceb9929a2c6a31483d90d79794e827199a0349cf8b",
+        "prompt_source_sha256": "b2530f757054480e03318e13fb9b2140b90c012e6d9e480aa930bec975e53b0b",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 14,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat03.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat03",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "209a2500336097fca6fe99e7fb42d37da0b3040e9971a0db4222ac57daf753b8",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "33f04e17a279c86d1f82d49da17f7b8875202488070f55c716be0f2fa467a9ee",
+        "prompt_source_sha256": "58cb2215e4cde5aa0bb346797361a1c45b226eb2c1e6d8446f900bb094eea5aa",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat04.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat04",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "300ed13281a5d912f6e6eb901020aad1318a752b860c92616243b11de73d73f5",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "df96293e41ee4731f1b96d4b77d4a36d05dfdaa6da265444088b1415f299f554",
+        "prompt_source_sha256": "5fc1e35d07110db32365dd7bed28144535954cdf1789577e7ad0421e0cb1d847",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat05.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat05",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "0b6a9f6ae51b5d820eb6f7ba9d858f09b2ee6024e4c978683b01c4de8e923534",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "2491afa8e2fb55fd6a0344fafb7fbad0fb6df2212ee16e6cd4322032b52fcfee",
+        "prompt_source_sha256": "196dc46072dd0f702779564037b7be3b803b2a43f93629c4896fa7ee2bd8864e",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat06.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat06",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "4fd0a27ce6fd2e00f6a177f50108205e86f914738d71a5edb98af8729b188c1e",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "92216edf8e3e33e92820f20cde9888e81ac0351ad24c31d787a62663feb022f9",
+        "prompt_source_sha256": "6999d2b1502038d48d60645d439043e7c87367f0708973414619b8fef713dbbb",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat07.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat07",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "d907cfe85f97dacd9b0fbdb9c2d9d14a8b0513e6d9b217bff7d1c0437eef9511",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "8d99a4147bc6c3f0e8ee57be5cd00ac3f0fb5b1e5f7506387bdae7bcdea2733d",
+        "prompt_source_sha256": "9d7cd05d72a31c51763782aa03966cee0a7da1a59536b7162962533c03a3ca29",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat08.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat08",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P1-real0p5-flat",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "5c8b5e3a9bfb76aa22b67fe2300455cbd0f3c1509234389e4da779ec9edf0dfa",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "prompt_ids_sha256": "b952555a42d57ac1f280e2a9ea31127726b62b494ac31d12bbf78a85de722a8d",
+        "prompt_source_sha256": "fd8fd8f5796c7cbd98140fdf2492897fe40301aff7c59348c10ef5c623e470fb",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)"
+      },
+      "last16_distinct_min": 11,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-flat\\flat09.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "flat09",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "cb1deb2b83ccae16d4ec66688078d41f5258fd8095d91aa516d4df91ccaf2013",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "24d41f0593bfe9252a34e6a3f0b9093d1298448cff9395efcd36f217bb591597",
+        "persona_source_sha256": "5ff93201fe683da293c55cf0f86b910b55d5b173201efcc60061083cc3b3314a",
+        "prompt_ids_sha256": "e26f06f98d94d599b4014255841b99d6f1f96aee26d4998f99d6c4485f1e6e76",
+        "prompt_source_sha256": "70cb45acca458a1ee1784bae1f04a40df476385724596b7c6bbe081c1d7a14e9",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 14,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested00.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested00",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "b45e6b08cf41bca5280cd24f1edb4e3839bb366a7111f1efeaf2885df4cfee19",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "c6fe8ff68df388b7df004a2b4bd72112a864f805f2e5ceee3028396a4eebb2f2",
+        "persona_source_sha256": "605aafa749b68a88f0bad343e1bb566dff35c8c07f65b8bd3428305b440af833",
+        "prompt_ids_sha256": "66ff05070918503d6a47139f8db03208210aeafa86b4fa57793c5fd973e97bad",
+        "prompt_source_sha256": "033b931dae9bd11f87ad358553e8e792b8fe91dc63dd7d5857addcb22154aacd",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 14,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested01.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested01",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "b4bdd5304b9825c53d9086624d394a7339ed2e40e62046ef7b3f8bcd85cd85ba",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "0697ef0c08302ad4b820cfb325cc8f1716fb648b4c507053e11868d27a486f27",
+        "persona_source_sha256": "ad5b6479aeb4ea42ae9e45419385e98d1137478e24aacbc33acb7467d11f28e9",
+        "prompt_ids_sha256": "0a053843df975a14df12a86abcbdf53efe7224b94100edccfcac56b2c19fa4cf",
+        "prompt_source_sha256": "5a632a0795b461fcf072bf47a0425f64bdd826e8758e180857e23bb887fbd783",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested02.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested02",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "59f0916567a6fdde2a5650e0b76cb63ef8498114197240d7faa903256aec9483",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "7d6cec2b850d34ab8ed7de75cd41f39a2457e4b7cdc24defe8b6d825d3a02497",
+        "persona_source_sha256": "030a59fc4ff8f63d5f16da10131ac071b2aaa9a5db4dd725661ba7ba06dbacf3",
+        "prompt_ids_sha256": "9b853cedbe73ec103d2babe23520746ef86794225e3d11cbbaa0e0f1c284eccb",
+        "prompt_source_sha256": "2566c4da951548b42f9e0cfaaa4e08a9247f7420dce4b7f8b1faea691c9c5d63",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 16,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested03.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested03",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "72cac6f7e8ddeaedc51aad87f439c0ed1cf6d8106039a8f1c15ecf18a804c055",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "fcbd04f879d0d7a96622915f508b76eb8e0678ff2f5064aede9d371c072c5bfc",
+        "persona_source_sha256": "bc2dc95121ee9ca2a0f4632fa935104a8537139ac25819dcd6d8f023eeaf5439",
+        "prompt_ids_sha256": "09f69e0d5d3c87a159a82f254861a6f7606120b96ee0c1c24493df5da1160465",
+        "prompt_source_sha256": "70d2a7c5dd1477d6651ee8fe3ec648f37c1b0c288a84940dd8c7fe8875bbc8af",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested04.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested04",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "f81af113aaca8af88e7fab613de2a892471c80a131438d8799873636aa3d6a46",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "363b48abe6ff88f2d0344297ece0ca5554a9bdabca8d1d24d087069e81aa84b7",
+        "persona_source_sha256": "b6d2198515fcbfa8a00ac54087e7adeae369ad8355370318b5005efe350b9ae8",
+        "prompt_ids_sha256": "999dfcd5e135fbb74dbbf4997b588cb40e6e1f93991d350794928090cba49b21",
+        "prompt_source_sha256": "897df55b2cbc229eb9ba54cd48455da02ddb5fdcf78279e539ec0037bca93bce",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested05.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested05",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "b2d251d8bcb55611325bba77ef31b9a12794e134297ed4e594f7fc0e2d3a2d88",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "fa0b94ba5efc0c192c507ea56ff1b843dd6342524ce49b560d127023b4ffc0be",
+        "persona_source_sha256": "1ba4e47a542533eb95cd4f84829aca09812226a52c2161fe235e6869b69bf77b",
+        "prompt_ids_sha256": "c048c5264dbba6bc6bee9a838cc414a111cc3c3367b04b2625e5a6347e29ab15",
+        "prompt_source_sha256": "68f945d527eaf835d26e9e4a73fad0c88e7deb74524a7c94a9ac96b61f1c15cc",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested06.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested06",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "55cb0e603c2538be4ef2b623bfe61846750b941b1831e9671e1092af4f0ecbcc",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "e1347a0b8906d6ff83aee235c12c727227cb574aede0d170c1e4f31d163a22c3",
+        "persona_source_sha256": "14c8bb475a5ef041b0ec7edc196983b121bc2fb5a323da680977a37870352379",
+        "prompt_ids_sha256": "bc3a4efd8cb12a25c437e3695a0b057ec4c033ed5acb90b7cb6d8de13c23a693",
+        "prompt_source_sha256": "aa09611549df445bf528046a5c8db2f53ca336d4f6697b1102b0e84423f0a4c9",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested07.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested07",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "0e25ab50829b7fc5bd663faf9b5abf6ab2369534f9d88d39737a948a8398c7cb",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "1313d7cc31985f2059c7ce56a8a364ca09177ab5691cbf89f62170f69963c796",
+        "persona_source_sha256": "7b205aab2a0fd5aa28127682069b8e9a5a82017cdf717983e839742695873b0b",
+        "prompt_ids_sha256": "b531225793967bec1080064b2ef31ca6c5dee6463711d603afcbe4ce04f7e85a",
+        "prompt_source_sha256": "16b1f1c42fb06db3da0104d70ff7b172ad5abb17f0b0fc9386b83241cd8e5934",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested08.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested08",
+      "streams_equal_to_5d5ca58": "5/5"
+    },
+    {
+      "adopters": [
+        [
+          0,
+          "greedy"
+        ],
+        [
+          1,
+          "greedy"
+        ],
+        [
+          2,
+          "damped"
+        ],
+        [
+          3,
+          "damped"
+        ],
+        [
+          4,
+          "greedy"
+        ]
+      ],
+      "group": "P2-real0p5-nested",
+      "header": {
+        "B": "128",
+        "anchor": "1948e1f2ea4528790dc6701e26c47bda5739b003",
+        "cap": "32768",
+        "decode_modes_available": "1",
+        "discrimination_record_sha256": "b26c653c113ab459ddd33bf0fe73b52f805d249cd8ee3db3aa0e2bcfb994cb66",
+        "harness": "e8c029ed68f6d3fb0a728673c9a41d16d433916d",
+        "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35",
+        "persona_ids_sha256": "81c2a7c4194ab9a682442defb120bee398b37186ef3574ff2bb62ddf9601f0b4",
+        "persona_source_sha256": "f067c68b1986bf9815d0ac16b4c19a8f0d6b707108da658a2ce8fb107fc67d7c",
+        "prompt_ids_sha256": "52b4208080653b196c5eaec84eeae55d99d43bde58c818ba7d02f3f5ca18262a",
+        "prompt_source_sha256": "ee7c520db32c941eec759500f19dade898f43cc28702f4f36b0d552cbb24b9cc",
+        "tokenizer": "TokenizerView::Encode(rel10,4da4c4c)",
+        "world_ids_sha256": "6396e389c3c55341751dfd67943310eb62157855c5ea9a2a23c401e5c50f0258",
+        "world_source_sha256": "2ddb07488fc67dcd6740e974e5ed9af2ff753907086885dcd7ca586bdc800884"
+      },
+      "last16_distinct_min": 15,
+      "pair_equal": true,
+      "record": "D:\\_scratch\\e4\\t3035\\tests\\t3035-precache-refs\\discrimination\\real0p5-nested\\nested09.discrimination.json",
+      "record_sha256_matches_header": true,
+      "record_standing": {
+        "instrument": "T-3035-precache-discrimination",
+        "page_positions": 16,
+        "population_adequate": false,
+        "status": "QUARANTINED",
+        "target_ids_sha256_matches": true,
+        "thresholds_met": false
+      },
+      "rows": 5,
+      "stem": "nested09",
+      "streams_equal_to_5d5ca58": "5/5"
+    }
+  ],
+  "findings": [],
+  "model_sha256": "4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35"
+}

@@ -1,0 +1,13 @@
+format=PC-TIMING-1
+status=COMMISSIONED
+commissioning_verdict=PASS
+must_accept=PASS
+must_reject=PASS
+threshold=1000
+box_id=home-3950x
+threads=1
+geometry=0p5:24x2x64x32768:B=128;1p5:28x2x128x32768:B=64
+model_sha256=4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35
+prompt_manifest_sha256=84920a0922ba44fe49f86059898fad4dbf353bc2bb2efbb3356a8f7e9c7dca9a
+instrument_sha256=183de6de8a881d97842ffecdde3c8f4f4d231a644c7c6d4613ac9cf6dccdb090
+anchor=1948e1f2ea4528790dc6701e26c47bda5739b003

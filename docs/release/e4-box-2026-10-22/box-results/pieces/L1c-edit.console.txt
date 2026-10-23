@@ -1,0 +1,1 @@
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc

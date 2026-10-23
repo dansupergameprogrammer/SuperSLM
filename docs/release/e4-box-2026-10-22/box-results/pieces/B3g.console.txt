@@ -1,0 +1,52 @@
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc
+Preparing worktree (detached HEAD 47bdcc9e)
+HEAD is now at 47bdcc9e [skip ci] E4 references: the generator takes each stem's discrimination record as a required argument
+47bdcc9e24917f91e5f9bf67e8a0141662ca5114
+1948e1f2ea4528790dc6701e26c47bda5739b003
+-- The CXX compiler identification is MSVC 19.34.31937.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.34.31933/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found Python3: C:/Users/dansu/AppData/Local/Programs/Python/Python312/python.exe (found version "3.12.10") found components: Interpreter 
+-- SuperSLM GPU: compiling shaders with C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe
+-- Configuring done
+-- Generating done
+CMake Warning:
+  Manually-specified variables were not used by the project:
+System.Management.Automation.RemoteException
+    CMAKE_C_COMPILER
+System.Management.Automation.RemoteException
+System.Management.Automation.RemoteException
+-- Build files have been written to: D:/_scratch/e4/build-gen
+0
+ninja: Entering directory `D:\_scratch\e4\build-gen'
+[0/2] Re-checking globbed directories...
+[1/24] Building CXX object CMakeFiles\superslm.dir\src\silu_lut.cpp.obj
+[2/24] Building CXX object CMakeFiles\superslm.dir\src\trace_hook.cpp.obj
+[3/24] Building CXX object CMakeFiles\superslm.dir\src\forward\checked_chain_funnel.cpp.obj
+[4/24] Building CXX object CMakeFiles\superslm.dir\src\decode_digest.cpp.obj
+[5/24] Building CXX object CMakeFiles\superslm.dir\src\intmath.cpp.obj
+[6/24] Building CXX object CMakeFiles\superslm.dir\src\damped_greedy_phaseD.cpp.obj
+[7/24] Building CXX object CMakeFiles\superslm.dir\src\spx1_format.cpp.obj
+[8/24] Building CXX object CMakeFiles\superslm.dir\src\gpu\gpu_inflight_registry.cpp.obj
+[9/24] Building CXX object CMakeFiles\superslm.dir\src\sha256.cpp.obj
+[10/24] Building CXX object CMakeFiles\superslm.dir\src\forward\parallel_split.cpp.obj
+[11/24] Building CXX object CMakeFiles\superslm.dir\src\damped_greedy_topk.cpp.obj
+[12/24] Building CXX object CMakeFiles\superslm.dir\src\kv_pages.cpp.obj
+[13/24] Building CXX object CMakeFiles\superslm.dir\src\matmul.cpp.obj
+[14/24] Building CXX object CMakeFiles\superslm.dir\src\damped_greedy_phaseD_loop.cpp.obj
+[15/24] Building CXX object CMakeFiles\superslm.dir\src\damped_greedy_antilm.cpp.obj
+[16/24] Building CXX object CMakeFiles\superslm.dir\src\tokenizer.cpp.obj
+[17/24] Building CXX object CMakeFiles\superslm.dir\src\proof_manifest.cpp.obj
+[18/24] Building CXX object CMakeFiles\superslm.dir\src\artifact.cpp.obj
+[19/24] Building CXX object CMakeFiles\superslm.dir\src\forward\forward_sites.cpp.obj
+[20/24] Building CXX object CMakeFiles\superslm.dir\src\model.cpp.obj
+[21/24] Building CXX object CMakeFiles\superslm.dir\src\sslm_abi.cpp.obj
+[22/24] Linking CXX static library superslm.lib
+[23/24] Building CXX object CMakeFiles\superslm_precache_reference_gen.dir\tests\precache\reference\t3035_reference.cpp.obj
+[24/24] Linking CXX executable superslm_precache_reference_gen.exe
+0
+T-3035 reference: usage: t3035_reference MODEL PROMPT_DIR OUT_DIR flat|nested run1|run2 TOKENIZER ID_SUFFIX RECORD [COUNT]  (RECORD: record path with {id} for the stem, no default)
+1

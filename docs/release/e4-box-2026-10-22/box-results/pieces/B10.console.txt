@@ -1,0 +1,7 @@
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc
+captured MSVC 19.34.31937.0 job e8c029ed68f6d3fb0a728673c9a41d16d433916d: 54bf1e35362f47e9d0d42870cb9814fdab30b659b830c38313024a8f11cf3006
+0
+[E1] 4.3/E4 ...
+[E1] 4.3/E4 green (27 checks, 0 failed)
+1 cells, 0 red; 27 checks, 0 failures
+0

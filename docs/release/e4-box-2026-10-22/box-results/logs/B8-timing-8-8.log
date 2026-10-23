@@ -1,0 +1,12 @@
+pause present at start: True
+receipt D:\_scratch\e4\timing\PC-TIMING-1.txt sha256 0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372
+[2026-10-22T17:01:30] D:\_scratch\e4\build-msvc\superslm_precache_e1.exe =10.3/E4
+[E1] 10.3/E4 ...
+10.3 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e box=home-3950x threads=1 geometry=0p5 B=128 flat08 pairs=8 bytes_including_digest=11066424 prefill_ms=29478.027 restore_ms=6.915 ratio95=[4216.5,4310.5]
+10.3 slice flat08-flat08: 1 of 1 prefixes resolved at or above 1000x runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372
+[E1] 10.3/E4 green (116 checks, 0 failed)
+1 cells, 0 red; 116 checks, 0 failures
+[2026-10-22T17:05:59] exit 0
+pause present at end: True
+other processes over 5 CPU-s during the slice: Creative Cloud UI Helper:24944 7.5s; codex:17996 5.9s

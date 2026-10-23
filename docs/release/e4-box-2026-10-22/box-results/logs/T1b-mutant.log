@@ -1,0 +1,33 @@
+pause present at start: True
+receipt D:\_scratch\e4\t1\PC-TIMING-1.provisional.txt sha256 0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372
+[2026-10-22T16:46:25] D:\_scratch\e4\build-mut\superslm_precache_e1.exe =10.3/E4
+[E1] 10.3/E4 ...
+MUTANT T1-restore-prefills: prefilled 159 of 159
+MUTANT T1-restore-prefills: prefilled 159 of 159
+MUTANT T1-restore-prefills: prefilled 159 of 159
+MUTANT T1-restore-prefills: prefilled 159 of 159
+MUTANT T1-restore-prefills: prefilled 159 of 159
+MUTANT T1-restore-prefills: prefilled 159 of 159
+MUTANT T1-restore-prefills: prefilled 159 of 159
+MUTANT T1-restore-prefills: prefilled 159 of 159
+MUTANT T1-restore-prefills: prefilled 159 of 159
+10.3 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=0db0e1ccf64a782b7debdc3a3611c7befb52c3be5b954e3cf4b3f4b2bc66f019 box=home-3950x threads=1 geometry=0p5 B=128 flat00 pairs=8 bytes_including_digest=977976 prefill_ms=2024.164 restore_ms=1921.382 ratio95=[1.0,1.1]
+FAIL [10.3/E4] D:\_scratch\e4\mut-src\tests\precache\e4_real.cpp:430: 10.3 flat00 threshold unresolved or missed: 95% ratio interval [1.0,1.1]
+MUTANT T1-restore-prefills: prefilled 258 of 258
+MUTANT T1-restore-prefills: prefilled 258 of 258
+MUTANT T1-restore-prefills: prefilled 258 of 258
+MUTANT T1-restore-prefills: prefilled 258 of 258
+MUTANT T1-restore-prefills: prefilled 258 of 258
+MUTANT T1-restore-prefills: prefilled 258 of 258
+MUTANT T1-restore-prefills: prefilled 258 of 258
+MUTANT T1-restore-prefills: prefilled 258 of 258
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=0db0e1ccf64a782b7debdc3a3611c7befb52c3be5b954e3cf4b3f4b2bc66f019 box=home-3950x threads=1 geometry=0p5 B=128 flat01 pairs=8 bytes_including_digest=1586232 prefill_ms=3318.553 restore_ms=3177.945 ratio95=[1.0,1.0]
+FAIL [10.3/E4] D:\_scratch\e4\mut-src\tests\precache\e4_real.cpp:430: 10.3 flat01 threshold unresolved or missed: 95% ratio interval [1.0,1.0]
+FAIL [10.3/E4] D:\_scratch\e4\mut-src\tests\precache\e4_real.cpp:435: graded == last-first+1 (0 vs 2)
+10.3 slice flat00-flat01: 0 of 2 prefixes resolved at or above 1000x runner=0db0e1ccf64a782b7debdc3a3611c7befb52c3be5b954e3cf4b3f4b2bc66f019 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372
+[E1] 10.3/E4 RED (199 checks, 3 failed)
+1 cells, 1 red; 199 checks, 3 failures
+[2026-10-22T16:47:56] exit 1
+pause present at end: True
+other processes over 5 CPU-s during the slice: none

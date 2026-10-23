@@ -1,0 +1,3 @@
+[2026-10-22T17:12:02] python D:\_scratch\e4\src\tests\precache\capture_compiler_job.py --source D:\_scratch\e4\src --build-dir D:\_scratch\e4\build-4.3-msvc --bundle-dir D:\_scratch\e4\xc --generator Ninja
+captured MSVC 19.34.31937.0 job e8c029ed68f6d3fb0a728673c9a41d16d433916d: 54bf1e35362f47e9d0d42870cb9814fdab30b659b830c38313024a8f11cf3006
+[2026-10-22T17:12:17] exit 0

@@ -1,0 +1,12 @@
+[2026-10-22T17:14:11] D:\_scratch\e4\build-gen\superslm_precache_reference_gen.exe D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts D:\_artifacts\SuperSLM\t3035-precache-refs-post-m1\P1-real0p5-flat flat run1 TokenizerView::Encode(rel10,4da4c4c) ids D:\_scratch\e4\t3035\tests\t3035-precache-refs\discrimination-v2\P1-real0p5-flat\{id}.stream.json
+flat00 captured
+flat01 captured
+flat02 captured
+flat03 captured
+flat04 captured
+flat05 captured
+flat06 captured
+flat07 captured
+flat08 captured
+flat09 captured
+[2026-10-22T17:19:50] exit 0

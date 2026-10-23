@@ -1,0 +1,12 @@
+[2026-10-22T17:25:54] D:\_scratch\e4\build-gen\superslm_precache_reference_gen.exe D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts D:\_artifacts\SuperSLM\t3035-precache-refs-post-m1\P2-real0p5-nested nested run1 TokenizerView::Encode(rel10,4da4c4c) ids D:\_scratch\e4\t3035\tests\t3035-precache-refs\discrimination-v2\P2-real0p5-nested\{id}.stream.json
+nested00 captured
+nested01 captured
+nested02 captured
+nested03 captured
+nested04 captured
+nested05 captured
+nested06 captured
+nested07 captured
+nested08 captured
+nested09 captured
+[2026-10-22T17:29:57] exit 0

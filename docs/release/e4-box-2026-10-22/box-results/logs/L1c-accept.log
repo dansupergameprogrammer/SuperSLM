@@ -1,0 +1,33 @@
+[2026-10-22T17:34:36] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\_scratch\e4\src\tests\precache\write_merge_base.py D:\_scratch\e4\src origin/main D:\_scratch\e4\l1c\merge-base.txt
+reference merge-base fixture: origin/main -> 1948e1f2ea4528790dc6701e26c47bda5739b003
+[2026-10-22T17:34:36] exit 0
+[2026-10-22T17:34:36] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\_scratch\e4\l1\variant.py D:\_artifacts\SuperSLM\t3035-precache-refs-post-m1 D:\_scratch\e4\l1\candidate D:\_scratch\e4\l1c\pop-accept accept
+accept -> D:\_scratch\e4\l1c\pop-accept manifest bfb0037fde590dc023b00ac81b0c0b104a590eedfd8c213f68067833c9f7733f licence 8bbb7c353e55bf5c4ee54825c1971c5fd6325aeaed9c76c411cbeb25512dd130
+[2026-10-22T17:34:37] exit 0
+[2026-10-22T17:34:37] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\_scratch\e4\src\tests\precache\run_real_two_process.py D:\_scratch\e4\build-msvc\superslm_precache_e1.exe
+[E1] 10.1/E4 ...
+10.1 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+[E1] 10.1/E4 green (142 checks, 0 failed)
+[E1] 10.2/E4 ...
+10.2 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+[E1] 10.2/E4 green (142 checks, 0 failed)
+2 cells, 0 red; 284 checks, 0 failures
+[E1] 10.1/E4 ...
+10.1 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+[E1] 10.1/E4 green (4184 checks, 0 failed)
+[E1] 10.2/E4 ...
+10.2 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+10.2 nested00: B = 128, s = 7, draw = 3 (world 1012, persona 183)
+10.2 nested01: B = 128, s = 7, draw = 3 (world 1012, persona 209)
+10.2 nested02: B = 128, s = 7, draw = 3 (world 1012, persona 183)
+10.2 nested03: B = 128, s = 7, draw = 3 (world 1012, persona 211)
+10.2 nested04: B = 128, s = 7, draw = 3 (world 1012, persona 185)
+10.2 nested05: B = 128, s = 7, draw = 3 (world 1012, persona 210)
+10.2 nested06: B = 128, s = 7, draw = 3 (world 1012, persona 184)
+10.2 nested07: B = 128, s = 7, draw = 3 (world 1012, persona 211)
+10.2 nested08: B = 128, s = 7, draw = 3 (world 1012, persona 185)
+10.2 nested09: B = 128, s = 7, draw = 3 (world 1012, persona 211)
+[E1] 10.2/E4 green (4377 checks, 0 failed)
+2 cells, 0 red; 8561 checks, 0 failures
+two-process gate: capture exited, 21 hashes pinned, restore exited, 100 graded adopters
+[2026-10-22T17:43:28] exit 0

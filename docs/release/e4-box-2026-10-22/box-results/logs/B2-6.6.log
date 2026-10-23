@@ -1,0 +1,10 @@
+[2026-10-22T16:16:21] D:\_scratch\e4\build-msvc\superslm_precache_e1.exe =6.6/E4 =6.6/E4:rule-b
+[E1] 6.6/E4 ...
+[E1] 6.6/E4 green (116 checks, 0 failed)
+[E4] 6.6/E4:rule-b ...
+6.6 rule-B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+6.6 rule-B: model_sha256=4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35
+6.6 rule-B hook: calls=3008 tasks=10544 over 32 tokens
+[E4] 6.6/E4:rule-b green (141 checks, 0 failed)
+2 cells, 0 red; 257 checks, 0 failures
+[2026-10-22T16:16:31] exit 0

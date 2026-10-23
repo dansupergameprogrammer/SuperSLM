@@ -1,0 +1,13 @@
+pause present at start: True
+receipt D:\_scratch\e4\t1\PC-TIMING-1.provisional.txt sha256 0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372
+[2026-10-22T16:48:03] D:\_scratch\e4\build-msvc\superslm_precache_e1.exe =10.3/E4
+[E1] 10.3/E4 ...
+10.3 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e box=home-3950x threads=1 geometry=0p5 B=128 flat00 pairs=8 bytes_including_digest=977976 prefill_ms=2017.493 restore_ms=0.544 ratio95=[3674.1,3736.9]
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e box=home-3950x threads=1 geometry=0p5 B=128 flat01 pairs=8 bytes_including_digest=1586232 prefill_ms=3338.808 restore_ms=0.885 ratio95=[3714.7,3828.5]
+10.3 slice flat00-flat01: 2 of 2 prefixes resolved at or above 1000x runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372
+[E1] 10.3/E4 green (199 checks, 0 failed)
+1 cells, 0 red; 199 checks, 0 failures
+[2026-10-22T16:48:51] exit 0
+pause present at end: True
+other processes over 5 CPU-s during the slice: none

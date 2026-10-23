@@ -1,0 +1,16 @@
+pause present at start: True
+receipt D:\_scratch\e4\timing\PC-TIMING-1.txt sha256 0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372
+[2026-10-22T16:49:21] D:\_scratch\e4\build-msvc\superslm_precache_e1.exe =10.3/E4
+[E1] 10.3/E4 ...
+10.3 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e box=home-3950x threads=1 geometry=0p5 B=128 flat00 pairs=8 bytes_including_digest=977976 prefill_ms=2025.752 restore_ms=0.558 ratio95=[3536.2,3732.0]
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e box=home-3950x threads=1 geometry=0p5 B=128 flat01 pairs=8 bytes_including_digest=1586232 prefill_ms=3323.606 restore_ms=0.884 ratio95=[3717.6,3799.2]
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e box=home-3950x threads=1 geometry=0p5 B=128 flat02 pairs=8 bytes_including_digest=2335800 prefill_ms=4954.823 restore_ms=1.286 ratio95=[3827.8,3878.8]
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e box=home-3950x threads=1 geometry=0p5 B=128 flat03 pairs=8 bytes_including_digest=3079224 prefill_ms=6691.988 restore_ms=1.707 ratio95=[3875.6,3967.0]
+10.3 receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372 runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e box=home-3950x threads=1 geometry=0p5 B=128 flat04 pairs=8 bytes_including_digest=4615224 prefill_ms=10433.888 restore_ms=2.585 ratio95=[3879.6,4207.3]
+10.3 slice flat00-flat04: 5 of 5 prefixes resolved at or above 1000x runner=aba74f21942b737de34cf3cc1546775bff712ecb6a0664a96ba95500caa1e86e receipt=0f0c56afe86b771c2a6696d139c756adc5bea71d0ca364d4b6188bced69c9372
+[E1] 10.3/E4 green (448 checks, 0 failed)
+1 cells, 0 red; 448 checks, 0 failures
+[2026-10-22T16:53:06] exit 0
+pause present at end: True
+other processes over 5 CPU-s during the slice: Creative Cloud UI Helper:24944 5.8s

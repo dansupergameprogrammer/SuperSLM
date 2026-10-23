@@ -1,0 +1,21 @@
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc
+ src/sslm_abi.cpp | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+0
+-- superslm_precache_reference_gen: references would be written unanchored-engine-differs-from-1948e1f2ea4528790dc6701e26c47bda5739b003-or-dirty
+-- SuperSLM GPU: compiling shaders with C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe
+-- Configuring done
+-- Generating done
+-- Build files have been written to: D:/_scratch/e4/build-mut
+0
+ninja: Entering directory `D:\_scratch\e4\build-mut'
+[0/2] Re-checking globbed directories...
+[1/3] Building CXX object CMakeFiles\superslm_test_injection.dir\src\sslm_abi.cpp.obj
+[2/3] Linking CXX static library superslm_test_injection.lib
+[3/3] Linking CXX executable superslm_precache_e1.exe
+0
+
+10.3/E4
+10.3/E4:worst
+
+

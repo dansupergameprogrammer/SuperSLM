@@ -1,0 +1,23 @@
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc
+nested00 captured
+nested01 captured
+nested02 captured
+nested03 captured
+nested04 captured
+nested05 captured
+nested06 captured
+nested07 captured
+nested08 captured
+nested09 captured
+0
+nested00 captured
+nested01 captured
+nested02 captured
+nested03 captured
+nested04 captured
+nested05 captured
+nested06 captured
+nested07 captured
+nested08 captured
+nested09 captured
+0

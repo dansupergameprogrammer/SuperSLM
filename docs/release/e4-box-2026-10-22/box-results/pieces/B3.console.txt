@@ -1,0 +1,23 @@
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc
+flat00 captured
+flat01 captured
+flat02 captured
+flat03 captured
+flat04 captured
+flat05 captured
+flat06 captured
+flat07 captured
+flat08 captured
+flat09 captured
+0
+flat00 captured
+flat01 captured
+flat02 captured
+flat03 captured
+flat04 captured
+flat05 captured
+flat06 captured
+flat07 captured
+flat08 captured
+flat09 captured
+0

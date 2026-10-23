@@ -1,0 +1,113 @@
+[2026-10-22T17:46:34] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\_scratch\e4\src\tests\precache\write_merge_base.py D:\_scratch\e4\src origin/main D:\_scratch\e4\l1c\merge-base.txt
+reference merge-base fixture: origin/main -> 1948e1f2ea4528790dc6701e26c47bda5739b003
+[2026-10-22T17:46:34] exit 0
+[2026-10-22T17:46:34] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\_scratch\e4\l1\variant.py D:\_artifacts\SuperSLM\t3035-precache-refs-post-m1 D:\_scratch\e4\l1\candidate D:\_scratch\e4\l1c\pop-v1 v1 D:\_scratch\e4\t3035\tests\t3035-precache-refs\discrimination
+v1 -> D:\_scratch\e4\l1c\pop-v1 manifest bfb0037fde590dc023b00ac81b0c0b104a590eedfd8c213f68067833c9f7733f licence 607f0fa175375ed5b809c7ec5d45f04e4fc1442c0caddfc0d67a03d64b2d1190
+[2026-10-22T17:46:34] exit 0
+[2026-10-22T17:46:34] D:\_scratch\e4\build-msvc\superslm_precache_e1.exe =10.1/E4
+[E1] 10.1/E4 ...
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat00 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat00 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat00 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat00 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat00 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat00 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat00 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat00 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat00 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat00 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat01 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat01 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat01 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat01 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat01 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat01 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat01 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat01 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat01 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat01 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat02 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat02 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat02 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat02 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat02 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat02 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat02 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat02 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat02 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat02 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat03 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat03 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat03 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat03 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat03 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat03 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat03 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat03 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat03 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat03 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat04 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat04 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat04 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat04 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat04 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat04 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat04 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat04 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat04 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat04 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat05 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat05 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat05 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat05 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat05 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat05 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat05 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat05 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat05 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat05 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat06 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat06 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat06 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat06 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat06 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat06 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat06 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat06 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat06 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat06 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat07 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat07 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat07 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat07 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat07 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat07 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat07 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat07 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat07 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat07 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat08 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat08 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat08 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat08 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat08 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat08 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat08 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat08 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat08 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat08 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat09 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat09 adopter 0 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat09 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat09 adopter 1 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat09 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat09 adopter 2 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat09 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat09 adopter 3 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\precache_reference.h:151: reference flat09 lacks its commissioned discrimination record identity
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:214: 10.1 flat09 adopter 4 differs from pinned prefill
+FAIL [10.1/E4] D:\_scratch\e4\src\tests\precache\e4_real.cpp:221: graded == 50 (0 vs 50)
+10.1 real 0.5B: rule B = 128 (engine 128, helpers 128), cap 32768, cap_pages 256, page 786432 bytes
+[E1] 10.1/E4 RED (4084 checks, 101 failed)
+1 cells, 1 red; 4084 checks, 101 failures
+[2026-10-22T17:49:13] exit 1
