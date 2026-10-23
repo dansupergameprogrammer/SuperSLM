@@ -129,7 +129,7 @@ $V = "$E5\v1131"; $log = E5-Log 'G1-v1131-build'; Remove-Item $log -ErrorAction 
 E4-Run $log cmake @('-S', $V, '-B', "$V\build", '-G', 'Visual Studio 17 2022', '-A', 'x64', '-T', 'v143,version=14.34',
                     '-DSUPERSLM_BUILD_GPU=ON', '-DBUILD_TESTING=OFF')
 E4-Run $log cmake @('--build', "$V\build", '--config', 'Release', '--target', 'superslm', 'superslm_gpu_shaders')
-E4-Run $log cmd @('/c', "$E5Src\tests\paged-kv-gpu\build_paged_kv_gpu.bat", "--out=$E5\pkvg", "--capture910-tree=$V", 'capture910')
+E4-Run $log cmd @('/c', "$E5Src\tests\paged-kv-gpu\build_paged_kv_gpu.bat", ('"--out=' + "$E5\pkvg" + '"'), ('"--capture910-tree=' + $V + '"'), 'capture910')
 ```
 
 Pass:
@@ -138,6 +138,7 @@ Pass:
 - the batch file prints `LINKED (v1.13.1): ...\v1131\pcg_cell_9_10_capture.exe`.
 
 A `REFUSED: --capture910-tree ... is at ..., not v1.13.1` line means the worktree is not at `d697927f`: stop.
+Each `--name=value` argument is wrapped in its own double quotes because cmd splits unquoted arguments at `=`. Without the quotes, the batch file treats the flag and the path as two targets (box run, 2026-10-23). The `'vswhere.exe' is not recognized` line comes from VsDevCmd and is harmless.
 **Unverified here:** the cloud cannot build D3D12, so these commands are untested. If one fails, send its log and
 the test author fixes the sheet.
 
@@ -162,7 +163,7 @@ $log = E5-Log 'G3-release-gpu-build'; Remove-Item $log -ErrorAction SilentlyCont
 E4-Run $log cmake @('-S', $E5Src, '-B', "$E5Src\build", '-G', 'Visual Studio 17 2022', '-A', 'x64', '-T', 'v143,version=14.34',
                     '-DSUPERSLM_BUILD_GPU=ON', '-DBUILD_TESTING=OFF')
 E4-Run $log cmake @('--build', "$E5Src\build", '--config', 'Release', '--target', 'superslm', 'superslm_gpu_shaders')
-E4-Run $log cmd @('/c', "$E5Src\tests\paged-kv-gpu\build_paged_kv_gpu.bat", "--out=$E5\pkvg", 'e5')
+E4-Run $log cmd @('/c', "$E5Src\tests\paged-kv-gpu\build_paged_kv_gpu.bat", ('"--out=' + "$E5\pkvg" + '"'), 'e5')
 ```
 
 Pass: the batch file prints `LINKED` for `pcg_cell_9_10`. **Unverified here**, as G1 is.
