@@ -1,0 +1,4 @@
+# Squash manifest for 1.15.0: paths the squash of claude/sfd-1p15 onto main leaves out (Dan's 1.14.0 rule:
+# raw process records stay on the release branch; the public record is docs/releases/1.15.0.md).
+docs/release/1p15-box/**
+tools/schema_fast_decode_box/results/**
