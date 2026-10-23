@@ -63,7 +63,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                            size_t q_width, uint64_t* out_kv_landing_saturation_count,
                                            uint64_t* out_k_channel_landing_saturation_count,
                                            uint64_t* out_rope_q_saturation_count,
-                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading);
+                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading,
+                                           uint64_t* out_row_saturation_counts);  // defaulted in forward_sites.h
 
 // §3.2 item 3: GemmProbQ15Accumulate without the zeroing; adds into `out_ctx`. The same contract
 // otherwise (probs has `width` elements, values `width * head_dim`, row-major).
