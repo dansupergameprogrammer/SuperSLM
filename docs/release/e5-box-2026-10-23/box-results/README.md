@@ -11,8 +11,10 @@ holds the header).
 | E1 | PASS | MSVC 14.34 Release: configure and build of `superslm_precache_unpinned` both exit 0 |
 | E2 | PASS | ctest 5/5: 4 stated ordinals match; locator test PASS; 7.22 reads 9 mention units and 19 label sites (as the cloud record says; the table at the top of the sheet says 17); version matches. The 7.17 dry run prints the same eight verdicts as the cloud, with `accept-one`'s expected "differs" note |
 | E3 | PASS | `pkv_def: rule B = 128 … cap 4096, cap_pages 32, last page holds 128`; 9.9/E5 green, 136 checks |
-| G1 | **FAIL (the batch call)** | detail below |
-| G2–G4 | not run | stopped at the first red |
+| G1 | FAIL on the first try, then PASS after the run sheet fix (`9fce4b48`) | detail below |
+| G2 | PASS | 9.10 capture on the RTX 2080 SUPER: 43 checks; `captures910\v1.13.1_10de_1e81\` holds `captures.txt` and five `.bin` files; header `writer=v1.13.1 commit=d697927f… adapter=v1.13.1_10de_1e81 fixture=994b58b4…` |
+| G3 | PASS | release-tree GPU build; `[E5] pcg_cell_9_10: LINKED`; 1 linked, 0 red |
+| G4 | PASS | 9.10 on the RTX 2080 SUPER: 53 checks, 0 failures |
 
 **G1.** Both cmake commands exit 0: `v1131\build\Release\superslm.lib` and 35 `shaders\*.cso` exist. The third
 command is red:
