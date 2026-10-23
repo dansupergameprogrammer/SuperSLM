@@ -99,3 +99,27 @@ bit-identical, and the rule B was asserted on each fixture:
 
 A mutant tool rule (B capped at 64) was refused on pkv_def, pkv_odd and pkv_32k, and the run exited 1 with no
 manifest. No pins are committed: R2 writes them from R1's commit.
+
+## R1 and R2 (after the box receipts `80fcd3a1`, `f8eca988`)
+
+**R1, `7585adac`.** It applies `version-bump-1.14.0.patch` dated 2026-10-23, including the review fix to the release
+note's opening. Every binary was relinked first. A stale `EXCLUDE_FROM_ALL` binary that still wrote producer 1.13.1
+had turned 7.12/E2:independent-parser red; it is green after the relink. Results:
+- `check_version_header` matches, and `check_version_values --expect 1.14.0` reports 0 failures.
+- 7.17 and 7.22 are green.
+- `superslm_tests`: 123,818 checks, 0 failures.
+- Unpinned cells: 23 of 23 green, including 9.9/E5 with 136 checks.
+- e1: the same 5 environmental reds as before the bump.
+- ctest: 30 of 34 pass; the same 4 environmental failures.
+
+**R2.** `tools/build_precache_9p5_pins.sh` ran at `7585adac` on a clean tree and took 1 min 6 s. Both runs were
+identical and all four producers read 1.14.0. It wrote `tests/precache/reference/pins-9.5/`: four blobs and
+`manifest.txt`, which records the commit as `7585adac…`. Each blob's B, L and SHA-256 equal the dry run's.
+
+The box's `tests/precache-gpu/captures/.gitattributes` (`* -text`):
+- All six committed capture files hash to the G2 log's values, and `captures.txt` is LF.
+- 9.10's reader opens the file in binary mode. It strips a trailing `\r` from record lines but not from the header,
+  so a CRLF checkout would fail the header's `fixture=` match. `-text` is what prevents that.
+- 7.22 sweeps `captures.txt` (a `.txt`) and passes. It skips the attributes file by suffix.
+
+`pins-9.5/` carries the same `* -text`.
