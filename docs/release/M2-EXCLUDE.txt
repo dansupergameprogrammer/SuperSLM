@@ -19,16 +19,9 @@ docs/release/M2-EXCLUDE.txt
 tests/precache/e4_box_env.ps1
 tools/longleg_kit/**
 
-## KEEP, but proposed to move first: the G1 reference stems are test inputs main needs
-# 6.2/E2:reference and 6.3/E3:reference read them through SUPERSLM_PRECACHE_REFERENCE_DIR/<group>/<stem>-runN.ref.
-# The licence manifest names them by group, run, stem and SHA-256, with no directory, so a move keeps the licence valid.
-# Proposed home (not moved yet): tests/precache/reference/p6-pkv_def-1948e1f2/, with the same .gitattributes (* -text).
-# Until that move, the squash keeps exactly these files and drops the folder's README.md and SHA256SUMS.txt:
-!docs/release/e5-box-2026-10-23/g1-p6/.gitattributes
-!docs/release/e5-box-2026-10-23/g1-p6/P6-pkv_def-flat/flat00-run1.ref
-!docs/release/e5-box-2026-10-23/g1-p6/P6-pkv_def-flat/flat00-run2.ref
-!docs/release/e5-box-2026-10-23/g1-p6/P6-pkv_def-nested/nested00-run1.ref
-!docs/release/e5-box-2026-10-23/g1-p6/P6-pkv_def-nested/nested00-run2.ref
+## EXCLUDED too: the G1 reference stems (docs/release/e5-box-2026-10-23/g1-p6/)
+# Like the 10.1/10.2 reference sets, these are licensed reference inputs that live outside main (box artifacts and
+# this branch), and their licence is not on main, so 6.2/E2 and 6.3/E3 cannot grade from main anyway. No move.
 
 ## KEEP (listed so the squash is checked against it; nothing here is excluded)
 # Release: CHANGELOG.md, CMakeLists.txt, README.md, include/superslm/sslm_version.h, tests/install-consumer/CMakeLists.txt,
