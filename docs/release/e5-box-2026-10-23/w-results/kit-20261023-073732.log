@@ -1,0 +1,35 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261023073732
+Username: AzureAD\DanielSuper
+RunAs User: AzureAD\DanielSuper
+Configuration Name: 
+Machine: DESKTOP-CIJV137 (Microsoft Windows NT 10.0.26200.0)
+Host Application: powershell -NoProfile -ExecutionPolicy Bypass -File D:\e5-w\kit\run.ps1
+Process ID: 42924
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+[07:37:32] SuperSLM 1.14.0 E5 W1-W4 kit; drive folder D:\e5-w; work root C:\_scratch\e5w
+[07:37:32] checking prerequisites
+[07:37:33] prerequisites: ok (VS at C:\Program Files\Microsoft Visual Studio\2022\Community, MSVC 14.34, cmake, git, python)
+[07:37:35] unpacking the source from the drive's bundle (full history)
+[07:37:52] D3D12 hardware adapters (raw EnumAdapters1 order):
+    index 0: vendor 0x1002 device 0x744c 24516 MB usable=True AMD Radeon RX 7900 XTX
+    index 1: vendor 0x1002 device 0x164e 485 MB usable=True AMD Radeon(TM) Graphics
+[07:37:52] AMD adapter: index 0, AMD Radeon RX 7900 XTX (24516 MB)
+[07:37:52] W1: v1.13.1 GPU build and the capture program (about 10 minutes)
+[07:38:14] W2: 9.10 capture on adapter 0
+[07:38:33] W3: release-tree GPU build and the 9.10 cell (about 10 minutes)
+[07:39:19] W4: 9.10 on adapter 0
+[07:39:37] ALL DONE: W1-W4 green. Bring the drive back (e5-w\results\).
+**********************
+Windows PowerShell transcript end
+End time: 20261023073937
+**********************

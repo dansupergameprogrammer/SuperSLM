@@ -1,0 +1,11 @@
+[2026-10-23T07:37:35] git -C C:\_scratch\e5w\src init -q
+[2026-10-23T07:37:35] exit 0
+[2026-10-23T07:37:35] git -C C:\_scratch\e5w\src fetch -q D:\e5-w\inputs\e5w.bundle +refs/*:refs/bundle/*
+[2026-10-23T07:37:36] exit 0
+[2026-10-23T07:37:36] git -C C:\_scratch\e5w\src checkout -q --detach --force ce82c89831ac880a5dd58b0a76599332343fb6ea
+[2026-10-23T07:37:37] exit 0
+[2026-10-23T07:37:37] git -C C:\_scratch\e5w\src worktree add --detach C:\_scratch\e5w\v1131 d697927f6d5ce5fa73ecbb8660020a425518b923
+Preparing worktree (detached HEAD d697927)
+HEAD is now at d697927 SuperSLM 1.13.1: GPU pool cap, version, changelog and release note
+[2026-10-23T07:37:38] exit 0
+shallow=false src=ce82c89831ac880a5dd58b0a76599332343fb6ea v1131=d697927f6d5ce5fa73ecbb8660020a425518b923

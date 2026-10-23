@@ -1,0 +1,96 @@
+[2026-10-23T07:38:33] cmake -S C:\_scratch\e5w\src -B C:\_scratch\e5w\src\build -G Visual Studio 17 2022 -A x64 -T v143,version=14.34 -DSUPERSLM_BUILD_GPU=ON -DBUILD_TESTING=OFF
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.26200.
+-- The CXX compiler identification is MSVC 19.34.31948.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.34.31933/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found Python3: C:/Users/DanielSuper/AppData/Local/Programs/Python/Python312/python.exe (found version "3.12.10") found components: Interpreter
+-- SuperSLM GPU: compiling shaders with C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe
+-- Configuring done (1.9s)
+-- Generating done (0.3s)
+-- Build files have been written to: C:/_scratch/e5w/src/build
+[2026-10-23T07:38:36] exit 0
+[2026-10-23T07:38:36] cmake --build C:\_scratch\e5w\src\build --config Release --target superslm superslm_gpu_shaders
+MSBuild version 17.14.51+25f168cee for .NET Framework
+
+  Checking File Globs
+  1>Checking Build System
+  Building Custom Rule C:/_scratch/e5w/src/CMakeLists.txt
+  artifact.cpp
+  sha256.cpp
+  tokenizer.cpp
+  model.cpp
+  intmath.cpp
+  silu_lut.cpp
+  matmul.cpp
+  proof_manifest.cpp
+  trace_hook.cpp
+  checked_chain_funnel.cpp
+  forward_sites.cpp
+  parallel_split.cpp
+  gpu_inflight_registry.cpp
+  decode_digest.cpp
+  kv_pages.cpp
+  spx1_format.cpp
+  sslm_abi.cpp
+  damped_greedy_antilm.cpp
+  damped_greedy_topk.cpp
+  damped_greedy_phaseD.cpp
+  Generating Code...
+  Compiling...
+  damped_greedy_phaseD_loop.cpp
+  Generating Code...
+  superslm.vcxproj -> C:\_scratch\e5w\src\build\Release\superslm.lib
+MSBuild version 17.14.51+25f168cee for .NET Framework
+
+  Checking File Globs
+  dxc: attention_score_site.hlsl -> attention_score_site.cso
+  dxc: attn_norm_site.hlsl -> attn_norm_site.cso
+  dxc: attn_residual_site.hlsl -> attn_residual_site.cso
+  dxc: bias_wide.hlsl -> bias_wide.cso
+  dxc: check_rdp_exponent.hlsl -> check_rdp_exponent.cso
+  dxc: combine_carried.hlsl -> combine_carried.cso
+  dxc: commit_site.hlsl -> commit_site.cso
+  dxc: context_accumulate_site.hlsl -> context_accumulate_site.cso
+  dxc: ctx_fold_site.hlsl -> ctx_fold_site.cso
+  dxc: descriptor_table_readback.hlsl -> descriptor_table_readback.cso
+  dxc: down_proj_gemm_site.hlsl -> down_proj_gemm_site.cso
+  dxc: down_proj_site.hlsl -> down_proj_site.cso
+  dxc: dyn_recip.hlsl -> dyn_recip.cso
+  dxc: gate_proj_gemm_site.hlsl -> gate_proj_gemm_site.cso
+  dxc: gate_proj_site.hlsl -> gate_proj_site.cso
+  dxc: kv_proj_gemm_site.hlsl -> kv_proj_gemm_site.cso
+  dxc: kv_proj_site.hlsl -> kv_proj_site.cso
+  dxc: logits_site.hlsl -> logits_site.cso
+  dxc: mlp_act_site.hlsl -> mlp_act_site.cso
+  dxc: mlp_norm_site.hlsl -> mlp_norm_site.cso
+  dxc: mlp_residual_site.hlsl -> mlp_residual_site.cso
+  dxc: o_proj_gemm_site.hlsl -> o_proj_gemm_site.cso
+  dxc: o_proj_site.hlsl -> o_proj_site.cso
+  dxc: q_proj_gemm_site.hlsl -> q_proj_gemm_site.cso
+  dxc: q_proj_site.hlsl -> q_proj_site.cso
+  dxc: qk_norm_site.hlsl -> qk_norm_site.cso
+  dxc: reduce_max_abs_i64_scheme0.hlsl -> reduce_max_abs_i64_scheme0.cso
+  dxc: reduce_max_abs_i64_scheme1.hlsl -> reduce_max_abs_i64_scheme1.cso
+  dxc: requant_chain_checked.hlsl -> requant_chain_checked.cso
+  dxc: requant_wide.hlsl -> requant_wide.cso
+  dxc: rope_commit_site.hlsl -> rope_commit_site.cso
+  dxc: rope_guard_site.hlsl -> rope_guard_site.cso
+  dxc: softmax_site.hlsl -> softmax_site.cso
+  dxc: up_proj_gemm_site.hlsl -> up_proj_gemm_site.cso
+  dxc: up_proj_site.hlsl -> up_proj_site.cso
+  Building Custom Rule C:/_scratch/e5w/src/CMakeLists.txt
+[2026-10-23T07:38:49] exit 0
+[2026-10-23T07:38:49] cmd /c C:\_scratch\e5w\src\tests\paged-kv-gpu\build_paged_kv_gpu.bat "--out=C:\_scratch\e5w\pkvg" e5
+===== engine: CPU sources (build.bat's list) =====
+===== engine: GPU sources, configuration plain =====
+===== engine: GPU sources, configuration alloc =====
+===== engine: GPU sources, configuration t2169 =====
+===== engine: GPU sources, configuration bench =====
+===== te425 hooks (InstallHooks), main renamed, allocation-fault definitions =====
+===== host: the suite's process runner =====
+[E5] pcg_cell_9_10: LINKED (plain) 
+PKVG BUILD: 1 linked, 0 red by link, 0 red by compile or unexpected link failure
+[2026-10-23T07:39:19] exit 0

@@ -1,0 +1,6 @@
+[2026-10-23T07:39:19] C:\_scratch\e5w\pkvg\bin\pcg_cell_9_10.exe --fixture-dir=D:\e5-w\inputs\fixtures --captures=C:\_scratch\e5w\captures910
+# adapter: AMD Radeon RX 7900 XTX
+# adapter: AMD Radeon RX 7900 XTX
+fixture: D:\e5-w\inputs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_9_10: checks=53 failures=0 skips=0 -> PASS
+[2026-10-23T07:39:36] exit 0

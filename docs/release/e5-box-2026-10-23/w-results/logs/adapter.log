@@ -1,0 +1,6 @@
+[2026-10-23T07:37:38] cl.exe /nologo /EHsc /O2 /FeC:\_scratch\e5w\adapters\t2116_list_adapters.exe /FoC:\_scratch\e5w\adapters\t2116_list_adapters.obj C:\_scratch\e5w\src\tools\t2116_list_adapters.cpp dxgi.lib d3d12.lib
+t2116_list_adapters.cpp
+[2026-10-23T07:37:39] exit 0
+INDEX=0 SOFTWARE=0 USABLE=1 VENDOR=0x1002 DEVICEID=0x744c DEDICATED_VIDEO_MB=24516 NAME=AMD Radeon RX 7900 XTX
+INDEX=1 SOFTWARE=0 USABLE=1 VENDOR=0x1002 DEVICEID=0x164e DEDICATED_VIDEO_MB=485 NAME=AMD Radeon(TM) Graphics
+INDEX=2 SOFTWARE=1 NAME=Microsoft Basic Render Driver

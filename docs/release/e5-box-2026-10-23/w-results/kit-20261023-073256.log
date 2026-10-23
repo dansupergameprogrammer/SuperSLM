@@ -1,0 +1,27 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261023073256
+Username: AzureAD\DanielSuper
+RunAs User: AzureAD\DanielSuper
+Configuration Name: 
+Machine: DESKTOP-CIJV137 (Microsoft Windows NT 10.0.26200.0)
+Host Application: powershell -NoProfile -ExecutionPolicy Bypass -File D:\e5-w\kit\run.ps1
+Process ID: 9624
+PSVersion: 5.1.26100.9444
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9444
+BuildVersion: 10.0.26100.9444
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+[07:32:56] SuperSLM 1.14.0 E5 W1-W4 kit; drive folder D:\e5-w; work root C:\_scratch\e5w
+[07:32:56] checking prerequisites
+[07:32:58] MISSING (install these, then run START.cmd again):
+    - MSVC 14.34 toolset with Windows SDK 10.0.22621.0 (VS Installer > Individual components: "MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.34-17.4)" and "Windows 11 SDK (10.0.22621.0)")
+    - cmake 3.24 or newer on PATH (or VS 2022's "C++ CMake tools for Windows" component)
+**********************
+Windows PowerShell transcript end
+End time: 20261023073258
+**********************

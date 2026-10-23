@@ -1,0 +1,6 @@
+SSLM_GPU_ADAPTER_INDEX=0
+vendor=0x1002
+device=0x744c
+dedicated_mb=24516
+name=AMD Radeon RX 7900 XTX
+machine=DESKTOP-CIJV137

@@ -1,0 +1,12 @@
+[2026-10-23T07:38:14] C:\_scratch\e5w\pkvg\v1131\pcg_cell_9_10_capture.exe --fixture-dir=D:\e5-w\inputs\fixtures --out=C:\_scratch\e5w\captures910
+# adapter: AMD Radeon RX 7900 XTX
+# adapter: AMD Radeon RX 7900 XTX
+fixture: D:\e5-w\inputs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_9_10_capture: checks=43 failures=0 skips=0 -> PASS
+[2026-10-23T07:38:33] exit 0
+2af6376681f7c8b58d5824acf1c74655b0a908a9a3f8b25e86bef3681559a314  C:\_scratch\e5w\captures910\v1.13.1_1002_744c\captures.txt
+3033593c5bcb631e7d897e58f6e3e03864d8925fb97ce3cdd2418711873663ef  C:\_scratch\e5w\captures910\v1.13.1_1002_744c\slm5_dedicated_mid_token.bin
+95454755c4f15f24ec65a50457f7a872f16792255ed3f91ecb5899dd6c7527ec  C:\_scratch\e5w\captures910\v1.13.1_1002_744c\slm5_dedicated_resting.bin
+17b485109ffa87c7f47fb04b2c4e0f844b645f7a0f42e7523a8f453abc1e16d9  C:\_scratch\e5w\captures910\v1.13.1_1002_744c\slm6_pooled_adopted_before_first_finish.bin
+be5f36d2f8bc45ea9af05097528071432036251708bf817a2b5fb7abe52998b0  C:\_scratch\e5w\captures910\v1.13.1_1002_744c\slm6_pooled_mid_token.bin
+b5abb827a8e30219eb36584ca752a94ca734643afdb182d96a23f711b8019880  C:\_scratch\e5w\captures910\v1.13.1_1002_744c\slm6_pooled_resting.bin
