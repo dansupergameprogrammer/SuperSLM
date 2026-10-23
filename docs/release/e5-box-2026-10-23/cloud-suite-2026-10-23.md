@@ -73,7 +73,8 @@ The e1 reds:
 - 2.13/E2, 2.14/E2, 7.15/E2 and 11.6/E2 read E0's box artifacts, which are not in the cloud.
 - 5.7/F2:real-gpu needs a D3D12 device.
 
-All five were green on the box on 2026-10-22.
+Four of the five were green on the box on 2026-10-22: 2.13/E2, 2.14/E2, 7.15/E2 and 11.6/E2, in the receipts' green
+E2 runs. 5.7/F2:real-gpu is GPU-only and was not run in E2/E3, and no record on the branch shows it green on the box.
 
 The ctest reds:
 - `superslm_precache_real_two_process`, `_e2_reference` and `_e3_reference` need box references and
