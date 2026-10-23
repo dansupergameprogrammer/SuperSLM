@@ -12,8 +12,8 @@ moved:
 It does not re-time B7c to B7e. The CPU engine source is the B7 build's, apart from the version header, comments
 and 1.14.0's GPU prefix fixes, so B7's timings stand.
 
-**The tree.** The pieces run on the tip of `claude/sfd-1p15`. Its engine tree must equal `e82d7d40`: later commits
-change only `docs/`, and the driver refuses any other tree. The version reads **1.14.0**. The bump to 1.15.0 is the
+**The tree.** The pieces run on the tip of `claude/sfd-1p15`. Its engine source, benches and box tools must equal
+`e82d7d40`: later commits change only docs, CI and test files, and the driver refuses any other tree. The version reads **1.14.0**. The bump to 1.15.0 is the
 held patch `version-bump-1.15.0.patch` (beside this file), applied only as the release commit, after this sheet is
 green.
 
@@ -33,7 +33,7 @@ git fetch origin
 New-Item -ItemType Directory -Force D:\_scratch\sfd-1p15 | Out-Null
 if (-not (Test-Path D:\_scratch\sfd-1p15\src)) { git worktree add --detach D:\_scratch\sfd-1p15\src origin/claude/sfd-1p15 }
 git -C D:\_scratch\sfd-1p15\src rev-parse HEAD                       # note it in the record
-git -C D:\_scratch\sfd-1p15\src diff --stat e82d7d40 HEAD -- . ':!docs' # must print nothing
+git -C D:\_scratch\sfd-1p15\src diff --stat e82d7d40 HEAD -- src include CMakeLists.txt tools/schema_fast_decode_bench.cpp tools/decode_threading_bench.cpp tools/msvc_pin tools/schema_fast_decode_box   # must print nothing
 git -C D:\_scratch\sfd-1p15\src status --porcelain                  # must print nothing
 ```
 

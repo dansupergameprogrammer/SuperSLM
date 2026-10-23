@@ -18,7 +18,9 @@ $src = Join-Path $Scratch 'src'
 $bd = Join-Path $Scratch 'build-msvc'
 $out = Join-Path $Scratch 'out'
 $status = Join-Path $out 'status.txt'
-$engineCommit = 'e82d7d40'   # the engine tree this sheet was written for; later branch commits touch docs/release only
+$engineCommit = 'e82d7d40'   # the engine tree this sheet was written for; later commits change docs, CI and test files only
+$enginePaths = @('src', 'include', 'CMakeLists.txt', 'tools/schema_fast_decode_bench.cpp', 'tools/decode_threading_bench.cpp',
+                 'tools/msvc_pin', 'tools/schema_fast_decode_box')
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 function Say($t) { $line = "[$(Get-Date -Format o)] $t"; Write-Output $line; Add-Content -LiteralPath $status -Value $line }
 function Stat([double[]]$v) {
@@ -40,8 +42,8 @@ try {
     # --- preconditions (every run) ----------------------------------------------------------------------------------
     if (-not (Test-Path (Join-Path $src '.git'))) { throw "$src is not a worktree: run piece P0 of the run sheet first" }
     $head = (git -C $src rev-parse HEAD).Trim()
-    git -C $src diff --quiet $engineCommit HEAD -- src include CMakeLists.txt tools tests
-    if ($LASTEXITCODE -ne 0) { throw "the engine tree at $head differs from $engineCommit outside docs/: this sheet does not apply to it" }
+    git -C $src diff --quiet $engineCommit HEAD -- @enginePaths
+    if ($LASTEXITCODE -ne 0) { throw "the engine, bench or box tools at $head differ from ${engineCommit}: this sheet does not apply to it" }
     if (@(git -C $src status --porcelain).Count -ne 0) { throw "$src has local changes" }
     $busy = @(Get-Process -Name 'UnrealEditor', 'UnrealEditor-Cmd', 'UnrealBuildTool', 'cl', 'link' -ErrorAction SilentlyContinue)
     if ($busy.Count -gt 0 -or (Test-Path 'D:\_ssu_build_lock')) { throw 'box not clear (an editor, a build or the build lock is present)' }
