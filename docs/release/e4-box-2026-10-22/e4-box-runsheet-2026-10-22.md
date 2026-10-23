@@ -282,6 +282,46 @@ Pass (all of):
 `D:\_scratch\e4\blobs\capture-manifest.json` is F11's receipt (21 blob hashes, model, prompts, anchor). Resume: re-run
 the piece (it clears its blobs first). Expected: about 3 min capture, 4–6 min restore.
 
+### B6r. 10.1 and 10.2 again at the G1 fix (≤ 12 min build + ≤ 10 min run) — Dan; needs L1's licence; after A1's G1
+
+The coverage auditor's A1 re-audit (`a1-e4-reaudit-2026-10-23.md`) found gap G1: 10.2's restore phase never asserted
+`sslm_pc_test_only_prefix_prefill_calls() == 0`, and a nested restore that ran 30 scratch prefills stayed green.
+Commit `1c145b53c7cf2e81e0b0ad8535356d9763c68eeb` adds that assertion at the end of `Real102`'s restore phase. In the
+cloud the auditor's mutant goes red, "(30 vs 0)", and the unmutated leg stays green. **Only B6 re-runs**, from that
+commit's own worktree and build folder, on the same licensed v2 population (`$E4Refs`, its `license.txt` and
+`manifest.json`). B8, B9, X1 and B10 stay on the `e8c029ed` tree and `build-msvc`.
+
+**The instrument hash.** The fix changes `tests/precache/e4_real.cpp`, and so its hash: on the box (CRLF) it is
+`183de6de…` at `e8c029ed` and `b1cd172f…` at `1c145b53`. The change is in `Real102` (10.2) only. 10.3's timing code is
+untouched, so the commissioned `PC-TIMING-1` receipt still names `e8c029ed`'s instrument (`183de6de…`). B8 and B9
+keep running from `D:\_scratch\e4\src`, where `SUPERSLM_PRECACHE_TIMING_INSTRUMENT` points (the env script sets it
+from `$E4Src`). B6r reads no timing receipt.
+
+```powershell
+. D:\_scratch\e4\src\tests\precache\e4_box_env.ps1
+$G1Src = Join-Path $E4Work 'g1src'; $G1Build = Join-Path $E4Work 'build-g1'
+if (-not (Test-Path $G1Src)) { git -C D:\SuperSLM fetch origin; git -C D:\SuperSLM worktree add --detach $G1Src 1c145b53c7cf2e81e0b0ad8535356d9763c68eeb }
+git -C $G1Src rev-parse HEAD              # must print: 1c145b53c7cf2e81e0b0ad8535356d9763c68eeb
+git -C $G1Src merge-base HEAD origin/main # must print: 1948e1f2ea4528790dc6701e26c47bda5739b003
+git -C $G1Src status --porcelain          # must print nothing
+$log = E4-Log 'B6r-build'
+Remove-Item $log -ErrorAction SilentlyContinue
+E4-Run $log cmake @('-S', $G1Src, '-B', $G1Build, '-G', 'Ninja', '-DBUILD_TESTING=ON', '-DCMAKE_BUILD_TYPE=Release',
+                    '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl')
+E4-Run $log ninja @('-C', $G1Build, 'superslm_precache_e1', 'superslm_precache_reference_header')
+Remove-Item -Recurse -Force $env:SUPERSLM_PRECACHE_BLOB_DIR -ErrorAction SilentlyContinue
+Push-Location $G1Build
+E4-Run (E4-Log 'B6r-two-process') ctest @('-R', '^superslm_precache_real_two_process$', '-V', '--timeout', '1500')
+Pop-Location
+```
+
+Pass: both build commands exit 0. Then everything B6 requires, from `build-g1`: the fixtures passed, the merge-base
+`1948e1f2…`, capture and restore `10.1/E4 green` and `10.2/E4 green` with the ten `10.2 nestedNN: B = 128, s = 7, draw
+= 3` lines, `two-process gate: capture exited, 21 hashes pinned, restore exited, 100 graded adopters`, and `100% tests
+passed`. The restore's 10.2 line counts one check more than B6's (cloud: 4,378 against 4,377 on the stand-in). This
+log, not B6's, is 10.1/10.2's E4 record. Resume: re-run (Ninja rebuilds only what is missing; the blobs are cleared
+first).
+
 ### B7. Timing prompt manifest (1 min) — Dan; before T1
 
 ```powershell
@@ -511,6 +551,7 @@ On B2, B6, B8a–B8d, B9, B10, B11's logs and the cloud record. E4 is not green 
 | Dan, re-run after the L1 refusal (§15.33) | B3g 12, B3 12, B4 8, B5 2, B6 10 | **about 44**, plus L1's ~10 = 54 |
 | Debunker, on the box | L1 ~10, T1a ~12, T1b ~6 (alone) | about 28 |
 | Spare PC (long-leg kit, `-E4Worst`) | W1 | 60–90 (not home-box time) |
+| Dan, after A1's G1 | B6r: build ≤ 12, run ≤ 10 | **about 22** |
 | Coverage auditor | A0 (before L1), A1 | none |
 
 E4's plan row estimated ~45 min; it did not count the reference regeneration, the licence, the commissioning or the
