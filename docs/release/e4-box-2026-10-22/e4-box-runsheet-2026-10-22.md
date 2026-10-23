@@ -30,12 +30,11 @@ rebuilt at `47bdcc9e` is byte-identical (cloud: `2531182b…5d26` at both). X1's
 X1/B10 pairing holds. If B10 were built from a `47bdcc9e` tree instead, it would refuse "not built from one source
 revision", and X1 would need re-capturing there (cloud) plus B10 again (15 min). Do not do that.
 
-**One open field before B3: `RECORD`.** Each stem has two commissioned v2 sidecars, `<stem>.stream.json`
+**`RECORD` (rev 1.18.13a): `{id}.stream.json`.** Each stem has two commissioned v2 sidecars, `<stem>.stream.json`
 (`T-3035-precache-stream-v2`, stream vitality) and `<stem>.byte.json` (`T-3035-precache-byte-v1`, restored-sequence
-operand). A header has one `discrimination_record_sha256`, and the loader refuses a second key. §15.33 says "the run
-sheet passes the v2 sidecar" (singular) but names both records as "what a header binds". Which one the headers bind
-is the planner's call, not the test author's. B3 and B4 refuse to start until `$E4Record` is set to one of the two.
-`record_hashes` in L1 can list all 40 sidecars either way.
+operand). The header's `discrimination_record_sha256` binds the stream sidecar, because stream-v2 is the instrument
+that grades what a reference holds: token streams. The byte sidecars are named in L1's population manifest as
+provenance, not in `record_hashes`.
 
 ## What E4 needed, and what is already done
 
@@ -161,8 +160,7 @@ directory.
 
 ```powershell
 . D:\_scratch\e4\src\tests\precache\e4_box_env.ps1
-$E4Record = ''     # SET BEFORE RUNNING: '{id}.stream.json' or '{id}.byte.json', as the planner rules (see the open field above)
-if ($E4Record -notin '{id}.stream.json', '{id}.byte.json') { throw 'E4Record is not set: ask the coordinator' }
+$E4Record = '{id}.stream.json'     # rev 1.18.13a: the header binds the stream-v2 sidecar
 $Gen = Join-Path $E4Work 'build-gen\superslm_precache_reference_gen.exe'
 $V2 = Join-Path $E4T3035 'tests\t3035-precache-refs\discrimination-v2'
 $refused = "$E4Refs-v1bound-refused"
@@ -183,8 +181,7 @@ Resume: re-run the piece (it overwrites both runs; the set-aside happens only on
 
 ```powershell
 . D:\_scratch\e4\src\tests\precache\e4_box_env.ps1
-$E4Record = ''     # the same value as B3
-if ($E4Record -notin '{id}.stream.json', '{id}.byte.json') { throw 'E4Record is not set: ask the coordinator' }
+$E4Record = '{id}.stream.json'     # the same value as B3
 $Gen = Join-Path $E4Work 'build-gen\superslm_precache_reference_gen.exe'
 $V2 = Join-Path $E4T3035 'tests\t3035-precache-refs\discrimination-v2'
 $out = Join-Path $E4Refs 'P2-real0p5-nested'; New-Item -ItemType Directory -Force $out | Out-Null
@@ -209,7 +206,7 @@ Get-ChildItem $E4Refs -Recurse -Filter '*-run1.ref' | ForEach-Object {
   "{0} {1} {2}" -f $a, ($(if ($a -eq $b) { 'pair-equal' } else { 'PAIR-DIFFERS' })), $_.FullName.Substring($E4Refs.Length + 1)
 } | ForEach-Object { E4-Append $log $_; $_ }
 "pairs differing: $bad" | ForEach-Object { E4-Append $log $_; $_ }
-$E4Record = ''     # the same value as B3
+$E4Record = '{id}.stream.json'     # the same value as B3
 $V2 = Join-Path $E4T3035 'tests\t3035-precache-refs\discrimination-v2'; $unbound = 0
 Get-ChildItem $E4Refs -Recurse -Filter '*-run1.ref' | ForEach-Object {
   $stem = $_.Name -replace '-run1\.ref$', ''; $grp = $_.Directory.Name
@@ -241,23 +238,26 @@ v2 sidecars named by `discrimination_record_sha256`) and writes, if it passes:
   loader reads (`format`, `status=COMMISSIONED`, `commissioning_verdict=PASS`, `must_accept=PASS`, `must_reject=PASS`,
   `anchor=1948e1f2…`, `population_manifest_sha256`, `instrument_source_sha256` = the SHA-256 of
   `tests\precache\precache_reference.h` at the pinned commit (the same file at `47bdcc9e`) unless the debunker names
-  another instrument and changes `SUPERSLM_PRECACHE_DISCRIMINATION_INSTRUMENT`, and `record_hashes`, comma-separated,
-  covering every header's `discrimination_record_sha256`).
+  another instrument and changes `SUPERSLM_PRECACHE_DISCRIMINATION_INSTRUMENT`, and `record_hashes`, comma-separated:
+  **exactly the 20 `<stem>.stream.json` hashes** the headers carry, and nothing else).
+- The manifest also names the 20 `<stem>.byte.json` (byte-v1) sidecars with their SHA-256s, as provenance for the
+  cells' exact-state assertions. They are **not** in `record_hashes`, so the licence accepts no hash a header does not
+  carry (rev 1.18.13a).
 
 **L1 note (rev 1.18.13 §15.33):**
 - **Standing is read from the project registry, never from the sidecar's JSON.** Every v2 sidecar still carries its
   historical `"status": "QUARANTINED"` label (T-3071 §1). That label is not its standing. The registry lists
   `T-3035-precache-stream-v2` and `T-3035-precache-byte-v1` as COMMISSIONED (D-SLM8030).
-- Every header's hash must be a v2 sidecar (`discrimination-v2/P1-real0p5-flat/`, `P2-real0p5-nested/`) whose
-  `instrument` the registry lists as COMMISSIONED. No v1 hash (`discrimination/real0p5-*/<stem>.discrimination.json`)
+- Every header's hash must be its stem's `<stem>.stream.json` in `discrimination-v2/P1-real0p5-flat/` or
+  `P2-real0p5-nested/`, whose `instrument` (`T-3035-precache-stream-v2`) the registry lists as COMMISSIONED. No v1 hash (`discrimination/real0p5-*/<stem>.discrimination.json`)
   may appear in `record_hashes`: v1 is superseded, and nothing licenses against it (§15.33 (b)).
 - **Each record is marked "measured at B = 16".** The sidecars carry `page_positions: 16`, and the population is at
   B = 128. The licence's manifest records "discrimination measured at B = 16" for every bound record. §15.33 (4)
   rules that no re-measure is needed for this licence: B8's mutants and A1 carry the B = 128 kill.
 - Hand-edited headers are refused. The references come from B3/B4's generator, or not at all.
 
-The cloud dry-run (`e4-cloud-2026-10-22.md` §6) shows the loader passing with a licence over the v2 hashes and refusing
-one over v1 hashes only. E4's B6 cannot pass before L1 exists. The E2 (`6.2/E2:reference`) and E3
+The cloud dry-run (`e4-cloud-2026-10-22.md` §6, §7) shows the loader passing with a licence whose `record_hashes` are
+exactly the 20 stream hashes, and refusing one over v1 hashes only. E4's B6 cannot pass before L1 exists. The E2 (`6.2/E2:reference`) and E3
 (`6.3/E3:reference`) populations at the same anchor are not in this sheet.
 
 ### B6. 10.1 and 10.2: the two-process leg (≤ 10 min) — Dan; needs B5 and L1
@@ -489,8 +489,6 @@ E4's plan row estimated ~45 min; it did not count the reference regeneration, th
 
 ## Blockers
 
-- B3 and B4 cannot start until the planner names `RECORD`: the stream-v2 or the byte-v1 sidecar (see *Re-run after
-  the L1 refusal*).
 - B6 cannot pass until A0 and L1 exist; B8 and B9 cannot run until T1 exists. Both are second-seat work that has not been
   requested yet.
 - B9 needs W1 from another machine.

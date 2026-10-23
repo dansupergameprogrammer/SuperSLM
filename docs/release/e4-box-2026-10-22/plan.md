@@ -5000,6 +5000,12 @@ One capped loop: the builder changes the generator, the test author re-runs B3�
 | (4) v2 was measured at `page_positions` 16; the population is at B = 128 | **No re-measure for this licence; the B = 16 provenance is recorded.** The licensed references are prefill-built streams, and the restore path cannot influence them (§8). They are token-identical across the move to B = 128, which is the B-invariance the licence needs. The commissioned instruments' refusals are exact-state byte refusals, which do not depend on page size. The page-granular constructions (`M-page`, `M-swap`) only get coarser at B = 128, so their changed bytes grow, and a page defect becomes easier to detect, not harder. What B = 128 must still show is that the E4 cells kill restore defects at the rule's B. That is B8's mutants and the A1 re-audit on the actual 10.1/10.2 cells, not a re-measure of the sidecars. The licence's manifest records "discrimination measured at B = 16" | L1 (record), B8, A1 |
 | (5) T-3071's coverage re-audit before grading | **Required before L1 issues, as a records check with no box time.** The coverage auditor re-audits the re-bound population and its v2 bindings against the cells that will grade it (10.1/10.2's exact-state assertions; the 6.1/6.4/6.7/8.4/8.5 rows T-3071 names, where E2's audit has not already cleared them at this anchor, cited by record). The run sheet's A1, after B6–B10, stays as E4's green gate. It does not replace the pre-grading audit | before L1; A1 for green |
 
+**Rev 1.18.13a (one field):** the header's `discrimination_record_sha256` binds `<stem>.stream.json` (stream-v2), the
+instrument that grades what a reference holds, which is token streams. The licence's `record_hashes` lists exactly
+those 20 stream hashes. The 20 `<stem>.byte.json` (byte-v1) files are named, with their hashes, in the population
+manifest as provenance for the cells' exact-state assertions, but not in `record_hashes`, so no hash a header does
+not carry is accepted. No loader change.
+
 **What is built or re-run:**
 - **Cloud:** the generator's record argument, one commit with its code review; the run sheet re-pinned to that
   commit; then the coverage auditor's pre-licence re-audit.
