@@ -1,0 +1,6 @@
+piece: msvc-asan__9.8-E2-synthetic1p5
+cell: 9.8/E2:synthetic1p5
+verdict: CRASHED
+exit: -1073741502
+checks: 
+failures: 

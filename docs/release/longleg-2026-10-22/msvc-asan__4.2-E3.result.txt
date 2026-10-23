@@ -1,0 +1,6 @@
+piece: msvc-asan__4.2-E3
+cell: 4.2/E3
+verdict: CRASHED
+exit: -1073741502
+checks: 
+failures: 

@@ -1,0 +1,7 @@
+piece: clangcl__4.2-E3
+cell: 4.2/E3
+verdict: GREEN
+exit: 0
+checks: 3134
+failures: 0
+line: [E1] 4.2/E3 green (3134 checks, 0 failed)

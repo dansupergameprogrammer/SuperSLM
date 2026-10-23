@@ -1,0 +1,7 @@
+piece: msvc__4.1-E2-synthetic-shapes
+cell: 4.1/E2:synthetic-shapes
+verdict: GREEN
+exit: 0
+checks: 2262
+failures: 0
+line: [E1] 4.1/E2:synthetic-shapes green (2262 checks, 0 failed)

@@ -1,0 +1,7 @@
+piece: clangcl__4.7-E2-synthetic1p5
+cell: 4.7/E2:synthetic1p5
+verdict: GREEN
+exit: 0
+checks: 4098
+failures: 0
+line: [E2] 4.7/E2:synthetic1p5 green (4098 checks, 0 failed)
