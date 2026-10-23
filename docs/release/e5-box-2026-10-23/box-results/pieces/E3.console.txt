@@ -1,0 +1,6 @@
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc
+[E5] 9.9/E5 ...
+pkv_def: rule B = 128 (engine 128, helpers 128), cap 4096, cap_pages 32, last page holds 128
+[E5] 9.9/E5 green (136 checks, 0 failed)
+1 cells, 0 red; 136 checks, 0 failures
+0

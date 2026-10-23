@@ -1,0 +1,7 @@
+git rev-parse --is-shallow-repository: false
+src HEAD: ce82c89831ac880a5dd58b0a76599332343fb6ea
+src merge-base origin/main: 1948e1f2ea4528790dc6701e26c47bda5739b003
+v1131 HEAD: d697927f6d5ce5fa73ecbb8660020a425518b923
+src status --porcelain: (0 lines)
+pkv_def.sslm: 994b58b49d3660bccfdd59dc6315028ea0203f37f4705d70eb7ce4dbecdb1db3
+scratch root: D:\_scratch\e5-1p14 (the run sheet's D:\_scratch\e5, per the coordinator's scratch rule)

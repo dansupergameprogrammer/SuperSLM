@@ -1,0 +1,81 @@
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc
+UpdateCTestConfiguration  from :D:/_scratch/e5-1p14/build-msvc/DartConfiguration.tcl
+Parse Config file:D:/_scratch/e5-1p14/build-msvc/DartConfiguration.tcl
+UpdateCTestConfiguration  from :D:/_scratch/e5-1p14/build-msvc/DartConfiguration.tcl
+Parse Config file:D:/_scratch/e5-1p14/build-msvc/DartConfiguration.tcl
+Test project D:/_scratch/e5-1p14/build-msvc
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 2
+    Start 2: superslm_precache_version_header
+
+2: Test command: C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe "D:/_scratch/e5-1p14/src/tests/ci/check_version_header.py"
+2: Working Directory: D:/_scratch/e5-1p14/build-msvc
+2: Test timeout computed to be: 1500
+2: check_version_header: version matches
+1/5 Test #2: superslm_precache_version_header ..............   Passed    0.17 sec
+test 3
+    Start 3: superslm_precache_version_header_commission
+
+3: Test command: C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe "D:/_scratch/e5-1p14/src/tests/ci/test_check_version_header.py"
+3: Working Directory: D:/_scratch/e5-1p14/build-msvc
+3: Test timeout computed to be: 1500
+3: version checker: matching accepted; one-patch-behind, malformed project, missing header rejected
+2/5 Test #3: superslm_precache_version_header_commission ...   Passed    0.13 sec
+test 7
+    Start 7: superslm_precache_api_ordinals
+
+7: Test command: C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe "D:/_scratch/e5-1p14/src/tests/ci/check_api_ordinals.py"
+7: Working Directory: D:/_scratch/e5-1p14/build-msvc
+7: Test timeout computed to be: 1500
+7: check_api_ordinals: api.md:529 SSLM_RESTORE_PRODUCER_MISMATCH = 30
+7: check_api_ordinals: api.md:813 SSLM_KV_BUDGET_EXCEEDED = 29
+7: check_api_ordinals: api.md:1139 SSLM_KV_BUDGET_EXCEEDED = 29
+7: check_api_ordinals: api.md:1150 SSLM_RESTORE_PRODUCER_MISMATCH = 30
+7: check_api_ordinals: 4 stated ordinal(s) match the X-macro
+3/5 Test #7: superslm_precache_api_ordinals ................   Passed    0.12 sec
+test 8
+    Start 8: superslm_precache_api_ordinals_locator
+
+8: Test command: C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe "D:/_scratch/e5-1p14/src/tests/ci/test_check_api_ordinals.py"
+8: Working Directory: D:/_scratch/e5-1p14/build-msvc
+8: Test timeout computed to be: 1500
+8: must-accept: 4 statements, 2 of SSLM_RESTORE_PRODUCER_MISMATCH
+8: must-reject (paired sentence at 31): refused: C:\Users\dansu\AppData\Local\Temp\tmpiu2s9kir\api.md:529: SSLM_RESTORE_PRODUCER_MISMATCH stated at ordinal 31; the X-macro has 30
+8: must-reject (an ordinal with no name on its line or the next): refused: C:\Users\dansu\AppData\Local\Temp\tmpiu2s9kir\api.md:1213: "ordinal 12" with no backticked status name on its line or the next line of its paragraph: an unpaired statement
+8: must-reject (paired sentence reworded past the locator): refused: SSLM_RESTORE_PRODUCER_MISMATCH: 1 statement(s) found, floor 2 (a statement reworded past the locator, or never written)
+8: test_check_api_ordinals: PASS
+4/5 Test #8: superslm_precache_api_ordinals_locator ........   Passed    0.16 sec
+test 9
+    Start 9: superslm_precache_gpu_prefix_labels
+
+9: Test command: C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe "D:/_scratch/e5-1p14/src/tests/ci/check_gpu_prefix_labels.py"
+9: Working Directory: D:/_scratch/e5-1p14/build-msvc
+9: Test timeout computed to be: 1500
+9: check_gpu_prefix_labels: 9 mention unit(s) carry "unreleased until 1.16.0"; 19 label site(s) read 1.16.0
+5/5 Test #9: superslm_precache_gpu_prefix_labels ...........   Passed   10.31 sec
+
+The following tests passed:
+	superslm_precache_version_header
+	superslm_precache_version_header_commission
+	superslm_precache_api_ordinals
+	superslm_precache_api_ordinals_locator
+	superslm_precache_gpu_prefix_labels
+
+100% tests passed, 0 tests failed out of 5
+
+Total Test time (real) =  10.91 sec
+0
+anchor               REFUSED  SSLM_RESTORE_PRODUCER_MISMATCH: 0 statement(s) found, floor 2 (a statement reworded past the locator, or never written)
+accept-one           REFUSED  SSLM_RESTORE_PRODUCER_MISMATCH: 1 statement(s) found, floor 2 (a statement reworded past the locator, or never written)  <- differs from the section 8 wording
+accept-two           ACCEPTED 4 statements
+reject-kv-30         REFUSED  reject-kv-30.md:787: SSLM_KV_BUDGET_EXCEEDED stated at ordinal 30; the X-macro has 29
+reject-new-31        REFUSED  reject-new-31.md:860: SSLM_RESTORE_PRODUCER_MISMATCH stated at ordinal 31; the X-macro has 30
+reject-paired-31     REFUSED  reject-paired-31.md:862: SSLM_RESTORE_PRODUCER_MISMATCH stated at ordinal 31; the X-macro has 30
+reject-kv-reworded   REFUSED  SSLM_KV_BUDGET_EXCEEDED: 1 statement(s) found, floor 2 (a statement reworded past the locator, or never written)
+reject-unpaired      REFUSED  reject-unpaired.md:865: "ordinal 12" with no backticked status name on its line or the next line of its paragraph: an unpaired statement
+0

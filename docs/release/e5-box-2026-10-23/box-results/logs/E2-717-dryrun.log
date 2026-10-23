@@ -1,0 +1,10 @@
+[2026-10-23T00:42:14] python D:\_scratch\e5-1p14\src\docs\release\e5-box-2026-10-23\7.17\run_717_constructions.py D:\_scratch\e5-1p14\src
+anchor               REFUSED  SSLM_RESTORE_PRODUCER_MISMATCH: 0 statement(s) found, floor 2 (a statement reworded past the locator, or never written)
+accept-one           REFUSED  SSLM_RESTORE_PRODUCER_MISMATCH: 1 statement(s) found, floor 2 (a statement reworded past the locator, or never written)  <- differs from the section 8 wording
+accept-two           ACCEPTED 4 statements
+reject-kv-30         REFUSED  reject-kv-30.md:787: SSLM_KV_BUDGET_EXCEEDED stated at ordinal 30; the X-macro has 29
+reject-new-31        REFUSED  reject-new-31.md:860: SSLM_RESTORE_PRODUCER_MISMATCH stated at ordinal 31; the X-macro has 30
+reject-paired-31     REFUSED  reject-paired-31.md:862: SSLM_RESTORE_PRODUCER_MISMATCH stated at ordinal 31; the X-macro has 30
+reject-kv-reworded   REFUSED  SSLM_KV_BUDGET_EXCEEDED: 1 statement(s) found, floor 2 (a statement reworded past the locator, or never written)
+reject-unpaired      REFUSED  reject-unpaired.md:865: "ordinal 12" with no backticked status name on its line or the next line of its paragraph: an unpaired statement
+[2026-10-23T00:42:14] exit 0
