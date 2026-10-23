@@ -1,0 +1,12 @@
+[2026-10-23T00:46:30] D:\_scratch\e5-1p14\pkvg\v1131\pcg_cell_9_10_capture.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures --out=D:\_scratch\e5-1p14\captures910
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_9_10_capture: checks=43 failures=0 skips=0 -> PASS
+[2026-10-23T00:46:35] exit 0
+a44229cb908c45477dbf4cce4e8422849556e84f036787ae4324a489d540dc10  D:\_scratch\e5-1p14\captures910\v1.13.1_10de_1e81\captures.txt
+3033593c5bcb631e7d897e58f6e3e03864d8925fb97ce3cdd2418711873663ef  D:\_scratch\e5-1p14\captures910\v1.13.1_10de_1e81\slm5_dedicated_mid_token.bin
+95454755c4f15f24ec65a50457f7a872f16792255ed3f91ecb5899dd6c7527ec  D:\_scratch\e5-1p14\captures910\v1.13.1_10de_1e81\slm5_dedicated_resting.bin
+17b485109ffa87c7f47fb04b2c4e0f844b645f7a0f42e7523a8f453abc1e16d9  D:\_scratch\e5-1p14\captures910\v1.13.1_10de_1e81\slm6_pooled_adopted_before_first_finish.bin
+be5f36d2f8bc45ea9af05097528071432036251708bf817a2b5fb7abe52998b0  D:\_scratch\e5-1p14\captures910\v1.13.1_10de_1e81\slm6_pooled_mid_token.bin
+b5abb827a8e30219eb36584ca752a94ca734643afdb182d96a23f711b8019880  D:\_scratch\e5-1p14\captures910\v1.13.1_10de_1e81\slm6_pooled_resting.bin

@@ -1,0 +1,6 @@
+E4 env: MSVC 14.34.31933, src D:\_scratch\e4\src, build D:\_scratch\e4\build-msvc
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_9_10: checks=53 failures=0 skips=0 -> PASS
+0

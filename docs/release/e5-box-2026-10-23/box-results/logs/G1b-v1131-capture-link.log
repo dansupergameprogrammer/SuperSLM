@@ -1,0 +1,7 @@
+[2026-10-23T00:46:09] cmd /c D:\_scratch\e5-1p14\src\tests\paged-kv-gpu\build_paged_kv_gpu.bat "--out=D:\_scratch\e5-1p14\pkvg" "--capture910-tree=D:\_scratch\e5-1p14\v1131" capture910
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+===== pcg_cell_9_10_capture against D:\_scratch\e5-1p14\v1131 =====
+   LINKED (v1.13.1): D:\_scratch\e5-1p14\pkvg\v1131\pcg_cell_9_10_capture.exe   (--fixture-dir=DIR --out=DIR, on each certified GPU)
+PKVG BUILD: 0 linked, 0 red by link, 0 red by compile or unexpected link failure
+[2026-10-23T00:46:18] exit 0

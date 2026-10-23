@@ -1,4 +1,4 @@
-# E5 home-box pieces, 2026-10-23 (partial: stopped at G1)
+# E5 home-box pieces, 2026-10-23
 
 These pieces follow `../e5-box-runsheet-2026-10-23.md` as written at `569d4b67`. Each one builds the pinned commit
 `ce82c898` in a detached worktree. The scratch root is `D:\_scratch\e5-1p14` in place of the sheet's
@@ -28,3 +28,23 @@ command is red:
 - Fix (the sheet's, for the test author): pass each `--name=value` argument quoted to cmd, for example
   `'"--out=' + "$E5\pkvg" + '"'`.
 - The `vswhere.exe` line is a separate, smaller note: vswhere is not on PATH in this environment.
+
+**G1 resumed (`logs/G1b-v1131-capture-link.log`).** The sheet at `9fce4b48` quotes each `--name=value` argument.
+Re-running only G1's batch call gives `LINKED (v1.13.1): …\pkvg\v1131\pcg_cell_9_10_capture.exe`. The `vswhere.exe`
+line is still printed, and it is harmless: the batch file finds VS through `VsDevCmd.bat`'s fixed path.
+
+**R3.** The G2 captures are committed as captured, under
+`tests/precache-gpu/captures/v1.13.1_10de_1e81/`. The `.gitattributes` beside them (`* -text`) keeps them
+byte-exact on every checkout; without it, Windows checkouts with `core.autocrlf=true` would rewrite `captures.txt`.
+Their SHA-256s are in `logs/G2-9.10-capture-2080s.log`.
+
+| File | SHA-256 |
+|---|---|
+| `captures.txt` | `a44229cb…dc10` |
+| `slm5_dedicated_resting.bin` | `95454755…27ec` |
+| `slm5_dedicated_mid_token.bin` | `3033593c…63ef` |
+| `slm6_pooled_resting.bin` | `b5abb827…9880` |
+| `slm6_pooled_mid_token.bin` | `be5f36d2…98b0` |
+| `slm6_pooled_adopted_before_first_finish.bin` | `17b48510…16d9` |
+
+The RX 7900 XTX half (W1–W4) is the work machine's. R1 and R2 are the cloud's.
