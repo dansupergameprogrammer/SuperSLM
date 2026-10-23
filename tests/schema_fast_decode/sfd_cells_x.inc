@@ -2566,8 +2566,10 @@ void Cell_X_9_1() {
 }
 
 // 9.X2 [J1-X] The ABI inventory carries sslm_jump_options and sslm_jump_mode; sslm_seq_jump_forward keeps its
-// ordinal in the verb list; the version is bumped past J1's; the status list's entry count equals the base this
+// ordinal in the verb list; the status list's entry count equals the base this
 // line builds on: main's 30 plus the merged precached-prefixes line's SSLM_RESTORE_PRODUCER_MISMATCH, 31 (as 9.2).
+// J1 and J1-X ship together as 1.15.0, so this cell checks no version; 9.2's receipt reads it at the release commit
+// (plan rev 1.3.7, section 17.13).
 void Cell_X_9_2() {
 	if (!XLive("9.X2")) return;
 	const std::string abi = ReadRepoFile("include/superslm/sslm_abi.h");
@@ -2586,14 +2588,6 @@ void Cell_X_9_2() {
 			at = i + 1;
 		}
 	CHECK_MSG(found == 46, "[9.X2] sslm_seq_jump_forward is at line %zu of c_abi_verbs.txt; J1 put it at 46", found);
-	const std::string cml = ReadRepoFile("CMakeLists.txt");
-	const size_t vp = cml.find("project(superslm VERSION ");
-	std::string version;
-	if (vp != std::string::npos) {
-		const size_t b = vp + std::strlen("project(superslm VERSION ");
-		version = cml.substr(b, cml.find_first_of(" )", b) - b);
-	}
-	CHECK_MSG(!version.empty() && version != "1.15.0", "[9.X2] the project version is still %s (J1's)", version.c_str());
 	int n = 0;
 #define SFD_X_COUNT_STATUS(name) ++n;
 	SSLM_STATUS_ENUM_LIST(SFD_X_COUNT_STATUS)
