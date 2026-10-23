@@ -6,6 +6,7 @@
 # Usage: tests/paged-kv-gpu/build_paged_kv_gpu_mingw.sh [--out=DIR] [--jobs=N] [--state-tracking] [--list] [TARGET ...]
 #   TARGET   g2 | g3 | g4 | g5 | g6   every executable whose bracket is that step (default: all five)
 #            f2                  the precached-prefixes GPU cells (tests/precache-gpu, plan step F1/F2)
+#            e5                  the precached-prefixes E5 GPU cell (pcg_cell_9_10; its capture leg is box-only)
 #            <exe name>          one executable from the table below (e.g. pkvg_g2, g1d_cell_3_6f)
 #   --out    default <repo>/out/pkvg (the exes must sit under the repo: the shader staleness check walks up
 #            from the exe to src/gpu/shaders)
@@ -92,6 +93,8 @@ pcg_cell_busy|plain|F2|../precache-gpu/pcg_cell_busy|
 pcg_cell_faults|alloc|F2|../precache-gpu/pcg_cell_faults|
 pcg_cell_schema|plain|F2|../precache-gpu/pcg_cell_schema|
 pcg_cell_budget_snapshot|plain|F2|../precache-gpu/pcg_cell_budget_snapshot|
+pcg_cell_restore_derived|plain|F2|../precache-gpu/pcg_cell_restore_derived|
+pcg_cell_9_10|plain|E5|../precache-gpu/pcg_cell_9_10|
 '
 # Host-only programs (no engine): the suite's process runner.
 HOST_TABLE="pkvg_suite"

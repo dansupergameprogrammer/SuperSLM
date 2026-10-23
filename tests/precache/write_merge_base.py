@@ -10,6 +10,13 @@ def main() -> int:
     target = Path(output)
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
+        # Plan §8 (rev 1.18.9 §15.28 item 2): a shallow history records no merge-base. Above the boundary
+        # git merge-base can answer, and below it can name the wrong commit, so every shallow clone refuses.
+        shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=repo,
+                                 text=True, capture_output=True, check=True).stdout.strip()
+        if shallow != "false":
+            raise ValueError(f"shallow history ({repo} --is-shallow-repository reads {shallow!r}); "
+                             "run git fetch --unshallow, then rerun")
         result = subprocess.run(["git", "merge-base", "HEAD", line], cwd=repo,
                                 text=True, capture_output=True, check=True)
         anchor = result.stdout.strip()

@@ -9,6 +9,16 @@ struct HostileBlob {
     bool draw_discriminating = true;
 };
 
+// The SPX1 digest over a blob of any size from the digest field's end (60) up, including one shorter than the header:
+// an operand that passes the digest so that only the size check stands between it and the later steps.
+inline void DigestAnySize(std::vector<uint8_t>& b) {
+    if (b.size() < 60) return;
+    std::fill(b.begin() + 28, b.begin() + 60, uint8_t{0});
+    uint8_t hash[32];
+    superslm::Sha256Hash(b.data(), b.size(), hash);
+    std::copy(hash, hash + 32, b.begin() + 28);
+}
+
 template<class Visit>
 void TruncationPopulation(const std::vector<uint8_t>& one,
                           const std::vector<uint8_t>& thousand,Visit visit) {
@@ -84,6 +94,27 @@ void DomainPopulation(const Fixture& fx,const std::vector<uint8_t>& one,Visit vi
     model[60]^=1;
     Digest(model);
     visit(HostileBlob{"model hash",std::move(model),SSLM_RESTORE_MODEL_MISMATCH,true});
+    // T-3060 F14: operands that reach exactly one clause, every other check passing (digest recomputed).
+    // Step 2 size: one byte short of the header with a correct digest and a producer edit, so a reader without the
+    // size check reads every field inside the buffer and answers the producer mismatch, not the size refusal.
+    auto short_producer=one;
+    PutLe32(short_producer,16,UINT32_MAX);
+    short_producer.resize(kHeader-1);
+    DigestAnySize(short_producer);
+    visit(HostileBlob{"short header, digest correct, producer edited",std::move(short_producer),
+                      SSLM_INVALID_ARGUMENT,true});
+    // Step 8 exact size: one trailing byte under a correct digest (an n < required check accepts it).
+    auto over=one;
+    over.push_back(0);
+    Digest(over);
+    visit(HostileBlob{"one byte over, digest correct",std::move(over),SSLM_INVALID_ARGUMENT,true});
+    // Step 8 cap: L = cap + 1 in a blob of exactly the size for that L, origin and token valid for it.
+    const uint64_t above=uint64_t(fx.geo.context_cap)+1;
+    auto sized=one;
+    sized.resize(kHeader+ArtifactHiddenSize(fx)+size_t(above)*fx.BytesPerToken(),0);
+    PutLe64(sized,112,above);
+    Digest(sized);
+    visit(HostileBlob{"L above cap, sized for L",std::move(sized),SSLM_INVALID_ARGUMENT,true});
     PKV_CHECK_MSG((uint64_t{1}<<53)+1 <= uint64_t(INT64_MAX) &&
                   uint64_t(kHeader+ArtifactHiddenSize(fx))+
                   (((uint64_t{1}<<53)+1)*uint64_t(fx.BytesPerToken()))==one.size(),

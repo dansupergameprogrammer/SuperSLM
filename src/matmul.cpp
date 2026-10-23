@@ -95,12 +95,14 @@
 // MSVC: this file's code goes in its own image section. An image section starts on a page boundary, so the GEMM
 // kernels' alignment depends only on this file's code, not on how much code the linker places before it. Without
 // it, unrelated edits elsewhere in the library moved the DotRow loop by 16 bytes mod 64 and changed a one-thread
-// 7-token prefill by 28 % under MSVC on a Zen 2 host (results/2026-10-21-prefill7-bisect/). MSVC has no loop or
-// function alignment switch; a section of its own is the control it offers. Other compilers align loops themselves.
+// 7-token prefill by 28 % under MSVC on a Zen 2 host (tools/msvc_pin/README.md; the bisect is in
+// tools/schema_fast_decode_box/results/2026-10-21-prefill7-bisect/). MSVC has no loop or function alignment
+// switch; a section of its own is the control it offers. Other compilers align loops themselves.
 #if defined(_MSC_VER) && !defined(__clang__)
 // The section's first 16 bytes ($a sorts before $m within the image section): puts DotRowAvx2 at 16 mod 64 and the
-// DotRow loop at 0 mod 64, the placement every fast build had (results/2026-10-21-prefill7-bisect/,
-// results/2026-10-21-msvc-pin/). Kept by /INCLUDE, never called.
+// DotRow loop at 0 mod 64, the placement every fast build had (tools/schema_fast_decode_box/results/
+// 2026-10-21-prefill7-bisect/ and 2026-10-21-msvc-pin/); tools/msvc_pin/run-pinmap.ps1 checks it. Kept by
+// /INCLUDE, never called.
 #pragma code_seg(".sslmgem$a")
 extern "C" __declspec(noinline) void superslm_gemm_section_head() {}
 #pragma comment(linker, "/INCLUDE:superslm_gemm_section_head")

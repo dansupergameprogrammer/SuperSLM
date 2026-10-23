@@ -281,6 +281,50 @@ void Precedence57() {
         PKV_CHECK(out==nullptr);
         if (st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
     }
+    // T-3060 F6: schema (step 7) before every domain (step 8). Each operand fails both, digest correct.
+    const uint64_t above_cap=uint64_t(fx.geo.context_cap)+1;
+    struct Both { const char* name; size_t schema_at; uint64_t schema_value; bool schema_wide;
+                  size_t domain_at; uint64_t domain_value; bool domain_wide; };
+    for (Both p : {Both{"unknown schema + L above cap",96,1,true,112,above_cap,true},
+                   Both{"unknown schema + size disagrees with L",96,1,true,112,18,true},
+                   Both{"unknown schema + origin above L",96,1,true,120,18,true},
+                   Both{"unknown schema + token at vocab",96,1,true,108,uint64_t(fx.vocab),false},
+                   Both{"unknown schema + mantissa above int32",96,1,true,128,uint64_t(INT32_MAX)+1,true},
+                   Both{"unbound walk + L above cap",104,1,false,112,above_cap,true},
+                   Both{"unbound walk + token -2",104,1,false,108,UINT32_MAX-1,false}}) {
+        auto b=good;
+        if(p.schema_wide) PutLe64(b,p.schema_at,p.schema_value); else PutLe32(b,p.schema_at,uint32_t(p.schema_value));
+        if(p.domain_wide) PutLe64(b,p.domain_at,p.domain_value); else PutLe32(b,p.domain_at,uint32_t(p.domain_value));
+        Digest(b);
+        sslm_prefix out=nullptr;
+        const sslm_status st=Restore(fx,&pool.pool,b,nullptr,&out);
+        PKV_CHECK_MSG(st==SSLM_RESTORE_SCHEMA_MISMATCH && out==nullptr,
+                      "5.7 %s: expected the schema mismatch first, got %s",p.name,AbiStatusName(st));
+        if (st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
+    }
+    // ...and domain before the pool: L above cap at exactly zero free pages is the domain refusal, not exhaustion.
+    {
+        PagePool zero(fx.model,8);
+        std::vector<sslm_seq> held;
+        PKV_CHECK_MSG(AdmitPages(fx,&zero.pool,8,&held),"5.7 zero-free pool did not admit all eight pages");
+        sslm_seq extra=nullptr; // built as 5.6: a 2-page create refused confirms exactly zero free.
+        Status(sslm_seq_create_budgeted(fx.model,&zero.pool,16,&extra),SSLM_KV_POOL_EXHAUSTED,
+               "5.7 zero-free confirmation");
+        if(extra) sslm_seq_release(extra);
+        auto b=good;
+        PutLe64(b,112,above_cap);
+        Digest(b);
+        sslm_pc_test_only_restore_fault_arm(3,0);
+        sslm_prefix out=nullptr;
+        const sslm_status st=Restore(fx,&zero.pool,b,nullptr,&out);
+        PKV_CHECK_MSG(st==SSLM_INVALID_ARGUMENT && out==nullptr,
+                      "5.7 domain did not precede the zero-free pool: %s",AbiStatusName(st));
+        PKV_CHECK_MSG(sslm_pc_test_only_restore_fault_read(nullptr,nullptr,nullptr,nullptr)==0,
+                      "5.7 domain refusal reached the allocation slot");
+        sslm_pc_test_only_restore_fault_disarm();
+        if (st==SSLM_OK && out && out!=OutSentinel<sslm_prefix>()) sslm_prefix_release(out);
+        for(auto seq:held) sslm_seq_release(seq);
+    }
     auto producer=good;
     PutLe32(producer,8,UINT32_MAX);
     Digest(producer);
@@ -291,6 +335,7 @@ void Precedence57() {
                   "5.7 step1 null model did not precede producer mismatch");
     auto short_blob=producer;
     short_blob.resize(kHeader-1);
+    DigestAnySize(short_blob); // the digest passes: only the size check precedes the producer's.
     sslm_prefix short_out=nullptr;
     const auto short_st=Restore(fx,&pool.pool,short_blob,nullptr,&short_out);
     PKV_CHECK_MSG(short_st==SSLM_INVALID_ARGUMENT && short_out==nullptr,

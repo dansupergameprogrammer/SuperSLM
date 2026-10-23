@@ -5546,20 +5546,6 @@ SslmGpuStatus sslm_gpu_prefix_set_schemaImpl(SslmGpuContext* ctx, SslmGpuPrefixH
 // the tokens that landed (the schema bridge's own count, or the prompt bridge's context-length advance).
 // A call that admitted n < count tokens and landed all n returns SSLM_OK with `*consumed` = n, resumable,
 // as the CPU twin's chunk_budget (cell 5.8). Repeated calls of any count are allowed (gap 4c).
-// A prefix's prefill that landed tokens and then stopped at the budget (SSLM_GPU_KV_BUDGET_EXCEEDED), or a
-// schema-content prefill whose DFA rejected a token after earlier ones landed (SSLM_SEQUENCE_REJECTED), leaves the
-// prefix ready at full depth, so it can freeze, be adopted and be saved. Its prefill snapshot is that
-// residual: the restore rebuilds the snapshot from the saved residual whenever the prefix is ready, so the
-// original must hold the same, or its adopters and a restored copy's adopters would read different
-// snapshots. Prefix-only: a sequence's own snapshot keeps the successful-prefill rule of gpu_1p0.h.
-static void RefreshPrefixSnapshotOnStop(SslmGpuSequenceHandle* seq, SslmGpuStatus st, int64_t landed,
-                                        bool schema_kind) {
-	const bool stop = st == SSLM_GPU_KV_BUDGET_EXCEEDED || (schema_kind && st == SSLM_SEQUENCE_REJECTED);
-	if (!stop || landed <= 0 || !seq->ready_for_logits) return;
-	seq->prefill_hidden_codes = seq->hidden_codes;
-	seq->prefill_hidden_valid = true;
-}
-
 SslmGpuStatus sslm_gpu_prefix_prefillImpl(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix, const int32_t* tokens,
                                           int32_t count, int32_t kind, uint32_t dispatch_budget, int32_t* consumed) {
 	if (!consumed) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
@@ -5585,26 +5571,36 @@ SslmGpuStatus sslm_gpu_prefix_prefillImpl(SslmGpuContext* ctx, SslmGpuPrefixHand
 		const int64_t landed = seq->context_length - before;
 		*consumed = landed <= 0 ? 0 : (landed >= n ? n : static_cast<int32_t>(landed));
 		if (*consumed > 0) prefix->current_token = tokens[*consumed - 1];
-		RefreshPrefixSnapshotOnStop(seq, st, *consumed, false);
 		return st;
 	}
 	int32_t landed = 0;
 	const SslmGpuStatus st = SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(ctx, seq, tokens, n, per_token, &landed);
 	*consumed = landed;
 	if (landed > 0) prefix->current_token = tokens[landed - 1];
-	RefreshPrefixSnapshotOnStop(seq, st, landed, true);
 	return st;
 }
 
 // §3.4's freeze row: the first call returns the prefix's unmapped reserve pages to the pool, so the frozen
 // prefix keeps exactly ceil(len/B) pages; later calls return SSLM_OK with no pool effect (G33). Submits
 // nothing.
+// The first freeze also sets the state restore derives from L (§4 items 2 and 7; code review 1.14 round 1,
+// findings 1 and 2): SPX1 carries no ready flag, snapshot flag or bind permission, so sslm_gpu_prefix_restore
+// sets the prefill snapshot to the saved residual and valid iff L > 0, and the bind permission iff L == 0.
+// On the original those were functions of the call history (a later failed or zero-count prefill call
+// invalidates the snapshot or clears the permission). Every reader of either -- an adopt and begin_from --
+// takes a frozen prefix only, so normalising here makes the original and its restored copy agree whatever
+// the history, and replaces the per-exit snapshot refresh the prefill verb used to make.
 SslmGpuStatus sslm_gpu_prefix_freezeImpl(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix) {
 	if (!ctx || !prefix || prefix->ctx != ctx || prefix->seq == nullptr) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	if (prefix->frozen) return SSLM_OK;
 	const superslm::kv_pages::PageStatus ps = superslm::kv_pages::HolderReturnReserve(prefix->seq->holder, nullptr);
 	if (ps != superslm::kv_pages::PageStatus::kOk) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	prefix->frozen = true;  // only once the reserve is back: a refused freeze leaves the prefix unfrozen
+	SslmGpuSequenceHandle* seq = prefix->seq;
+	const bool ready = seq->context_length > 0 && seq->ready_for_logits;  // restore: ready = L > 0 (a savable prefix)
+	seq->prefill_hidden_codes = seq->hidden_codes;
+	seq->prefill_hidden_valid = ready;
+	seq->bind_eligible = seq->context_length == 0;                      // restore: bind_eligible = !(L > 0)
 	return SSLM_OK;
 }
 
@@ -5889,7 +5885,7 @@ SslmGpuStatus sslm_gpu_seq_restore_into_poolImpl(SslmGpuContext* ctx, SslmGpuMod
 	return SSLM_OK;
 }
 
-// Precached prefixes (1.16.0, unreleased on this branch; plan §4): the GPU twin of sslm_prefix_save / sslm_prefix_restore over the
+// Precached prefixes (unreleased until 1.16.0; plan §4): the GPU twin of sslm_prefix_save / sslm_prefix_restore over the
 // same 'SPX1' layout (§3.2): a 184-byte header, the residual, then rows [0, L) in canonical order
 // [layer][K|V][kv_head][pos < L][d]. backend = 1 and the producer adapter's VendorId/DeviceId at 20/24. The
 // bytes and the reader's check order are src/spx1_format's, the same writer and reader the CPU verbs use.

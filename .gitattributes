@@ -50,7 +50,7 @@ tests/matmul_tiled_golden_pin.h   text eol=lf
 tests/t2899-schema-deadend-red-suite/pristine_pre_slm5/** -text
 tools/schema_fast_decode_box/frozen/** -text
 
-# The C verb list the inventory cells (9.2, 9.X2) search line by line, and build_x2.ps1 compares with the headers' C
-# verbs: LF on every checkout, so a Windows checkout's lines carry no '\r' (the cells' reader strips one
-# as well; MSVC ctest 2026-10-21).
+# The C verb list that build_x2.ps1 compares with the headers' C verbs, and the inventory cells (9.2, 9.X2) and the
+# other t2807 scripts read line by line: LF on every checkout, so a Windows checkout's lines carry no '\r' (the
+# cells' reader strips one as well; MSVC ctest 2026-10-21).
 tests/t2807-api-slot/c_abi_verbs.txt text eol=lf

@@ -30,12 +30,20 @@ inline std::string ShaFile(const fs::path& path) {
     return Sha(b.data(),b.size());
 }
 
+// A reference row's value for `key`: the key only as a whole whitespace-separated key=value token, never as the
+// suffix of another key; empty when it is absent or given twice (reference_header_identity.cpp's must-rejects).
 inline std::string Field(const std::string& s,const std::string& key) {
-    const std::string pattern=key+"=";
-    const size_t begin=s.find(pattern);
-    if(begin==std::string::npos) return {};
-    const size_t value=begin+pattern.size();
-    return s.substr(value,s.find_first_of(" \t\r\n",value)-value);
+    std::istringstream in(s);
+    std::string token,found;
+    bool seen=false;
+    while(in>>token) {
+        const size_t at=token.find('=');
+        if(at==std::string::npos || token.compare(0,at,key)!=0 || at!=key.size()) continue;
+        if(seen) return {};
+        seen=true;
+        found=token.substr(at+1);
+    }
+    return found;
 }
 
 using ReferenceHeader=std::map<std::string,std::string>;
