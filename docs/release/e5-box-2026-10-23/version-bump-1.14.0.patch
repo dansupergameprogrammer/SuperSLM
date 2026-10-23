@@ -47,10 +47,10 @@ index 5d6ecaf1..44c38201 100644
  In 1.13.0 the GPU backend got the same shared prompt prefixes
  and budgeted sequences the CPU got in 1.12.0: a cast of characters that share a world and persona
 diff --git a/docs/releases/1.14.0.md b/docs/releases/1.14.0.md
-index d4cb6f85..e031511c 100644
+index d4cb6f85..3d2f8c37 100644
 --- a/docs/releases/1.14.0.md
 +++ b/docs/releases/1.14.0.md
-@@ -1,6 +1,6 @@
+@@ -1,13 +1,19 @@
  # SuperSLM 1.14.0
  
 -Released: set by the release commit.
@@ -58,6 +58,20 @@ index d4cb6f85..e031511c 100644
  
  SuperSLM 1.14.0 adds frozen-prefix save and restore on the CPU. A host can build a shared prompt prefix once (a
  world, a persona), save it as a canonical `SPX1` blob, and later restore it instead of prefilling it again. A
+ restored prefix is adopted exactly as the prefill-built one is, and its adopters emit the same tokens. A nested
+ prefix can be restored onto its parent and share the parent's pages. The blob records the engine version that
+ wrote it, and a blob from another version is refused with a new status, `SSLM_RESTORE_PRODUCER_MISMATCH`
+-(ordinal 30). No token, existing status, existing verb or sequence save format changes.
++(ordinal 30).
++
++One existing behavior changes: model mapping now refuses a model whose schema names include two with the same
++FNV-1a 64-bit hash, or one whose name hashes to zero, on both backends. A caller mapping such a model gets
++`SSLM_ARTIFACT_REJECTED` from `sslm_model_map` (`SSLM_DEVICE_LOST` from `sslm_gpu_model_map`) and no model handle,
++where 1.13.1 mapped it; re-converting it with distinct schema names fixes it. The certified model artifacts still map.
++No token, existing status or sequence save format changes.
+ 
+ ## What changed
+ 
 diff --git a/include/superslm/sslm_version.h b/include/superslm/sslm_version.h
 index 300e7a8c..03b62b45 100644
 --- a/include/superslm/sslm_version.h
