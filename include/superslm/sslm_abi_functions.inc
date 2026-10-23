@@ -224,7 +224,7 @@ SUPERSLM_API sslm_status sslm_seq_forced_tokens(sslm_model model, sslm_seq seq,
  * A no-op (OK, count 0) when no schema is bound or the state is unforced. A limit admits a prefix
  * and returns the limit status, as sslm_prefill does. The host loop: call this until
  * sslm_seq_forced_tokens reports 0, then decode_step (docs/api.md gives the contract).
- * `opts` (1.16.0; NULL = canonical, the behaviour above): with mode SSLM_JUMP_EXACT the verb
+ * `opts` (1.15.0; NULL = canonical, the behaviour above): with mode SSLM_JUMP_EXACT the verb
  * admits the pending token and a draft clipped to chunk_budget - 1 tokens and to the context
  * room, truncated at its first out-of-range, special, byteless or illegal token; checks every
  * drafted token with the decode step's finish; and keeps the pending token and the drafted

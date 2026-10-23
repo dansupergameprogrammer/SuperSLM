@@ -2,29 +2,21 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
-## [1.14.0] - 2026-10-23
+## [Unreleased]
 
-Frozen-prefix save and restore on the CPU. `docs/releases/1.14.0.md` is the release note.
+For 1.15.0: faster schema-bound decode on the CPU (schema fast-decode plan rev 1.3.6, slices M1, J1, TF and J1-X).
+`docs/releases/1.15.0.md` is the release note. The version stays at the last release (1.14.0: CMake and
+`sslm_version.h`) until the release commit, which sets 1.15.0 and dates this entry. Two C verbs are appended (55 C
+verbs in all), with one enum and one struct; no released declaration, struct layout, status ordinal or save format
+changes, and no artifact needs reconversion. The GPU backend is unchanged.
 
-- **Precached prefixes on the CPU: save and restore** (`SSLM_HAS_PREFIX_SAVE_ABI`). `sslm_prefix_save` writes a
-  frozen prefix as a canonical `SPX1` blob; `sslm_prefix_restore` validates the whole blob before it draws or
-  shares any page, and restores a frozen prefix, optionally sharing pages with a parent prefix. The blob records its
-  producer (the engine version); a blob from another version is refused with the new
-  `SSLM_RESTORE_PRODUCER_MISMATCH` (ordinal 30). `include/superslm/sslm_version.h` carries the version, and a check
-  keeps it equal to CMake's.
-- **Model mapping refuses colliding schema name hashes.** A model whose schema names include two with the same
-  nonzero FNV-1a 64-bit hash, or one hashing to zero, is refused at map, on the CPU and the GPU alike, so a schema
-  hash saved in a blob resolves to one schema. The certified model artifacts still map (the E0 audit).
-- **GPU twins, unreleased until 1.16.0.** `sslm_gpu_prefix_save` and `sslm_gpu_prefix_restore` are declared and
-  exported, but no release promises them before 1.16.0.
-- **MSVC GEMM placement pin.** `src/matmul.cpp` gets its own image section, so the GEMM kernels' alignment no
-  longer moves with unrelated edits; `tools/msvc_pin/run-pinmap.ps1` checks the placement.
-
-Version 1.16.0 in progress (schema fast-decode plan rev 1.2.1, slices M1 and J1, and rev 1.3.3, slices TF
-and J1-X; CPU backend only). Two C verbs are appended (53 C verbs in all); no released declaration, struct
-layout, status ordinal or save format changes, and no artifact needs reconversion. Until its release commit the build
-carries the last released version (CMake and `sslm_version.h`: 1.13.1).
-
+- **Measured (Ryzen 9 3950X, MSVC, Qwen2.5-0.5B-Instruct, a 28-token order with `potion_shop_order`).** The masked finish
+  alone, tokens unchanged: 1,257 to 921 ms at one thread (1.37x), 711 to 560 ms at 4 tasks (1.27x). On top of it,
+  exact jump-forward with a draft learned from the model's earlier orders, tokens unchanged: 896.6 to 604.3 ms
+  (1.48x) at one thread; 16,676 to 12,878 ms (1.295x) over 20 other orders, one of them slower (0.82x); and no
+  gain at 4 tasks (0.996x). Exact mode with the engine's own draft (the canonical chain) is slower than off, 0.81x.
+  Canonical jump-forward writes 21 different tokens instead of 28 (1.96x against the masked finish alone), so its
+  output differs.
 - **Masked finish.** Under a bound schema, when the model's hidden size is at most 131,071 (computed once
   at `sslm_model_map`), the token finish computes only the head rows of the tokens the schema allows at
   the sequence's state, greedy and damped greedy. At that size no row's dot can leave int32, so tokens,
@@ -49,7 +41,7 @@ carries the last released version (CMake and `sslm_version.h`: 1.13.1).
   has admitted a forced token, so a failed call leaves the history and its order unchanged.
 - **Fix (damped greedy, anti-LM history):** an allocation failure inside the history update could leave
   a context entry with no observations, and the next damped finish then divided by zero (SIGFPE). The
-  decode step on 1.13.1 has the same latent crash. The update now allocates everything it needs before it
+  decode step on 1.14.0 and earlier has the same latent crash. The update now allocates everything it needs before it
   publishes anything, so a failure leaves the state exactly as it was before that token, and the
   penalty skips any context with no observations. The two internal hash tables' growth is now
   exception-safe as well (a failed growth no longer empties the table).
@@ -66,10 +58,9 @@ carries the last released version (CMake and `sslm_version.h`: 1.13.1).
   retry recomputes the finish only and equals a run that never failed; a deterministic refusal returns
   the same status on every retry and changes nothing. In a batch, earlier sequences keep their advance,
   as before. Success paths, tokens and save blobs are unchanged. There is no option to keep the old rest.
-- **Exact jump-forward (1.16.0; plan rev 1.3.3, slice J1-X).** `sslm_seq_jump_forward` gains a
-  `const sslm_jump_options* opts` argument after `params` (the verb is unreleased, so it changes in place;
-  NULL options keep the behaviour above). New: `sslm_jump_mode` and `sslm_jump_options`; no existing struct,
-  status ordinal or save format changes. In exact mode the verb admits the pending token and a draft (the
+- **Exact jump-forward (plan rev 1.3.3, slice J1-X).** `sslm_seq_jump_forward` takes a
+  `const sslm_jump_options* opts` argument after `params` (NULL options: the canonical behaviour above). New:
+  `sslm_jump_mode` and `sslm_jump_options`; no existing struct, status ordinal or save format changes. In exact mode the verb admits the pending token and a draft (the
   host's, or the forced chain), checks each drafted token with the decode step's own finish, and keeps
   only the tokens the model would have produced, so the output equals a run that never calls the verb.
   It returns `SSLM_OK` for any draft; rejected rows' pages go back to the sequence's reserve and their
@@ -85,6 +76,24 @@ carries the last released version (CMake and `sslm_version.h`: 1.13.1).
   red round's stubs and the `SUPERSLM_SFD_RED_STUBS` option are removed. The TF and J1-X cells run against the real
   symbols too; `SUPERSLM_SFD_TF_RED_STUBS` and `SUPERSLM_SFD_X_RED_STUBS` default to OFF (their stub files
   compile empty).
+
+## [1.14.0] - 2026-10-23
+
+Frozen-prefix save and restore on the CPU. `docs/releases/1.14.0.md` is the release note.
+
+- **Precached prefixes on the CPU: save and restore** (`SSLM_HAS_PREFIX_SAVE_ABI`). `sslm_prefix_save` writes a
+  frozen prefix as a canonical `SPX1` blob; `sslm_prefix_restore` validates the whole blob before it draws or
+  shares any page, and restores a frozen prefix, optionally sharing pages with a parent prefix. The blob records its
+  producer (the engine version); a blob from another version is refused with the new
+  `SSLM_RESTORE_PRODUCER_MISMATCH` (ordinal 30). `include/superslm/sslm_version.h` carries the version, and a check
+  keeps it equal to CMake's.
+- **Model mapping refuses colliding schema name hashes.** A model whose schema names include two with the same
+  nonzero FNV-1a 64-bit hash, or one hashing to zero, is refused at map, on the CPU and the GPU alike, so a schema
+  hash saved in a blob resolves to one schema. The certified model artifacts still map (the E0 audit).
+- **GPU twins, unreleased until 1.16.0.** `sslm_gpu_prefix_save` and `sslm_gpu_prefix_restore` are declared and
+  exported, but no release promises them before 1.16.0.
+- **MSVC GEMM placement pin.** `src/matmul.cpp` gets its own image section, so the GEMM kernels' alignment no
+  longer moves with unrelated edits; `tools/msvc_pin/run-pinmap.ps1` checks the placement.
 
 ## [1.13.1] - 2026-10-19
 

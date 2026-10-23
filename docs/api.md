@@ -1240,7 +1240,7 @@ chain is that token, then the chain of the state it leads to. The table costs
     consumes the token a concurrent `decode_step` would): a concurrent
     `sslm_seq_release` or `decode_step` of the same sequence waits for it.
 
-**Exact mode** (1.16.0; `sslm_jump_options` with mode `SSLM_JUMP_EXACT`) is a
+**Exact mode** (1.15.0; `sslm_jump_options` with mode `SSLM_JUMP_EXACT`) is a
 verified jump-forward: its output, tokens and save blobs included, equals a run
 that never calls the verb.
 - **Options.** `struct_size` must be `sizeof(sslm_jump_options)`. `draft`

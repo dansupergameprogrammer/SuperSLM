@@ -257,8 +257,8 @@ typedef struct sslm_decode_params {
     int64_t q_c;                /* damped-greedy only: runtime i-exp scale constant */
 } sslm_decode_params;
 
-/* Schema jump-forward options (1.16.0, sslm_seq_jump_forward). NULL options, or mode CANONICAL,
- * is the 1.15.0 verb exactly. EXACT is a verified jump-forward: the pending choice token and a
+/* Schema jump-forward options (1.15.0, sslm_seq_jump_forward). NULL options, or mode CANONICAL,
+ * is the canonical jump-forward the verb's declaration describes. EXACT is a verified jump-forward: the pending choice token and a
  * draft are admitted in one pass, every drafted token is checked with the decode step's own
  * finish, and only the tokens the model would itself have produced are kept, so the output equals
  * a run that never calls the verb (docs/api.md). In EXACT mode `draft` holds `draft_count` token
