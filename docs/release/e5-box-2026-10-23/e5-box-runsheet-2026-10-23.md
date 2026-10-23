@@ -7,7 +7,7 @@ The plan text is not edited here, and a copy of it is not kept in this tree: the
 tracked text file, and the plan names 1.14.0 beside the GPU verbs. That is why the E4 packet's `plan.md` copy was
 removed in the commit that adds this sheet.
 
-**Pinned commit:** `@PACKET@` on `claude/precache-1p14-post-m1`: the release edits (`f7411b8b`) plus this packet,
+**Pinned commit:** `ce82c898` on `claude/precache-1p14-post-m1`: the release edits (`f7411b8b`) plus this packet,
 which also removes the E4 `plan.md` copy. At `f7411b8b` itself, 7.22 is red on that copy. Every later commit
 changes only `docs/release/`. The version still reads **1.13.1**: the bump to 1.14.0 is the held final commit (piece
 R1), made only when every gate below is clear (PC-7). Every piece builds this commit in a detached worktree, even if
@@ -59,9 +59,9 @@ cd D:\SuperSLM
 git fetch origin
 git rev-parse --is-shallow-repository                  # must print: false
 New-Item -ItemType Directory -Force D:\_scratch\e5 | Out-Null
-if (-not (Test-Path D:\_scratch\e5\src))  { git worktree add --detach D:\_scratch\e5\src @PACKET@ }
+if (-not (Test-Path D:\_scratch\e5\src))  { git worktree add --detach D:\_scratch\e5\src ce82c898 }
 if (-not (Test-Path D:\_scratch\e5\v1131)) { git worktree add --detach D:\_scratch\e5\v1131 v1.13.1 }
-git -C D:\_scratch\e5\src rev-parse HEAD               # must print: @PACKET@
+git -C D:\_scratch\e5\src rev-parse HEAD               # must print: ce82c898
 git -C D:\_scratch\e5\src merge-base HEAD origin/main  # must print: 1948e1f2ea4528790dc6701e26c47bda5739b003
 git -C D:\_scratch\e5\v1131 rev-parse HEAD             # must print: d697927f6d5ce5fa73ecbb8660020a425518b923
 git -C D:\_scratch\e5\src status --porcelain           # must print nothing
