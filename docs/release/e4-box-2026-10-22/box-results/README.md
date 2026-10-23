@@ -111,3 +111,17 @@ MiB, digest included. §7 10.3 predicted ~1,200–4,000×. §10 R1 is not trigge
   - W1/B9: the cap-length 1.5B worst setting, on another machine;
   - A1: the coverage auditor's E4 re-audit over these logs;
   - the planner fold of A0's Finding A and §4.
+
+## B6r: 10.1 and 10.2 at the G1 fix (`1c145b53`), 2026-10-22 18:17–18:27 PDT
+
+The run sheet at `ef952027`. `g1src` is a detached worktree at `1c145b53`: merge-base `1948e1f2`, clean tree. It was
+built into `build-g1` (MSVC 14.34 Release), and both build commands exit 0. The test is ctest
+`superslm_precache_real_two_process` on the licensed v2 population.
+- The fixtures `reference_header_identity` and `reference_anchor` Passed; the merge-base reads origin/main →
+  `1948e1f2`.
+- Capture: 10.1 and 10.2 green.
+- Restore: 10.1/E4 green (4,184 checks). 10.2/E4 green with **4,378 checks**, one more than B6's 4,377; the extra one
+  is G1's zero-prefill assertion.
+- All ten nested lines read `B = 128, s = 7, draw = 3`.
+- "21 hashes pinned, restore exited, 100 graded adopters"; 100% tests passed (3/3); 525 s.
+- **PASS.** This log, `logs/B6r-two-process.log`, is 10.1/10.2's E4 record.
