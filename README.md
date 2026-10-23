@@ -14,11 +14,10 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **[1.13.1](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.13.1)**, a GPU fix release. A GPU page pool is
-now capped at the largest buffer D3D12 guarantees on the card (2 GiB on a card with 8 GB or more of video memory, a quarter of
-its video memory below that), and a larger request is refused before anything is allocated; on the AMD Radeon RX 7900 XTX a
-4 GiB pool used to make the driver drop the device. `sslm_gpu_kv_pool_max_page_count` reports the largest pool a card takes.
-See the [1.13.1 release note](docs/releases/1.13.1.md).
+Current release: **[1.14.0](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.14.0)**. A host can save a
+frozen shared prompt prefix on the CPU as an `SPX1` blob (`sslm_prefix_save`) and restore it later
+(`sslm_prefix_restore`) instead of prefilling it again; adopters of the restored prefix emit the same tokens. A blob is
+bound to the engine version that wrote it. See the [1.14.0 release note](docs/releases/1.14.0.md).
 
 In 1.13.0 the GPU backend got the same shared prompt prefixes
 and budgeted sequences the CPU got in 1.12.0: a cast of characters that share a world and persona

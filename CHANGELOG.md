@@ -2,10 +2,9 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
-## [Unreleased]
+## [1.14.0] - 2026-10-23
 
-For 1.14.0. `docs/releases/1.14.0.md` is the release note. The version stays at the last release (1.13.1 on `main`)
-until the release commit, which sets 1.14.0 in CMake and `sslm_version.h` and dates this entry.
+Frozen-prefix save and restore on the CPU. `docs/releases/1.14.0.md` is the release note.
 
 - **Precached prefixes on the CPU: save and restore** (`SSLM_HAS_PREFIX_SAVE_ABI`). `sslm_prefix_save` writes a
   frozen prefix as a canonical `SPX1` blob; `sslm_prefix_restore` validates the whole blob before it draws or
