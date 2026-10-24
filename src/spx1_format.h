@@ -85,7 +85,7 @@ struct Expect {
 // The reader's verdicts, in the order it checks them (the first failing check decides).
 enum class Verdict {
 	kOk,
-	kSizeOrMagic,         // n < 184, or the magic is not 'SPX1'
+	kSizeOrMagic,         // n < 184, or the magic is not 'SPX1' (ReadDelta: n < 232, or not 'SPD1')
 	kDigest,              // the digest does not match
 	kBackend,             // backend != Expect::backend
 	kAdapterUnavailable,  // Expect::adapter_ids returned false

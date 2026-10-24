@@ -978,7 +978,9 @@ void Allocation17() {
     superslm_test::ArmInjectedFault(InjectThrowKind::kBadAlloc);
     Status(sslm_prefix_save_delta(f.child, buf.data(), &n), SSLM_ALLOCATION_FAILED, "D17 save_delta");
     superslm_test::DisarmInjectedFault();
-    for (bool fresh_parent : {false, true}) {  // the reader's digest, then (on a never-hashed parent) the parent's
+    // The injected fault is single-shot and the reader's digest is a restore's first SHA-256 pass, so both legs fail
+    // there; the never-hashed parent leg checks that the failed restore left its digest uncomputed and usable.
+    for (bool fresh_parent : {false, true}) {
         sslm_prefix parent = f.parent;
         if (fresh_parent && !Restored(fx, &f.pool->pool, f.parent_full, nullptr, f.sc.h, &parent)) return;
         const uint32_t free_before = FreePages(f.pool->pool);
