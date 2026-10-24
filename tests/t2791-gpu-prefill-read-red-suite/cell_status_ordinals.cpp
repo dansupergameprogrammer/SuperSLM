@@ -64,9 +64,14 @@ PIN(SSLM_GPU_PREFIX_SCHEMA_MISMATCH, 29);
 // Precached prefixes (1.16.0, unreleased): the producer refusal, appended last.
 PIN(SSLM_RESTORE_PRODUCER_MISMATCH, 30);
 
+// Streamed adapters (unreleased), appended last: 31..33.
+PIN(SSLM_GPU_INVALID_ARGUMENT, 31);
+PIN(SSLM_GPU_ADAPTER_ARTIFACT_REJECTED, 32);
+PIN(SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED, 33);
+
 // "Last": a switch over every named enumerator with no default compiles warning-free under
 // /W4 /we4062 only if the list below is complete. The appended T-2851 values are 21..23, the
-// paged-KV values 24..29, the precached-prefix value 30.
+// paged-KV values 24..29, the precached-prefix value 30, the streamed-adapter values 31..33.
 #pragma warning(error : 4062)  // enumerator not handled in switch: fails the build here
 constexpr int AllNamed(SslmGpuStatus s) {
 	switch (s) {
@@ -101,11 +106,14 @@ constexpr int AllNamed(SslmGpuStatus s) {
 		case SSLM_GPU_PREFIX_REJECTED:
 		case SSLM_GPU_PREFIX_SCHEMA_MISMATCH:
 		case SSLM_RESTORE_PRODUCER_MISMATCH:
+		case SSLM_GPU_INVALID_ARGUMENT:
+		case SSLM_GPU_ADAPTER_ARTIFACT_REJECTED:
+		case SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED:
 			return 1;
 	}
 	return 0;
 }
-static_assert(AllNamed(SSLM_RESTORE_PRODUCER_MISMATCH) == 1, "the switch above names every status");
+static_assert(AllNamed(SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED) == 1, "the switch above names every status");
 
 int main() {
 	std::printf("cell_status_ordinals: 31 ordinals pinned at compile time -> PASS\n");

@@ -150,7 +150,7 @@ extern std::atomic<uint64_t> g_prefix_prefill_calls;
 // lazy-on-first-use under Sec8.3's "sslm_model read-only concurrent" contract would be a real
 // data race between two threads' first calls; building it once, before the handle is ever
 // returned to a caller, has no such window. `layers[l]` is the BASE (no-adapter) LayerWeights
-// for layer l; a per-sequence adapter (C6, not built) is composed by copying this base array and
+// for layer l; a per-sequence adapter (C6, sslm_seq_set_adapter) is composed by copying this base array and
 // patching each layer's own `.adapter` field per call, never by rebuilding the marshaled arrays.
 struct sslm_model_engine_cache {
 	bool ok = false;
@@ -175,8 +175,8 @@ struct sslm_schema_s {
 
 // C2. Owns the loaded model view and (C4) the resolved engine cache. `live_refs` is the D-SLM32
 // lifecycle-guard bookkeeping design Sec9's own C2 gate names ("unmap-while-live is rejected") --
-// incremented/decremented by C3's sslm_seq_create/_release, sslm_prefix_begin/_release, and (C6,
-// not built) sslm_adapter_map.
+// incremented/decremented by C3's sslm_seq_create/_release, sslm_prefix_begin/_release, and C6's
+// sslm_adapter_map/_release.
 //
 // G5-2 (T-2132): `schemas`/`schema_handles` -- built once at sslm_model_map time (below), from
 // this model's own SchemaMasks/SCM1 section if present (design Sec13.1: absence is a valid,
@@ -389,7 +389,7 @@ struct sslm_prefix_s {
 // produced token id" (design's sslm_decode_step signature carries no token-input parameter --
 // C4 reads/writes this field to resume generation across calls, since the token to embed next
 // is otherwise unrecoverable from SequenceLayerState alone, which carries only the IN-PROGRESS
-// residual, never the token id that produced it). `adapter` is C6's own field, unbuilt here --
+// residual, never the token id that produced it). `adapter` is C6's field (sslm_seq_set_adapter) --
 // nullptr means "no adapter bound," the same convention LayerWeights::adapter already uses.
 struct sslm_seq_s {
 	sslm_model_s* model = nullptr;  // owning model -- SSLM_MODEL_HAS_LIVE_SEQUENCES guard (Sec6)
@@ -5271,7 +5271,7 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	off += 8;
 	WriteLE32(p + off, seq->dfa_walk_state);  // dfa_walk_state -- design Sec13.4
 	off += 4;
-	WriteLE64(p + off, 0);  // adapter_binding_id -- C6 scope, not built (no adapter can be bound)
+	WriteLE64(p + off, 0);  // adapter_binding_id -- always 0: a blob carries no adapter; bind again after restore
 	off += 8;
 	WriteLE64(p + off, static_cast<uint64_t>(seq->state.context_length));
 	off += 8;

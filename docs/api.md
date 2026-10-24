@@ -70,6 +70,28 @@ never through the return value itself.
   adapter_unmap` releases it, with the same in-flight-work refusal as model
   unmap, plus a refusal (`SSLM_ADAPTER_HAS_BOUND_SEQUENCES`) while any
   sequence still holds a bind to it (`sslm_gpu_seq_bind_adapter`, below).
+- **Prepare, then map** (streamed adapters, unreleased; `SSLM_GPU_HAS_ADAPTER_PREPARE`):
+  `sslm_gpu_adapter_prepare(model, bytes, size, &prepared)` does the slow,
+  device-free half of a map (hash, parse, validate, pack) on any thread,
+  reading only the model's geometry, hash and identity; refusals are
+  `SSLM_GPU_INVALID_ARGUMENT`, `SSLM_GPU_ADAPTER_ARTIFACT_REJECTED` (bytes that
+  are not an adapter this model takes), `SSLM_ADAPTER_BASE_HASH_MISMATCH` and
+  `SSLM_GPU_ALLOCATION_FAILED`. `sslm_gpu_adapter_map_prepared` then does only
+  the upload, on the submission thread, and returns the same handle
+  `sslm_gpu_adapter_map` would; it does not consume the prepared object, and
+  refuses one prepared from another model handle (`SSLM_ADAPTER_MODEL_MISMATCH`)
+  before the paged-KV guard and before any allocation.
+  `sslm_gpu_prepared_adapter_free` frees it. `sslm_gpu_adapter_map` keeps its
+  order and statuses (`SSLM_DEVICE_LOST` for a malformed artifact).
+- **Adapter info**: `sslm_gpu_adapter_info_get` and
+  `sslm_gpu_prepared_adapter_info_get` fill the same `sslm_adapter_info` as the
+  CPU verb. A mapped handle reports its two buffers' allocation sizes in
+  `device_resident_bytes`; a prepared object reports the predicted allocation
+  and the upload staging it will take (each buffer rounded up to 64 KiB), and
+  its own host bytes. `sslm_gpu_adapter_prepare_peak_bound` bounds prepare's
+  host heap high-water mark from the layer count and byte size alone, as
+  `sslm_adapter_map_peak_bound` does for the CPU map, plus the packed copy and
+  the slot table.
 - **Model**: `sslm_gpu_model_unmap` also refuses
   (`SSLM_MODEL_HAS_LIVE_ADAPTERS`) while any adapter is still mapped
   against it, independent of whether any sequence is live.
@@ -117,6 +139,11 @@ never through the return value itself.
   with its own optional adapter, sharing one batch-wide layer budget. A
   rejection on one sequence in the batch (returned per-sequence in
   `out_statuses`) does not abort the others.
+- A token keeps the adapter it began with: the call at `layer_index` 0 fixes
+  the per-call adapter (null included), and a later slice of that token
+  given another adapter, or another mapping at the same address, is refused
+  `SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED` before anything is submitted (per
+  member on the batch call). Change adapters between tokens.
 - `sslm_gpu_ready` polls (or, with `block`, waits for) a sequence's
   in-flight GPU work to complete.
 
@@ -532,6 +559,14 @@ One covers precached prefixes (1.16.0, unreleased; ordinal 30):
 written on another adapter (its vendor or device ID differs from the
 context's). Nothing is drawn. The status is exported, and unreleased until
 1.16.0, with the GPU twins.
+
+Three cover streamed adapters (unreleased; ordinals 31 to 33, re-fixed at
+merge if an earlier release appends first): `SSLM_GPU_INVALID_ARGUMENT`, a
+null argument or a short `struct_size` given to a prepare, map-prepared, info
+or peak-bound verb; `SSLM_GPU_ADAPTER_ARTIFACT_REJECTED`, bytes
+`sslm_gpu_adapter_prepare` cannot take as an adapter; and
+`SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED`, a decode slice whose adapter differs
+from the one that began its token.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 diverge on one refusal: when a device-side domain guard refuses one of the admitted

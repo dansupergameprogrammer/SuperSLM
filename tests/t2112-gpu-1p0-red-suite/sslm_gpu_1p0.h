@@ -138,7 +138,11 @@ typedef enum SslmGpuStatus {
     SSLM_GPU_PREFIX_REJECTED,
     SSLM_GPU_PREFIX_SCHEMA_MISMATCH,
     /* Precached prefixes (1.16.0, unreleased), appended LAST: 30. */
-    SSLM_RESTORE_PRODUCER_MISMATCH
+    SSLM_RESTORE_PRODUCER_MISMATCH,
+    /* Streamed adapters (unreleased), appended LAST: 31..33. */
+    SSLM_GPU_INVALID_ARGUMENT,
+    SSLM_GPU_ADAPTER_ARTIFACT_REJECTED,
+    SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */

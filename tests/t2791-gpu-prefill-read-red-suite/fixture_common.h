@@ -306,6 +306,9 @@ inline const char* StatusName(SslmGpuStatus s) {
 		case 28: return "SSLM_GPU_PREFIX_REJECTED";
 		case 29: return "SSLM_GPU_PREFIX_SCHEMA_MISMATCH";
 		case 30: return "SSLM_RESTORE_PRODUCER_MISMATCH";
+		case 31: return "SSLM_GPU_INVALID_ARGUMENT";
+		case 32: return "SSLM_GPU_ADAPTER_ARTIFACT_REJECTED";
+		case 33: return "SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED";
 		default: return "UNKNOWN_STATUS";
 	}
 }

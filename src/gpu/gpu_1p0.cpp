@@ -63,6 +63,7 @@ static_assert(sizeof(GpuResidencyConfig) == 4 && offsetof(GpuResidencyConfig, fl
 #include "../kv_pages.h"           // paged KV (G3): the page allocator, one module for both backends
 #include "gpu_kv_pool_geometry.h"  // paged KV (G3): the GPU pool's host-only arithmetic
 #include "superslm/adapter_marshal.h"  // T-2113 B6: LoadAdapterArtifact (relocated, tools/sslm_adapter_loader.h)
+#include "../adapter_core.h"          // streamed adapters: the device-free prepare core and the info fields
 #include "superslm/gpu_1p0_g5_bridge.h"  // G5-5 (T-2132): the build-seat-owned schema/parity bridge
 #include "superslm/gpu_port.h"       // T-2113 B2: GpuLayerLayout/ComputeLayerLayout/PackLayerWeightsBytes
 #include "superslm/layer_marshal.h"  // T-2113 B2: MarshalLayer/LayerBacking (relocated, tools/sslm_marshal.h)
@@ -259,6 +260,12 @@ struct SslmGpuContext {
 	// `run == NULL` means none. Read only by SslmGpuSeqFinishTokenForG5BridgeImpl's host logits
 	// step (LogitsSiteParallel), for a model without a device-resident head.
 	sslm_parallel_for host_parallel_for{};
+
+	// Streamed adapters (plan rev 1.2, Sec3.4): the last map serial stamped on an adapter handle of
+	// this context. Each map takes the next, so a handle freed and another mapped at the same address
+	// still differ to the mid-token adapter guard. Written only by the map verbs, which callers
+	// serialize per context.
+	uint64_t adapter_map_serial = 0;
 };
 
 // T-2851 (B, design Sec4.6 item 2): everything the device logits step reuses, owned by one mapped
@@ -352,6 +359,10 @@ struct SslmGpuModelHandle {
 	uint32_t kv_block_size = 0;
 	bool has_qk_norm = false;
 	uint32_t dispatches_per_layer = superslm_gpu::kLegacyDispatchesPerLayer;
+	// Streamed adapters (plan rev 1.2, Sec3.3): this handle's process-unique identity, stamped at map.
+	// A prepared adapter records the identity of the handle it was prepared from, and map_prepared
+	// refuses it on any other, so a freed handle's address reused by a new map is still refused.
+	uint64_t identity_token = 0;
 
 	// ModelHasLiveSequences guard (design Sec9, Sec4.2's own model_unmap row): T-2113 (B3)
 	// incremented by sslm_gpu_seq_create, decremented on release, below.
@@ -492,18 +503,17 @@ private:
 //
 // Residency shape this section builds: every (layer, projection) pair the adapter's own
 // DeltaFoldScales section covers gets its lora_A/lora_B bytes and DeltaFoldScales/UFoldScales
-// (identity, mult, shift) triples packed into three DEFAULT-heap resident buffers (mirroring the
-// model handle's own three-buffer split, weights/rope_cos/rope_sin) -- uploaded ONCE, here, never
+// (identity, mult, shift) triples packed into two DEFAULT-heap resident buffers (lora_ab_buf and
+// fold_buf, beside the model handle's own weights/rope_cos/rope_sin split) -- uploaded ONCE, here, never
 // per decode call. `AdapterProjSlot` records each covered slot's own byte offset into those
 // buffers plus its rank, indexed [layer][projection] host-side, so a later section's dispatch-
 // recording code can bind the right sub-range without re-deriving the packing.
 //
-// NOT built this section, named per StandardsDocument.md Sec5.6 (a deferral surfaced loudly, not
-// silently folded into "adapter support"): nothing in the dispatch-recording path
-// (RunLayerLoopGpuSubmit, src/gpu/superslm_gpu.cpp) reads these buffers yet -- no GEMM site's own
-// HLSL applies the delta this handle makes resident. `sslm_decode_step_gpu` accepts a bound
-// adapter, validates it, and records the identical base-only dispatch chain regardless. See
-// Claude/Brunel/t2113-1p0-core-build-2026-08-15.md Sec9 for the full scope statement.
+// Read by the dispatch-recording path since B6b: RunLayerLoopGpuSubmit (src/gpu/superslm_gpu.cpp)
+// binds these buffers through GpuAdapterBridge and the GEMM sites apply the delta (the comment
+// that stood here, "nothing reads these buffers yet", predates B6b; corrected, plan rev 1.2 E18).
+// The packing itself lives in src/adapter_core.h (PackAdapterSlots) since the streamed-adapter
+// prepare split, so a prepare off the submission thread packs exactly what a map packs.
 // T-2113 (B6b): AdapterProjSlot now lives in gpu_port.h (superslm_gpu::AdapterProjSlot)
 // so RunLayerLoopGpuSubmit's own dispatch-recording code (superslm_gpu.cpp) can read it
 // through GpuAdapterBridge without depending on this TU's opaque handle types -- the
@@ -525,6 +535,14 @@ struct SslmGpuAdapterHandle {
 	// (forward_sites.h).
 	std::vector<std::array<AdapterProjSlot, 7>> slots;
 	uint32_t rank = 0;
+
+	// Streamed adapters (plan rev 1.2, Sec3.1, Sec3.4): what sslm_gpu_adapter_info_get reports, and
+	// the per-context serial the mid-token adapter guard compares beside the pointer.
+	uint64_t map_serial = 0;
+	uint32_t covered_layers = 0;
+	superslm_adapter::AdapterMeta meta;
+	std::array<uint8_t, superslm::kIntegrityHashBytes> artifact_hash{};
+	uint64_t device_resident_bytes = 0;
 
 	// T-2124 (D-SLM3446 P0-3): count of currently-Submitted sequences whose in-flight decode call
 	// bound this adapter -- the adapter-handle analogue of SslmGpuModelHandle::submitted_sequences
@@ -570,6 +588,14 @@ private:
 	friend void SetGpuSeqState(SslmGpuSequenceHandle*, superslm_gpu::SslmSequenceGpuState,
 	                           const SslmGpuAdapterHandle*);
 	mutable std::atomic<int64_t> submitted_sequences_{0};
+};
+
+// Streamed adapters (plan rev 1.2, Sec3.3): sslm_gpu_adapter_prepare's object -- the device-free core
+// (packed bytes, slot table, info fields; the parsed artifact is dropped) and the identity of the model
+// handle it was prepared from. Owns no device object and is read-only once returned.
+struct SslmGpuPreparedAdapter {
+	superslm_adapter::PreparedAdapterCore core;
+	uint64_t model_identity = 0;
 };
 
 struct SslmGpuSequenceHandle;
@@ -704,6 +730,16 @@ struct SslmGpuSequenceHandle final : public superslm_gpu::inflight::InFlightHand
 	// (the same "caller's own standing configuration survives reset" precedent
 	// `bound_schema_index` below already sets).
 	const SslmGpuAdapterHandle* bound_adapter = nullptr;
+
+	// Streamed adapters (plan rev 1.2, Sec3.4, E14): the per-call adapter, and its map serial, of the
+	// decode call that began the current token (submitted at layer_index 0). A later slice of the
+	// token (0 < layer_index < num_hidden_layers) with another adapter is refused
+	// SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED. `token_adapter_set` is false until a token begins on
+	// this handle: after create, reset and restore, so a restore into the middle of a token lets its
+	// first slice fix the adapter. Read and written only under the decode claim.
+	const SslmGpuAdapterHandle* token_adapter = nullptr;
+	uint64_t token_adapter_serial = 0;
+	bool token_adapter_set = false;
 
 	// G5-5 (T-2132, Brunel): the GPU-1.0 twin of `sslm_seq_s::bound_schema`/`dfa_walk_state`
 	// (src/sslm_abi.cpp) -- a sibling scalar pair on this wrapper handle, NEVER folded into
@@ -1424,6 +1460,13 @@ SslmGpuStatus RunDeviceLogits(SslmGpuContext* ctx, const DeviceLogitsBuffers& b,
 // the pre-1.0 substrate and this handle's upload path compute identical bytes from one
 // implementation), and uploads weights + RoPE cos/sin tables as three independent resident
 // buffers -- no process-global cache anywhere in this path (D-SLM3294).
+// Streamed adapters (plan rev 1.2, Sec3.3): the identity a model handle is stamped with at map.
+// Process-wide and never reused, so no two model handles, live or freed, share one.
+uint64_t NextModelIdentityToken() noexcept {
+	static std::atomic<uint64_t> next{0};
+	return next.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
 SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* base,
                                   GpuResidencyConfig cfg, SslmGpuModelHandle** out_model) {
 	if (!out_model) {
@@ -1712,6 +1755,7 @@ SslmGpuStatus sslm_gpu_model_mapImpl(SslmGpuContext* ctx, const SslmModelView* b
 	h->kv_block_size = base->config.kv_block_size;
 	h->has_qk_norm = has_qk_norm;
 	h->dispatches_per_layer = superslm_gpu::DispatchesPerLayer(has_qk_norm);
+	h->identity_token = NextModelIdentityToken();
 
 	ctx->live_handles += 1;
 	*out_model = h.release();
@@ -1785,6 +1829,72 @@ SslmGpuStatus sslm_gpu_model_unmapImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 	return SSLM_OK;
 }
 
+// ---- Streamed adapters (plan: superslm-lora-residency rev 1.2, Sec3.1, Sec3.3) --------------------
+
+// The model geometry and base hash an adapter populates against: the immutable fields of a mapped
+// model handle, read without its context or device.
+superslm_adapter::BaseModelGeometry AdapterBaseGeometryOf(const SslmGpuModelHandle& model) noexcept {
+	superslm_adapter::BaseModelGeometry g;
+	g.num_hidden_layers = model.num_hidden_layers;
+	g.hidden_size = model.hidden_size;
+	g.intermediate_size = model.intermediate_size;
+	g.kv_hidden_size = static_cast<uint64_t>(model.num_key_value_heads) * model.head_dim;
+	// SSLM-GEOMETRY-SITE: GS-33
+	// T-2509 (GS-28/GS-29): q_width, the same num_attention_heads * head_dim construction this
+	// file already threads elsewhere -- q_proj's own out_channels and o_proj's own in_channels.
+	g.q_width = static_cast<uint64_t>(model.num_attention_heads) * model.head_dim;
+	g.base_artifact_hash = model.content_hash;
+	return g;
+}
+
+// A committed DEFAULT-heap buffer's allocation size (Sec3.1, N2: not GetDesc().Width).
+uint64_t AllocationBytesOf(superslm_gpu::harness::Device& dev, ID3D12Resource* buf) {
+	if (buf == nullptr) return 0;
+	const D3D12_RESOURCE_DESC desc = buf->GetDesc();
+	return dev.dev->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+}
+
+// The upload half of an adapter map (today's `:1472-1503`), shared by sslm_gpu_adapter_map and
+// sslm_gpu_adapter_map_prepared. Copies from `core` and never changes it. The caller has run every
+// refusal and the paged-KV entry guard.
+SslmGpuStatus UploadPreparedAdapter(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                    const superslm_adapter::PreparedAdapterCore& core,
+                                    SslmGpuAdapterHandle** out_adapter) {
+	std::unique_ptr<SslmGpuAdapterHandle> h(new SslmGpuAdapterHandle());
+	h->slots = core.slots;
+	h->meta = core.meta;
+	try {
+		h->lora_ab_buf = UploadResidentBufferSync(ctx->device, core.ab_bytes.data(), core.ab_bytes.size());
+		h->fold_buf = UploadResidentBufferSync(ctx->device, core.fold_bytes.data(), core.fold_bytes.size());
+		h->device_resident_bytes = AllocationBytesOf(ctx->device, h->lora_ab_buf.Get()) +
+		                           AllocationBytesOf(ctx->device, h->fold_buf.Get());
+	} catch (const std::bad_alloc&) {
+		throw;
+	} catch (const std::exception&) {
+		return ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-426): as sslm_gpu_model_map's uploads
+	} catch (...) {
+		return ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-435): every other exception type, as above
+	}
+
+	h->ctx = ctx;
+	h->model = model;
+	h->rank = core.rank;
+	h->covered_layers = core.covered_layers;
+	h->artifact_hash = core.artifact_hash;
+	h->map_serial = ++ctx->adapter_map_serial;
+
+	ctx->live_handles += 1;
+	// T-2243 (M2, design plan Sec6.1): this model now has one more live mapped adapter --
+	// mirrored by the decrement in sslm_gpu_adapter_unmap, below.
+	model->live_adapters += 1;
+	*out_adapter = h.release();
+	return SSLM_OK;
+}
+
+bool AdapterInfoArgOk(const sslm_adapter_info* out) noexcept {
+	return out != nullptr && out->struct_size >= SSLM_ADAPTER_INFO_V1_SIZE;
+}
+
 // Design Sec5.2/Sec10 B6: "mirrors the CPU-side LoadAdapterArtifact/AdapterHandle shape exactly,
 // on the device side: validates the adapter's base-hash against model's own content hash ...
 // and uploads the per-layer, per-projection lora_A/lora_B weights plus DeltaFoldScales/
@@ -1828,134 +1938,27 @@ SslmGpuStatus sslm_gpu_adapter_mapImpl(SslmGpuContext* ctx, SslmGpuModelHandle* 
 		return g;
 	}
 
-	superslm_adapter::BaseModelGeometry base_geom;
-	base_geom.num_hidden_layers = model->num_hidden_layers;
-	base_geom.hidden_size = model->hidden_size;
-	base_geom.intermediate_size = model->intermediate_size;
-	base_geom.kv_hidden_size = static_cast<uint64_t>(model->num_key_value_heads) * model->head_dim;
-	// SSLM-GEOMETRY-SITE: GS-33
-	// T-2509 (GS-28/GS-29): q_width, the same num_attention_heads * head_dim construction this
-	// file already threads elsewhere (e.g. the /*q_width=*/ call arguments below) -- q_proj's own
-	// out_channels and o_proj's own in_channels. This IS q_width's own correct computation, not a
-	// stand-in for hidden_size.
-	base_geom.q_width = static_cast<uint64_t>(model->num_attention_heads) * model->head_dim;
-	base_geom.base_artifact_hash = model->content_hash;
-
-	// T-2113 (B6, D-SLM3368): PopulateAdapterFromView is the extracted body of
-	// LoadAdapterArtifact (include/superslm/adapter_marshal.h) that runs AFTER SslmModel::Load --
-	// this call site already HAS a parsed view (`*adapter_artifact`, design Sec5.2's own
-	// parameter), so it validates/populates against that view directly rather than re-reading
-	// and re-parsing the artifact's own bytes from a file path a view does not retain.
-	superslm_adapter::AdapterMeta meta;
-	std::vector<superslm::LayerAdapter> layer_adapters;
-	std::string load_err;
-	const superslm_adapter::AdapterLoadStatus load_st = superslm_adapter::PopulateAdapterFromView(
-	    *adapter_artifact, base_geom, meta, layer_adapters, &load_err);
-	if (load_st == superslm_adapter::AdapterLoadStatus::BaseHashMismatch) {
+	// Streamed adapters (plan rev 1.2, Sec3.3, S1): the view-taking prepare, then the upload half
+	// sslm_gpu_adapter_map_prepared shares. The order and the statuses stay this verb's own: the guard
+	// above runs first, and a rejected artifact is still SSLM_DEVICE_LOST here (the new
+	// SSLM_GPU_ADAPTER_ARTIFACT_REJECTED is the prepare verb's alone).
+	// T-2113 (B6, D-SLM3368): the population runs against the caller's parsed view (design Sec5.2's
+	// parameter), never re-reading the artifact's bytes from a path a view does not retain.
+	const superslm_adapter::BaseModelGeometry base_geom = AdapterBaseGeometryOf(*model);
+	superslm_adapter::PreparedAdapterCore core;
+	const superslm_adapter::PrepareResult prep =
+	    superslm_adapter::PrepareAdapterCoreFromView(*adapter_artifact, base_geom, core);
+	if (prep == superslm_adapter::PrepareResult::kBaseHashMismatch) {
 		return SSLM_ADAPTER_BASE_HASH_MISMATCH;
 	}
-	if (load_st != superslm_adapter::AdapterLoadStatus::Ok) {
+	if (prep != superslm_adapter::PrepareResult::kOk) {
 		// Every other rejection (malformed ADP1, missing sections, a dimension/shape
 		// mismatch) is a structurally-broken-artifact class design Sec9's own table assigns
 		// no dedicated status to -- same "no more specific status" disposition B2/B3 already
 		// use for the analogous marshal-failure case (sslm_gpu_model_map's own comment above).
 		return SSLM_DEVICE_LOST;
 	}
-
-	// q,o,gate,up,down,k,v -- LayerAdapter's own field order (forward_sites.h), matched to
-	// AdapterProjSlot's own [7] index by position.
-	auto proj_at = [](const superslm::LayerAdapter& la, int p) -> const superslm::LayerAdapterProjection& {
-		switch (p) {
-			case 0: return la.q;
-			case 1: return la.o;
-			case 2: return la.gate;
-			case 3: return la.up;
-			case 4: return la.down;
-			case 5: return la.k;
-			default: return la.v;
-		}
-	};
-	// T-2114 (M4, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): the SAME
-	// positional order `proj_at` above uses, named -- feeds `AdapterInChannelsFor`
-	// (adapter_marshal.h:225, the one function that owns the projection-kind-to-in_channels
-	// rule) below instead of this loop re-deriving it from a bare `p == 4` positional check.
-	static const char* const kProjNamesByIndex[7] = {"q_proj",   "o_proj", "gate_proj", "up_proj",
-	                                                  "down_proj", "k_proj", "v_proj"};
-
-	std::vector<uint8_t> ab_bytes;
-	std::vector<uint8_t> fold_bytes;
-	std::vector<std::array<AdapterProjSlot, 7>> slots(model->num_hidden_layers);
-
-	for (uint32_t l = 0; l < model->num_hidden_layers; ++l) {
-		const superslm::LayerAdapter& la = layer_adapters[l];
-		for (int p = 0; p < 7; ++p) {
-			const superslm::LayerAdapterProjection& proj = proj_at(la, p);
-			if (!proj.a_weight || !proj.b_weight || !proj.delta_fold_entry || !proj.u_fold_entry) {
-				continue;  // this (layer, projection) is not covered by this adapter -- present
-				           // stays false, the identical NULL-per-projection shape LayerWeights'
-				           // own B1c documents on the CPU path (forward_sites.h).
-			}
-			AdapterProjSlot& slot = slots[l][static_cast<size_t>(p)];
-			slot.present = true;
-			slot.rank = la.rank;
-			slot.out_channels = static_cast<uint32_t>(proj.delta_fold_entry->row_count);
-			// SSLM-GEOMETRY-SITE: GS-28
-			// a_weight is [rank, in_channels]: in_channels isn't independently recorded on
-			// LayerAdapterProjection -- reconstructed here by calling the ONE function that owns
-			// the projection-kind-to-in_channels rule (AdapterInChannelsFor,
-			// include/superslm/adapter_marshal.h), not a second copy of its own logic. T-2509:
-			// base_geom.q_width above threaded through so o_proj's own in_channels (and thus
-			// a_bytes, the byte extent read out of proj.a_weight below) is q_width, not
-			// hidden_size.
-			const uint64_t in_channels = superslm_adapter::AdapterInChannelsFor(
-			    kProjNamesByIndex[p], model->hidden_size, model->intermediate_size,
-			    base_geom.q_width);
-			slot.a_bytes = static_cast<uint64_t>(la.rank) * in_channels;
-			slot.b_bytes = static_cast<uint64_t>(slot.out_channels) * la.rank;
-
-			slot.a_offset = ab_bytes.size();
-			ab_bytes.insert(ab_bytes.end(), proj.a_weight, proj.a_weight + slot.a_bytes);
-			slot.b_offset = ab_bytes.size();
-			ab_bytes.insert(ab_bytes.end(), proj.b_weight, proj.b_weight + slot.b_bytes);
-
-			slot.fold_offset = fold_bytes.size();
-			const uint64_t dfs_bytes = static_cast<uint64_t>(proj.delta_fold_entry->row_count) * 12u;
-			const uint64_t ufs_bytes = static_cast<uint64_t>(proj.u_fold_entry->row_count) * 12u;
-			fold_bytes.insert(fold_bytes.end(), proj.delta_fold_entry->data,
-			                   proj.delta_fold_entry->data + dfs_bytes);
-			fold_bytes.insert(fold_bytes.end(), proj.u_fold_entry->data,
-			                   proj.u_fold_entry->data + ufs_bytes);
-		}
-	}
-	// A degenerate adapter (every slot uncovered -- e.g. a target_modules_mask of zero) still
-	// maps cleanly; MakeBuffer/Upload need at least one byte, matching sslm_gpu_model_map's own
-	// cos_need/sin_need "no rope tables" fallback (>= 8 bytes) above.
-	if (ab_bytes.empty()) ab_bytes.resize(1, 0);
-	if (fold_bytes.empty()) fold_bytes.resize(1, 0);
-
-	std::unique_ptr<SslmGpuAdapterHandle> h(new SslmGpuAdapterHandle());
-	try {
-		h->lora_ab_buf = UploadResidentBufferSync(ctx->device, ab_bytes.data(), ab_bytes.size());
-		h->fold_buf = UploadResidentBufferSync(ctx->device, fold_bytes.data(), fold_bytes.size());
-	} catch (const std::bad_alloc&) {
-		throw;
-	} catch (const std::exception&) {
-		return ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-426): as sslm_gpu_model_map's uploads
-	} catch (...) {
-		return ClassifyHandleFault(&ctx->device);  // 1.8.0 (TE-435): every other exception type, as above
-	}
-
-	h->ctx = ctx;
-	h->model = model;
-	h->slots = std::move(slots);
-	h->rank = meta.rank;
-
-	ctx->live_handles += 1;
-	// T-2243 (M2, design plan Sec6.1): this model now has one more live mapped adapter --
-	// mirrored by the decrement in sslm_gpu_adapter_unmap, below.
-	model->live_adapters += 1;
-	*out_adapter = h.release();
-	return SSLM_OK;
+	return UploadPreparedAdapter(ctx, model, core, out_adapter);
 }
 
 // Design Sec5.2 states "releases the adapter's own residency and returns Ok ... carries no Busy
@@ -2021,6 +2024,79 @@ SslmGpuStatus sslm_gpu_adapter_unmapImpl(SslmGpuContext* ctx, SslmGpuAdapterHand
 	DecrementLiveCount(adapter->ctx->live_handles);
 	adapter->destroyed = true;
 	delete adapter;
+	return SSLM_OK;
+}
+
+// ---- Streamed adapters: prepare, map_prepared, free, info, peak bound (plan rev 1.2, Sec3.1, Sec3.3) ----
+
+// Device-free: reads the model handle's immutable fields only. Refusal order per gpu_1p0.h.
+SslmGpuStatus sslm_gpu_adapter_prepareImpl(const SslmGpuModelHandle* model, const void* data, size_t size,
+                                           SslmGpuPreparedAdapter** out) {
+	if (!out || !model || !data) return SSLM_GPU_INVALID_ARGUMENT;
+	*out = nullptr;
+	// PEAK-BOUND handle
+	std::unique_ptr<SslmGpuPreparedAdapter> p(new SslmGpuPreparedAdapter());
+	const superslm_adapter::PrepareResult r = superslm_adapter::PrepareAdapterCore(
+	    AdapterBaseGeometryOf(*model), static_cast<const uint8_t*>(data), size, p->core);
+	if (r == superslm_adapter::PrepareResult::kBaseHashMismatch) return SSLM_ADAPTER_BASE_HASH_MISMATCH;
+	if (r != superslm_adapter::PrepareResult::kOk) return SSLM_GPU_ADAPTER_ARTIFACT_REJECTED;
+	p->model_identity = model->identity_token;
+	*out = p.release();
+	return SSLM_OK;
+}
+
+// The upload half under PKV's guard (Sec3.3): the refusals, the guard, then the shared upload.
+// `prepared` is never changed.
+SslmGpuStatus sslm_gpu_adapter_map_preparedImpl(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                                const SslmGpuPreparedAdapter* prepared,
+                                                SslmGpuAdapterHandle** out) {
+	if (!out || !ctx || !model || !prepared) return SSLM_GPU_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (model->ctx != ctx) return SSLM_DEVICE_LOST;  // sslm_gpu_adapter_map's cross-context disposition
+	if (prepared->model_identity != model->identity_token) return SSLM_ADAPTER_MODEL_MISMATCH;
+	// EntrySubmitGuard (§4.4): the same scope and device as sslm_gpu_adapter_map's -- the upload is on
+	// the context's own device, and the verb works on an adapter's model. After the null, cross-context
+	// and model refusals, before any allocation.
+	if (const SslmGpuStatus g = EntrySubmitGuard(GuardScope::kPooled, GuardDevice::kPerContextOnly);
+	    g != SSLM_OK) {
+		return g;
+	}
+	return UploadPreparedAdapter(ctx, model, prepared->core, out);
+}
+
+SslmGpuStatus sslm_gpu_adapter_info_getImpl(SslmGpuContext* ctx, const SslmGpuAdapterHandle* adapter,
+                                            sslm_adapter_info* out) {
+	if (!ctx || !adapter || !AdapterInfoArgOk(out)) return SSLM_GPU_INVALID_ARGUMENT;
+	if (adapter->ctx != ctx) return SSLM_DEVICE_LOST;  // sslm_gpu_adapter_unmap's disposition
+	superslm_adapter::FillAdapterInfoCommon(adapter->meta, adapter->covered_layers, adapter->artifact_hash, out);
+	out->host_resident_bytes = sizeof(SslmGpuAdapterHandle) +
+	                           adapter->slots.capacity() * sizeof(std::array<AdapterProjSlot, 7>) +
+	                           superslm_adapter::StringHeapBytes(adapter->meta.source_adapter_name);
+	out->device_resident_bytes = adapter->device_resident_bytes;
+	out->upload_staging_bytes = 0;
+	return SSLM_OK;
+}
+
+SslmGpuStatus sslm_gpu_prepared_adapter_info_getImpl(const SslmGpuPreparedAdapter* prepared,
+                                                     sslm_adapter_info* out) {
+	if (!prepared || !AdapterInfoArgOk(out)) return SSLM_GPU_INVALID_ARGUMENT;
+	const superslm_adapter::PreparedAdapterCore& c = prepared->core;
+	superslm_adapter::FillAdapterInfoCommon(c.meta, c.covered_layers, c.artifact_hash, out);
+	out->host_resident_bytes = sizeof(SslmGpuPreparedAdapter) + superslm_adapter::PreparedCoreHeapBytes(c);
+	// The prediction (Sec3.1): each committed buffer, DEFAULT and UPLOAD alike, rounded up to 64 KiB.
+	const uint64_t predicted = superslm_adapter::RoundUp64KiB(c.ab_bytes.size()) +
+	                           superslm_adapter::RoundUp64KiB(c.fold_bytes.size());
+	out->device_resident_bytes = predicted;
+	out->upload_staging_bytes = predicted;
+	return SSLM_OK;
+}
+
+SslmGpuStatus sslm_gpu_adapter_prepare_peak_boundImpl(const SslmGpuModelHandle* model, uint64_t artifact_bytes,
+                                                      uint64_t* out_bytes) {
+	if (!model || !out_bytes) return SSLM_GPU_INVALID_ARGUMENT;
+	*out_bytes = superslm_adapter::AdapterPeakTermsFor(model->num_hidden_layers, artifact_bytes,
+	                                                   sizeof(SslmGpuPreparedAdapter), /*gpu_prepare=*/true)
+	                 .Sum();
 	return SSLM_OK;
 }
 
@@ -2854,6 +2930,26 @@ SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle
 // external-KV bridge) -- this is the production measurement path that retires
 // `g_resident_rope`/`g_resident_weights` for every call that reaches here (D-SLM3362):
 // neither process-global cache is ever read or written on this path.
+// Streamed adapters (plan rev 1.2, Sec3.4, E14): the mid-token adapter guard. A slice of a token
+// already begun (0 < layer_index < num_hidden_layers) must carry the adapter, pointer and map serial,
+// NULL included, of the call that began it. Read under the decode claim, before any submission.
+bool MidTokenAdapterSwap(const SslmGpuSequenceHandle* seq, const SslmGpuAdapterHandle* adapter_or_null) noexcept {
+	const uint32_t li = seq->layer_index;
+	if (li == 0 || li >= seq->model->num_hidden_layers || !seq->token_adapter_set) return false;
+	if (seq->token_adapter != adapter_or_null) return true;
+	return adapter_or_null != nullptr && adapter_or_null->map_serial != seq->token_adapter_serial;
+}
+
+// After a submission returned SSLM_OK: a call that began a token (or the first slice after a restore
+// or adopt, which set nothing) fixes the token's adapter.
+void NoteTokenAdapter(SslmGpuSequenceHandle* seq, const SslmGpuAdapterHandle* adapter_or_null,
+                      bool began_token) noexcept {
+	if (!began_token) return;
+	seq->token_adapter = adapter_or_null;
+	seq->token_adapter_serial = adapter_or_null ? adapter_or_null->map_serial : 0;
+	seq->token_adapter_set = true;
+}
+
 SslmGpuStatus sslm_decode_step_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                     const SslmGpuAdapterHandle* adapter_or_null,
                                     uint32_t dispatch_budget) {
@@ -2893,6 +2989,9 @@ SslmGpuStatus sslm_decode_step_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenceHandl
 	if (!superslm_gpu::CallProceedsOrBusy_DecodeStepGpu(is_submitted)) {
 		return SSLM_BUSY;  // design Sec4.2's own state table, unchanged policy.
 	}
+	if (MidTokenAdapterSwap(seq, adapter_or_null)) {
+		return SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED;  // Sec3.4: nothing submitted, nothing changed
+	}
 	SslmGpuModelHandle* model = seq->model;
 	uint32_t layers_to_issue = 0;
 	const superslm_gpu::SslmGpuStatus plan = superslm_gpu::PlanDispatchBudgetGpu(
@@ -2918,7 +3017,10 @@ SslmGpuStatus sslm_decode_step_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenceHandl
 	// against a running batch-wide remainder instead -- the only difference between the two
 	// call sites, and it lives entirely in the budget arithmetic surrounding this shared call,
 	// never inside it.
-	return SubmitOneSequenceDecode(ctx, seq, adapter_or_null, layers_to_issue);
+	const bool began_token = seq->layer_index == 0 || !seq->token_adapter_set;
+	const SslmGpuStatus st = SubmitOneSequenceDecode(ctx, seq, adapter_or_null, layers_to_issue);
+	if (st == SSLM_OK) NoteTokenAdapter(seq, adapter_or_null, began_token);
+	return st;
 }
 
 // Design Sec4.3/Sec7/Sec10 B7 (T-2113 B7, repaired signature per the T-2111 fold, D-SLM3344):
@@ -3056,6 +3158,10 @@ SslmGpuStatus sslm_decode_step_batch_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenc
 			out_statuses[i] = SSLM_BUSY;
 			continue;
 		}
+		if (MidTokenAdapterSwap(seq, adapter_or_null)) {  // Sec3.4: per member, the batch continues
+			out_statuses[i] = SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED;
+			continue;
+		}
 		seq->bind_eligible = false;
 
 		// Design Sec7: "dispatch_budget is consumed by sequences strictly in the recording
@@ -3085,8 +3191,10 @@ SslmGpuStatus sslm_decode_step_batch_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenc
 			continue;
 		}
 
+		const bool began_token = seq->layer_index == 0 || !seq->token_adapter_set;
 		out_statuses[i] = SubmitOneSequenceDecode(ctx, seq, adapter_or_null, layers_to_issue);
 		if (out_statuses[i] == SSLM_OK) {
+			NoteTokenAdapter(seq, adapter_or_null, began_token);
 			// Design Sec7's own budget arithmetic: exactly this sequence's own consumed
 			// dispatches (layers_to_issue whole layers, using this model's 24-or-25 divisor) leave
 			// the running remainder for seqs[i+1..]. A submission REJECTED after planning
@@ -5360,6 +5468,7 @@ void CopyPrefixForwardState(SslmGpuSequenceHandle* dst, const SslmGpuSequenceHan
 	std::copy(src->hidden_codes.begin(), src->hidden_codes.end(), dst->hidden_codes.begin());
 	dst->hidden_scale = src->hidden_scale;
 	dst->layer_index = src->layer_index;
+	dst->token_adapter_set = false;  // streamed adapters (Sec3.4): the adopter's next slice fixes it
 	dst->kv_saturation_count = src->kv_saturation_count;
 	dst->context_length = src->context_length;
 	dst->live_state.hidden_scale = src->hidden_scale;
@@ -6336,6 +6445,34 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx,
                                       SslmGpuAdapterHandle* adapter) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_adapter_unmapImpl(ctx, adapter); });
+}
+SslmGpuStatus sslm_gpu_adapter_prepare(const SslmGpuModelHandle* model, const void* data, size_t size,
+                                       SslmGpuPreparedAdapter** out) noexcept {
+	ClearOutputHandle(out);
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_adapter_prepareImpl(model, data, size, out); });
+}
+SslmGpuStatus sslm_gpu_adapter_map_prepared(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                            const SslmGpuPreparedAdapter* prepared,
+                                            SslmGpuAdapterHandle** out) noexcept {
+	ClearOutputHandle(out);
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return sslm_gpu_adapter_map_preparedImpl(ctx, model, prepared, out);
+	});
+}
+void sslm_gpu_prepared_adapter_free(SslmGpuPreparedAdapter* prepared) noexcept { delete prepared; }
+SslmGpuStatus sslm_gpu_adapter_info_get(SslmGpuContext* ctx, const SslmGpuAdapterHandle* adapter,
+                                        sslm_adapter_info* out) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_adapter_info_getImpl(ctx, adapter, out); });
+}
+SslmGpuStatus sslm_gpu_prepared_adapter_info_get(const SslmGpuPreparedAdapter* prepared,
+                                                 sslm_adapter_info* out) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_prepared_adapter_info_getImpl(prepared, out); });
+}
+SslmGpuStatus sslm_gpu_adapter_prepare_peak_bound(const SslmGpuModelHandle* model, uint64_t artifact_bytes,
+                                                  uint64_t* out_bytes) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return sslm_gpu_adapter_prepare_peak_boundImpl(model, artifact_bytes, out_bytes);
+	});
 }
 SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                    int64_t cap, SslmGpuSequenceHandle** out_seq) noexcept {

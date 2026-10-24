@@ -17,6 +17,9 @@ static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_PREFIX_REJECTED) == 
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_PREFIX_SCHEMA_MISMATCH) == 29);
 // Precached prefixes (1.16.0, unreleased): the producer refusal, appended last.
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_RESTORE_PRODUCER_MISMATCH) == 30);
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_INVALID_ARGUMENT) == 31);
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_ADAPTER_ARTIFACT_REJECTED) == 32);
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED) == 33);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_SHADER_DIR_INVALID) == 19);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_SHADER_DIR_CONFLICT) == 20);
 
@@ -54,9 +57,12 @@ constexpr bool AllNamed(SslmGpuStatus status) {
         case SslmGpuStatus::SSLM_GPU_PREFIX_REJECTED:
         case SslmGpuStatus::SSLM_GPU_PREFIX_SCHEMA_MISMATCH:
         case SslmGpuStatus::SSLM_RESTORE_PRODUCER_MISMATCH:
+        case SslmGpuStatus::SSLM_GPU_INVALID_ARGUMENT:
+        case SslmGpuStatus::SSLM_GPU_ADAPTER_ARTIFACT_REJECTED:
+        case SslmGpuStatus::SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED:
             return true;
     }
     return false;
 }
-static_assert(AllNamed(SslmGpuStatus::SSLM_RESTORE_PRODUCER_MISMATCH));
+static_assert(AllNamed(SslmGpuStatus::SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED));
 int main() { return 0; }

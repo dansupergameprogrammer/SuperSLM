@@ -24,6 +24,7 @@
 #include <stddef.h>
 
 #include "superslm/parallel_for.h"  // sslm_parallel_for (sslm_gpu_context_set_host_parallel_for)
+#include "superslm/adapter_info.h"  // sslm_adapter_info (the adapter info verbs)
 
 /* --- opaque handle types, design Sec4.1 --- */
 typedef struct SslmGpuContext        SslmGpuContext;
@@ -32,6 +33,7 @@ typedef struct SslmGpuAdapterHandle  SslmGpuAdapterHandle;
 typedef struct SslmGpuSequenceHandle SslmGpuSequenceHandle;
 typedef struct SslmGpuKvPoolHandle   SslmGpuKvPoolHandle;    /* paged KV, 1.13.0 */
 typedef struct SslmGpuPrefixHandle   SslmGpuPrefixHandle;    /* paged KV, 1.13.0 */
+typedef struct SslmGpuPreparedAdapter SslmGpuPreparedAdapter; /* streamed adapters */
 
 /* Same namespace-collision fix the suite's own header carries:
  * SslmModelView must be THE real superslm::SslmModelView, not a second
@@ -302,7 +304,25 @@ enum class SslmGpuStatus : uint32_t {
     /* sslm_gpu_prefix_restore (1.16.0, unreleased): the 'SPX1' blob was written by another engine version or on
      * another adapter (its VendorId or DeviceId differs from this context's). Appended LAST, as every
      * GPU status before it; nothing changes and nothing is drawn. Exported, and unreleased until 1.16.0. */
-    SSLM_RESTORE_PRODUCER_MISMATCH
+    SSLM_RESTORE_PRODUCER_MISMATCH,
+    /* Streamed adapters (unreleased; the release number is set at merge, and these three ordinals are
+     * re-fixed then if an earlier release appends first): a null argument, or an info struct whose
+     * struct_size is below SSLM_ADAPTER_INFO_V1_SIZE, given to sslm_gpu_adapter_prepare,
+     * sslm_gpu_adapter_map_prepared, sslm_gpu_adapter_info_get, sslm_gpu_prepared_adapter_info_get or
+     * sslm_gpu_adapter_prepare_peak_bound. Nothing changes and nothing is allocated. */
+    SSLM_GPU_INVALID_ARGUMENT,
+    /* sslm_gpu_adapter_prepare: the bytes are not an adapter this model can take -- not a valid .sslm
+     * container (truncated, a bad integrity hash), not shaped like an adapter (the prescreen in
+     * sslm_adapter_map's comment, sslm_abi_functions.inc), or a populate rejection other than the base
+     * hash (a malformed ADP1, a missing section, a dimension or projection mismatch). No object is made.
+     * The public sslm_gpu_adapter_map keeps SSLM_DEVICE_LOST for the same artifacts. */
+    SSLM_GPU_ADAPTER_ARTIFACT_REJECTED,
+    /* sslm_decode_step_gpu / sslm_decode_step_batch_gpu (per member, in out_statuses[i]): a later slice
+     * of a token (0 < layer_index < num_hidden_layers) was given a different per-call adapter -- another
+     * handle, another mapping of one at the same address, or NULL against an adapter, or the reverse --
+     * than the call that began that token at layer_index 0. Nothing is submitted and the sequence is
+     * unchanged; continue the token with the adapter that began it, or reset. */
+    SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED
 };
 
 /* Output handles: sslm_gpu_context_create, sslm_gpu_model_map, sslm_gpu_adapter_map,
@@ -389,6 +409,57 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
                                     const SslmModelView* adapter_artifact,
                                     SslmGpuAdapterHandle** out_adapter) noexcept;
 SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* adapter) noexcept;
+
+/* --- Streamed adapters: prepare off the submission thread, then map (plan: superslm-lora-residency
+ * rev 1.2, Sec3.1 and Sec3.3). SSLM_GPU_HAS_ADAPTER_PREPARE marks these verbs.
+ *
+ * sslm_gpu_adapter_prepare: device-free. Reads from `model` only its geometry, its content hash and its
+ * identity, then hashes, parses, validates and packs the adapter bytes exactly as sslm_gpu_adapter_map
+ * does, and keeps the packed bytes, the slot table and the info fields (not the parsed artifact, and
+ * not `data`, which the caller may free on return). Touches no device and no context, so it may run on
+ * any thread, concurrently with decode on the same model; `model` must stay mapped for the call.
+ * Refusals, in order, each leaving `*out` null: a null argument -> SSLM_GPU_INVALID_ARGUMENT; bytes
+ * that do not load, or are not shaped like an adapter -> SSLM_GPU_ADAPTER_ARTIFACT_REJECTED; a base
+ * hash other than `model`'s -> SSLM_ADAPTER_BASE_HASH_MISMATCH; any other populate rejection ->
+ * SSLM_GPU_ADAPTER_ARTIFACT_REJECTED; host memory -> SSLM_GPU_ALLOCATION_FAILED.
+ *
+ * sslm_gpu_adapter_map_prepared: uploads a prepared object and returns an adapter handle identical to
+ * the one sslm_gpu_adapter_map returns for the same bytes. It does not consume `prepared`: free it, or
+ * map it again (onto the same model) later. Refusals, in order, each leaving `*out` null (when `out`
+ * is non-null) and `prepared` unchanged: a null argument -> SSLM_GPU_INVALID_ARGUMENT; `model` mapped
+ * on another context -> SSLM_DEVICE_LOST (as sslm_gpu_adapter_map); `prepared` made from another model
+ * handle -> SSLM_ADAPTER_MODEL_MISMATCH; then the paged-KV entry guard (SSLM_BUSY while a pooled
+ * sequence is Submitted), as sslm_gpu_adapter_map; then the upload's SSLM_GPU_ALLOCATION_FAILED or
+ * SSLM_DEVICE_LOST, as sslm_gpu_adapter_map. Externally serialized with other calls on `ctx`.
+ *
+ * sslm_gpu_prepared_adapter_free: frees a prepared object; NULL is a no-op. Device-free, any thread.
+ * An adapter handle mapped from it is independent of it.
+ *
+ * sslm_gpu_adapter_info_get: an adapter handle's info (adapter_info.h). device_resident_bytes is the
+ * two buffers' allocation sizes; upload_staging_bytes is 0. A null argument or a short struct_size ->
+ * SSLM_GPU_INVALID_ARGUMENT; an adapter mapped on another context -> SSLM_DEVICE_LOST.
+ *
+ * sslm_gpu_prepared_adapter_info_get: a prepared object's info. host_resident_bytes is the object's
+ * own bytes; device_resident_bytes is the predicted allocation and upload_staging_bytes the UPLOAD-heap
+ * bytes map_prepared will take, each buffer rounded up to 64 KiB. Device-free, any thread.
+ *
+ * sslm_gpu_adapter_prepare_peak_bound: an upper bound, from `model`'s layer count and the byte size
+ * alone, on the host heap bytes sslm_gpu_adapter_prepare allocates (its high-water mark, the object it
+ * returns included) for any input of that size, accepted or rejected. Reads nothing else and
+ * allocates nothing; any thread. A null argument -> SSLM_GPU_INVALID_ARGUMENT. --- */
+#define SSLM_GPU_HAS_ADAPTER_PREPARE 1
+SslmGpuStatus sslm_gpu_adapter_prepare(const SslmGpuModelHandle* model, const void* data, size_t size,
+                                       SslmGpuPreparedAdapter** out) noexcept;
+SslmGpuStatus sslm_gpu_adapter_map_prepared(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                            const SslmGpuPreparedAdapter* prepared,
+                                            SslmGpuAdapterHandle** out) noexcept;
+void sslm_gpu_prepared_adapter_free(SslmGpuPreparedAdapter* prepared) noexcept;
+SslmGpuStatus sslm_gpu_adapter_info_get(SslmGpuContext* ctx, const SslmGpuAdapterHandle* adapter,
+                                        sslm_adapter_info* out) noexcept;
+SslmGpuStatus sslm_gpu_prepared_adapter_info_get(const SslmGpuPreparedAdapter* prepared,
+                                                 sslm_adapter_info* out) noexcept;
+SslmGpuStatus sslm_gpu_adapter_prepare_peak_bound(const SslmGpuModelHandle* model, uint64_t artifact_bytes,
+                                                  uint64_t* out_bytes) noexcept;
 
 /* --- Sec5.3: sequence create/release. Declared for B3. --- */
 SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model,
@@ -544,7 +615,8 @@ SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
  *   - SslmGpuSeqDecodeStepForG5Bridge: the embed's refusals, and the ready branch on a host-logits
  *     model;
  *   - SslmGpuSeqPrefillPromptPreBatchingBenchOnly: count == 0 (SSLM_OK) and the embed's refusals;
- *   - sslm_gpu_seq_create, sslm_decode_step_gpu, sslm_gpu_kv_pool_create: none.
+ *   - sslm_gpu_seq_create, sslm_decode_step_gpu, sslm_gpu_kv_pool_create,
+ *     sslm_gpu_adapter_map_prepared (its refusals all precede the guard): none.
  *
  * The internal layer's duty. superslm/gpu_port.h has no Busy channel. A reset on a device whose
  * last submission is unobserved fails before anything is reset (harness::PoolSubmitContractError,
@@ -573,7 +645,14 @@ SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
  * the drain the handle's Submitted state refuses the others. sslm_gpu_ready takes no claim: two
  * sslm_gpu_ready calls on one handle, or one beside a decode entry point on that handle, are the
  * caller's to serialize, as are the other verbs racing on one handle (embed, the prefill bridges,
- * reset, save, schema binding, release). */
+ * reset, save, schema binding, release).
+ *
+ * The adapter of a token (streamed adapters, plan rev 1.2 Sec3.4): the call that begins a token
+ * (layer_index 0) fixes its per-call adapter, NULL included, for every later slice of that token. A
+ * slice (0 < layer_index < num_hidden_layers) given another adapter, or another mapping at the same
+ * address, is refused SSLM_GPU_ADAPTER_SWAP_MIDTOKEN_REJECTED before any submission (in its own
+ * out_statuses[i] on the batch call, which continues). After a restore into the middle of a token
+ * the first slice fixes it. */
 SslmGpuStatus sslm_decode_step_gpu(
     SslmGpuContext* ctx,
     SslmGpuSequenceHandle* seq,
