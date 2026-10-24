@@ -2070,7 +2070,8 @@ SslmGpuStatus sslm_gpu_adapter_info_getImpl(SslmGpuContext* ctx, const SslmGpuAd
 	if (adapter->ctx != ctx) return SSLM_DEVICE_LOST;  // sslm_gpu_adapter_unmap's disposition
 	superslm_adapter::FillAdapterInfoCommon(adapter->meta, adapter->covered_layers, adapter->artifact_hash, out);
 	out->host_resident_bytes = sizeof(SslmGpuAdapterHandle) +
-	                           adapter->slots.capacity() * sizeof(std::array<AdapterProjSlot, 7>) +
+	                           superslm_adapter::AllocatorBlockBytes(adapter->slots.capacity() *
+	                                                                 sizeof(std::array<AdapterProjSlot, 7>)) +
 	                           superslm_adapter::StringHeapBytes(adapter->meta.source_adapter_name);
 	out->device_resident_bytes = adapter->device_resident_bytes;
 	out->upload_staging_bytes = 0;

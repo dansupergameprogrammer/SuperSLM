@@ -120,6 +120,25 @@ inline constexpr uint64_t kRejectionMessageBytesMax = 3 * 1024;
 // two at once; N is a u32, so each is under 32 bytes plus the allocator's terminator.
 inline constexpr uint64_t kValidatorProbeBytesMax = 2 * 64;
 
+// What std::allocator adds to a block on the target compiler. MSVC's allocator on x86 and x64 takes
+// a block of 4096 bytes or more (its "big allocation") as `n + 47` bytes from ::operator new (55 in
+// a debug build), to align it to 32 bytes; libstdc++ and libc++ add nothing. The info figures count
+// every allocator block through AllocatorBlockBytes, and the peak terms add the overhead once for
+// each block of their site that can reach the threshold.
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#if defined(_DEBUG)
+inline constexpr uint64_t kAllocatorBigBlockOverhead = 55;
+#else
+inline constexpr uint64_t kAllocatorBigBlockOverhead = 47;
+#endif
+#else
+inline constexpr uint64_t kAllocatorBigBlockOverhead = 0;
+#endif
+inline constexpr uint64_t kAllocatorBigBlockThreshold = 4096;
+inline uint64_t AllocatorBlockBytes(uint64_t n) noexcept {
+	return n >= kAllocatorBigBlockThreshold ? n + kAllocatorBigBlockOverhead : n;
+}
+
 struct AdapterPeakTerms {
 	uint64_t artifact_copy = 0;   // PEAK-BOUND copy: SslmArtifact's owned bytes_ (OpenFromMemory)
 	uint64_t section_rows = 0;    // PEAK-BOUND sections: Placed rows and the SslmSectionView table
@@ -150,17 +169,20 @@ inline uint64_t ManifestParseBytesMax(uint64_t n, uint64_t entry_bytes) noexcept
 inline AdapterPeakTerms AdapterPeakTermsFor(uint32_t num_hidden_layers, uint64_t artifact_bytes,
                                             uint64_t handle_bytes, bool gpu_prepare) noexcept {
 	AdapterPeakTerms t;
-	t.artifact_copy = artifact_bytes;
+	t.artifact_copy = artifact_bytes + kAllocatorBigBlockOverhead;
 	t.section_rows = kAdapterMaxSections * (kPlacedRowBytesMax + sizeof(superslm::SslmSectionView));
 	const uint64_t w = AdapterMaxManifestEntries(superslm::SslmSectionType::Weights, num_hidden_layers);
 	const uint64_t f = AdapterMaxManifestEntries(superslm::SslmSectionType::DeltaFoldScales, num_hidden_layers);
+	// Each of the three parses holds at most three allocator blocks at once (table, ranges, slots).
 	t.manifests = ManifestParseBytesMax(w, sizeof(superslm::SslmTensorView)) +
-	              2 * ManifestParseBytesMax(f, sizeof(superslm::SslmAmplifyingFoldEntry));
-	t.adapter_name = kAdapterMaxNameBytes + 1;
-	t.layer_table = uint64_t(num_hidden_layers) * sizeof(superslm::LayerAdapter);
-	// Seven string_views pushed one at a time: capacities 1, 2, 4, 8, the last growth holding the
-	// old 4 and the new 8 at once.
-	t.claimed_modules = (4 + 8) * sizeof(std::string_view);
+	              2 * ManifestParseBytesMax(f, sizeof(superslm::SslmAmplifyingFoldEntry)) + 9 * kAllocatorBigBlockOverhead;
+	// The longest name's buffer, its capacity rounded up to a multiple of 16 as MSVC's string does
+	// (libstdc++ allocates exactly), plus the terminator.
+	t.adapter_name = (kAdapterMaxNameBytes | 15) + 1 + kAllocatorBigBlockOverhead;
+	t.layer_table = uint64_t(num_hidden_layers) * sizeof(superslm::LayerAdapter) + kAllocatorBigBlockOverhead;
+	// Seven string_views pushed one at a time. libstdc++ doubles (1, 2, 4, 8: the last growth holds
+	// 4 and 8 at once); MSVC grows by half (1, 2, 3, 4, 6, 9: the last holds 6 and 9). The larger.
+	t.claimed_modules = (6 + 9) * sizeof(std::string_view);
 	t.messages = kRejectionMessageBytesMax + kValidatorProbeBytesMax;
 	t.handle = handle_bytes;
 	if (gpu_prepare) {
@@ -168,8 +190,8 @@ inline AdapterPeakTerms AdapterPeakTermsFor(uint32_t num_hidden_layers, uint64_t
 		// artifact holds, each in its own non-overlapping range (the manifests' overlap checks), so
 		// the two buffers together never exceed the artifact; plus the one-byte floor each takes
 		// when it would be empty.
-		t.packed = artifact_bytes + 2;
-		t.slot_table = uint64_t(num_hidden_layers) * sizeof(std::array<superslm_gpu::AdapterProjSlot, 7>);
+		t.packed = artifact_bytes + 2 + 2 * kAllocatorBigBlockOverhead;
+		t.slot_table = uint64_t(num_hidden_layers) * sizeof(std::array<superslm_gpu::AdapterProjSlot, 7>) + kAllocatorBigBlockOverhead;
 	}
 	return t;
 }
@@ -213,7 +235,7 @@ inline uint64_t StringHeapBytes(const std::string& s) noexcept {
 	const char* d = s.data();
 	const char* o = reinterpret_cast<const char*>(&s);
 	if (d >= o && d < o + sizeof(std::string)) return 0;
-	return uint64_t(s.capacity()) + 1;
+	return AllocatorBlockBytes(uint64_t(s.capacity()) + 1);
 }
 
 // Every heap byte an adapter's parsed view and populated tables own (the CPU handle's, less the
@@ -223,11 +245,13 @@ inline uint64_t StringHeapBytes(const std::string& s) noexcept {
 inline uint64_t AdapterViewHeapBytes(uint64_t artifact_bytes, uint32_t section_count,
                                      const superslm::SslmModelView& view, const AdapterMeta& meta,
                                      const std::vector<superslm::LayerAdapter>& layers) noexcept {
-	return artifact_bytes + uint64_t(section_count) * sizeof(superslm::SslmSectionView) +
-	       view.weights.Tensors().capacity() * sizeof(superslm::SslmTensorView) +
-	       view.delta_fold_scales.Entries().capacity() * sizeof(superslm::SslmAmplifyingFoldEntry) +
-	       view.u_fold_scales.Entries().capacity() * sizeof(superslm::SslmAmplifyingFoldEntry) +
-	       layers.capacity() * sizeof(superslm::LayerAdapter) + StringHeapBytes(meta.source_adapter_name);
+	return AllocatorBlockBytes(artifact_bytes) +
+	       AllocatorBlockBytes(uint64_t(section_count) * sizeof(superslm::SslmSectionView)) +
+	       AllocatorBlockBytes(view.weights.Tensors().capacity() * sizeof(superslm::SslmTensorView)) +
+	       AllocatorBlockBytes(view.delta_fold_scales.Entries().capacity() * sizeof(superslm::SslmAmplifyingFoldEntry)) +
+	       AllocatorBlockBytes(view.u_fold_scales.Entries().capacity() * sizeof(superslm::SslmAmplifyingFoldEntry)) +
+	       AllocatorBlockBytes(layers.capacity() * sizeof(superslm::LayerAdapter)) +
+	       StringHeapBytes(meta.source_adapter_name);
 }
 
 // ---- GPU packing (moved from sslm_gpu_adapter_mapImpl, unchanged) -------------------------------
@@ -348,8 +372,8 @@ inline PrepareResult PrepareAdapterCore(const BaseModelGeometry& base, const uin
 
 // The prepared object's own heap bytes (the prepared info's host_resident_bytes, less the object).
 inline uint64_t PreparedCoreHeapBytes(const PreparedAdapterCore& p) noexcept {
-	return p.ab_bytes.capacity() + p.fold_bytes.capacity() +
-	       p.slots.capacity() * sizeof(std::array<superslm_gpu::AdapterProjSlot, 7>) +
+	return AllocatorBlockBytes(p.ab_bytes.capacity()) + AllocatorBlockBytes(p.fold_bytes.capacity()) +
+	       AllocatorBlockBytes(p.slots.capacity() * sizeof(std::array<superslm_gpu::AdapterProjSlot, 7>)) +
 	       StringHeapBytes(p.meta.source_adapter_name);
 }
 

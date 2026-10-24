@@ -14,16 +14,20 @@ Census anchored on SuperSLM main 5599f7e4 (1.15.0 plus CI fixes), 2026-10-24.
 
 | Term | Covers | Size |
 |---|---|---|
-| `copy` | `SslmArtifact::bytes_` (`OpenFromMemory`'s `bytes_.assign`) | `artifact_bytes` |
+| `copy` | `SslmArtifact::bytes_` (`OpenFromMemory`'s `bytes_.assign`) | `artifact_bytes` + O |
 | `sections` | `OpenFromMemory`'s `placed` rows and `sections_` table, both reserved to `section_count` <= 6 | 6 x (48 + `sizeof(SslmSectionView)`) |
-| `manifests` | `SslmTensorManifest::Parse` (Weights) and `SslmAmplifyingFoldScaleView::Parse` (DFS1, UFS1): the entry table, the ranges and the `FixedIntSet` slots, each reserved to `tensor_count`, which the prescreen caps at 14 (Weights) and 7 (each fold kind) per base layer | per manifest n x (entry + 16) + 4n x 24 |
-| `name` | `AdapterMeta::source_adapter_name.assign` (prescreen: Provenance <= 68 + 4,096) | 4,097 |
-| `layers` | `layer_adapters.assign(num_hidden_layers)` | L x `sizeof(LayerAdapter)` |
-| `modules` | `TargetModulesFromMask`'s vector, seven pushes (capacities 1, 2, 4, 8) | 12 x `sizeof(string_view)` |
+| `manifests` | `SslmTensorManifest::Parse` (Weights) and `SslmAmplifyingFoldScaleView::Parse` (DFS1, UFS1): the entry table, the ranges and the `FixedIntSet` slots, each reserved to `tensor_count`, which the prescreen caps at 14 (Weights) and 7 (each fold kind) per base layer | per manifest n x (entry + 16) + 4n x 24 + 3 O |
+| `name` | `AdapterMeta::source_adapter_name.assign` (prescreen: Provenance <= 68 + 4,096) | (4,096 \| 15) + 1 + O = 4,113 + O |
+| `layers` | `layer_adapters.assign(num_hidden_layers)` | L x `sizeof(LayerAdapter)` + O |
+| `modules` | `TargetModulesFromMask`'s vector, seven pushes (libstdc++ capacities 1, 2, 4, 8; MSVC 1, 2, 3, 4, 6, 9) | 15 x `sizeof(string_view)` |
 | `messages` | `artifact.cpp`'s `Reject` messages (fixed text and numbers; at most three temporaries); `ValidateQkChannelTableAdditive`'s two per-layer probe names. Every name-carrying message is built only for a non-null error string, and both adapter paths pass null | 3 KiB + 128 |
 | `handle` | CPU: `new sslm_adapter_s`. GPU: the prepared object | `sizeof` |
-| `packed` | GPU prepare only: `ab_bytes` and `fold_bytes`, each reserved to its exact final size; every byte is a copy of a tensor or fold row the artifact holds, in non-overlapping ranges | `artifact_bytes` + 2 |
-| `slots` | GPU prepare only: the `[layer][7]` slot table | L x 7 x `sizeof(AdapterProjSlot)` |
+| `packed` | GPU prepare only: `ab_bytes` and `fold_bytes`, each reserved to its exact final size; every byte is a copy of a tensor or fold row the artifact holds, in non-overlapping ranges | `artifact_bytes` + 2 + 2 O |
+| `slots` | GPU prepare only: the `[layer][7]` slot table | L x 7 x `sizeof(AdapterProjSlot)` + O |
+
+O is `kAllocatorBigBlockOverhead`: what `std::allocator` adds to a block of 4,096 bytes or more on
+the target compiler (MSVC x86/x64: 47 bytes, 55 in a debug build; libstdc++ and libc++: 0). The
+info figures count every allocator block the same way (`AllocatorBlockBytes`).
 
 The terms are summed as though all were live at once, so the bound over-approximates: at
 pkv_def's two layers the measured slack is 10 to 22 KiB (cell 7.2's table). Only `copy` (and, for
