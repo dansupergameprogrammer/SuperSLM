@@ -161,7 +161,9 @@ enum class AssembleVerdict {
 
 // The child's full SPX1 from its parent's SPX1 and its own SPD1 (no model): the delta's header fields under the
 // magic 'SPX1', the delta's residual, and every run's parent rows [0, origin) then delta rows [origin, L), sealed.
-// A null or short `out` (with a valid `out_n`) reports the size. Writes `out` only on kOk.
+// A null or short `out` (with a valid `out_n`) reports the size; an `out` overlapping either input is kMalformed.
+// Writes `out` only on kOk. With no model it cannot check the geometry fields against one: a delta whose runs and
+// head_dim are edited with the same product assembles, and only a restore of the output refuses it.
 AssembleVerdict Assemble(const uint8_t* parent, size_t parent_n, const uint8_t* delta, size_t delta_n, uint8_t* out,
                          size_t* out_n);
 

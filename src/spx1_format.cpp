@@ -291,6 +291,12 @@ AssembleVerdict Assemble(const uint8_t* parent, size_t parent_n, const uint8_t* 
 		*out_n = required;
 		return AssembleVerdict::kBufferTooSmall;
 	}
+	// The output is written while both inputs are read, so it must overlap neither.
+	auto overlaps = [&](const uint8_t* in, size_t in_n) {
+		const auto o = reinterpret_cast<uintptr_t>(out), i = reinterpret_cast<uintptr_t>(in);
+		return o < i + in_n && i < o + required;
+	};
+	if (overlaps(parent, parent_n) || overlaps(delta, delta_n)) return AssembleVerdict::kMalformed;
 	std::memcpy(out, delta, kHeaderBytes);
 	std::memcpy(out, kMagic, 4);
 	std::memset(out + kDigestOffset, 0, kDigestBytes);

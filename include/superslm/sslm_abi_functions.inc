@@ -201,7 +201,9 @@ SUPERSLM_API sslm_status sslm_prefix_save_delta(sslm_prefix prefix, void* buf, s
  * sslm_prefix_save when both came from this engine. SSLM_INVALID_ARGUMENT for a null or malformed
  * input (an SPD1 parent included: assemble a chain from its root); SSLM_RESTORE_PARENT_MISMATCH when
  * both are well formed but the parent's length, backend, producer, model, precision or rows are not the
- * delta's; a null or short `out` reports the size through *out_n with SSLM_BUFFER_TOO_SMALL. */
+ * delta's; a null or short `out` reports the size through *out_n with SSLM_BUFFER_TOO_SMALL. `out`
+ * must overlap neither input (SSLM_INVALID_ARGUMENT). Having no model, it cannot check the delta's
+ * geometry against one; restoring its output does. */
 SUPERSLM_API sslm_status sslm_prefix_assemble(const void* parent, size_t parent_n, const void* delta,
                                               size_t delta_n, void* out, size_t* out_n);
 /* Page counts of a pool (either create verb): page_count, free_pages, shared_pages and B. The

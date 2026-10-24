@@ -831,6 +831,13 @@ void AssembleFields7b() {
         Digest(m);
         Status(Assemble(m, f.delta, &out), SSLM_INVALID_ARGUMENT, "D7b parent of another magic");
     }
+    {   // an output overlapping an input is refused
+        auto p = f.parent_full;
+        p.resize(std::max(p.size(), f.child_full.size()));
+        size_t n = p.size();
+        Status(sslm_prefix_assemble(p.data(), f.parent_full.size(), f.delta.data(), f.delta.size(), p.data(), &n),
+               SSLM_INVALID_ARGUMENT, "D7b assemble in place over the parent");
+    }
     {   // a size query on a mismatched pair reports the mismatch
         const auto other = RootBlob(fx, 999);
         size_t n = 0;
@@ -933,5 +940,24 @@ void ParentRelease16() {
     PKV_CHECK_EQ(FreePages(pool.pool), start);
 }
 PKV_CELL("D16/E6", "E6", ParentRelease16);
+
+// D15: the blobs for the independent oracle, tests/precache/check_spd1.py, written to
+// $SUPERSLM_PRECACHE_DELTA_OUT (the cell fails when it is unset). Run the script on that directory after it.
+void OracleBlobs15() {
+    const Fixture& fx = GetFixture("pkv_def");
+    if (!fx.ok) return;
+    const char* dir = std::getenv("SUPERSLM_PRECACHE_DELTA_OUT");
+    PKV_CHECK_MSG(dir && *dir, "D15 SUPERSLM_PRECACHE_DELTA_OUT is unset");
+    if (!dir || !*dir) return;
+    Family f(fx, 1007, 300);
+    if (!f.ok) return;
+    for (auto [name, bytes] : {std::pair<const char*, const std::vector<uint8_t>*>{"parent.spx1", &f.parent_full},
+                               {"child.spx1", &f.child_full}, {"child.spd1", &f.delta}}) {
+        std::ofstream out(std::string(dir) + "/" + name, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bytes->data()), std::streamsize(bytes->size()));
+        PKV_CHECK_MSG(bool(out), "D15 could not write %s", name);
+    }
+}
+PKV_CELL("D15/E6", "E6", OracleBlobs15);
 
 }  // namespace

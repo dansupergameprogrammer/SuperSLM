@@ -1116,7 +1116,8 @@ or a null handle is refused with `SSLM_INVALID_ARGUMENT`. No parent handle is ne
 restored privately saves the same delta as the one built with `sslm_prefix_begin_from`.
 
 `sslm_prefix_restore` given an `SPD1` requires its parent as `parent_or_null`. The delta's fields are
-checked first, in `SPX1`'s order, with the same statuses. Then the parent must be frozen, of the same
+checked first, in `SPX1`'s order through the schema check and then its own domain checks (origin, geometry,
+size, token, mantissa), with the same statuses. Then the parent must be frozen, of the same
 model, hold exactly `origin` positions, and its rows `[0, origin)` must hash to the parent rows digest;
 otherwise the restore returns `SSLM_RESTORE_PARENT_MISMATCH` (ordinal 31) with nothing drawn. In the
 restore pool the parent's leading `floor(origin / B)` pages are shared; a parent in another pool of
@@ -1131,7 +1132,9 @@ child's full `SPX1`, byte-equal to the child's `sslm_prefix_save` when both came
 null or malformed input, or an `SPD1` given as the parent, is `SSLM_INVALID_ARGUMENT` (assemble a
 chain from its root, one level at a time). Two well-formed blobs that do not pair (the parent's
 length is not the delta's origin; backend, producer, adapter, model or precision differ; or the
-parent's rows do not hash to the parent rows digest) return `SSLM_RESTORE_PARENT_MISMATCH`.
+parent's rows do not hash to the parent rows digest) return `SSLM_RESTORE_PARENT_MISMATCH`. The output must
+overlap neither input. With no model, assemble cannot check the delta's geometry fields against one, so a cook
+or load check should restore the result (or compare the geometry with the model) rather than trust assemble alone.
 
 ### Schema-constrained generation
 

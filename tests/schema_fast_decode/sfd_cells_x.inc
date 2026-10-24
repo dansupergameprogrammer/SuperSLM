@@ -2592,7 +2592,8 @@ void Cell_X_9_2() {
 #define SFD_X_COUNT_STATUS(name) ++n;
 	SSLM_STATUS_ENUM_LIST(SFD_X_COUNT_STATUS)
 #undef SFD_X_COUNT_STATUS
-	CHECK_MSG(n == 31, "[9.X2] the status list has %d entries; main plus precached prefixes has 31", n);
+	// 1.18.0 appends SSLM_RESTORE_PARENT_MISMATCH (delta prefix saves): 32.
+	CHECK_MSG(n == 32, "[9.X2] the status list has %d entries; main plus precached prefixes and delta saves has 32", n);
 }
 
 // ==========================================================================================================
