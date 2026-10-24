@@ -1033,4 +1033,58 @@ void SmallAndRestored18() {
 }
 PKV_CELL("D18/E6", "E6", SmallAndRestored18);
 
+// D19: the reviewer's remaining legs: a child restored from SPD1 saves the same delta; pkv_odd (B = 256); the
+// delta reader's m, token and negative-length bounds; the fault seams on a cross-pool restore.
+void Remaining19() {
+    const Fixture& fx = GetFixture("pkv_def");
+    if (!fx.ok) return;
+    Family f(fx, 1000);
+    if (!f.ok) return;
+    sslm_prefix again = nullptr;
+    if (Restored(fx, &f.pool->pool, f.delta, f.parent, f.sc.h, &again))
+        PKV_CHECK_MSG(SaveDelta(again) == f.delta, "D19 an SPD1-restored child saves another delta");
+    struct Field { const char* what; size_t off; bool wide; uint64_t value; };
+    for (const Field& x : {Field{"m past INT32_MAX", 128, true, uint64_t(int64_t(INT32_MAX) + 1)},
+                           Field{"m below INT32_MIN", 128, true, uint64_t(int64_t(INT32_MIN) - 1)},
+                           Field{"token -1 with L > 0", 108, false, 0xffffffffu},
+                           Field{"negative length", 112, true, uint64_t(-5)}}) {
+        auto b = f.delta;
+        if (x.wide) PutLe64(b, x.off, x.value); else PutLe32(b, x.off, uint32_t(x.value));
+        Digest(b);
+        sslm_prefix out = nullptr;
+        Status(Restore(fx, &f.pool->pool, b, f.parent, &out), SSLM_INVALID_ARGUMENT, x.what);
+        PKV_CHECK(out == nullptr);
+    }
+    // Seams 2 and 3 on a cross-pool restore (seam 1 needs a share, which a cross-pool restore never makes).
+    PagePool other(fx.model, uint32_t(2 * fx.CapPages()));
+    for (int position : {2, 3}) {
+        const uint32_t free_before = FreePages(other.pool), parent_free = FreePages(f.pool->pool);
+        sslm_pc_test_only_restore_fault_arm(position, 0);
+        sslm_prefix out = nullptr;
+        const sslm_status st = Restore(fx, &other.pool, f.delta, f.parent, &out);
+        uint32_t free = 0, shared = 0, mapped = 0, reserve = 0;
+        const int fired = sslm_pc_test_only_restore_fault_read(&free, &shared, &mapped, &reserve);
+        sslm_pc_test_only_restore_fault_disarm();
+        PKV_CHECK_MSG(fired == 1, "D19 cross-pool seam %d was not reached", position);
+        PKV_CHECK_MSG(st != SSLM_OK && out == nullptr, "D19 cross-pool seam %d did not refuse cleanly", position);
+        PKV_CHECK_EQ(FreePages(other.pool), free_before);
+        PKV_CHECK_EQ(FreePages(f.pool->pool), parent_free);
+    }
+    // pkv_odd: cap 4100, B = 256 in this target.
+    const Fixture& odd = GetFixture("pkv_odd");
+    if (!odd.ok) return;
+    Family g(odd, 1000, 300);
+    if (!g.ok) return;
+    sslm_prefix out = nullptr;
+    uint32_t got = UINT32_MAX;
+    if (Restored(odd, &g.pool->pool, g.delta, g.parent, g.sc.h, &out, &got)) {
+        PKV_CHECK_EQ(got, uint32_t(1000 / odd.B()));
+        PKV_CHECK_MSG(Save(out) == g.child_full, "D19 pkv_odd restore");
+    }
+    std::vector<uint8_t> full;
+    Status(Assemble(g.parent_full, g.delta, &full), SSLM_OK, "D19 pkv_odd assemble");
+    PKV_CHECK_MSG(full == g.child_full, "D19 pkv_odd assemble bytes");
+}
+PKV_CELL("D19/E6", "E6", Remaining19);
+
 }  // namespace
