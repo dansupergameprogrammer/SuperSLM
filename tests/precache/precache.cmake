@@ -55,6 +55,9 @@ target_compile_definitions(superslm_precache_unpinned PRIVATE PKV_FIXTURE_B_FROM
 # Plan 9.9 [E5] (rev 1.18.1): 1.13.1's sequence saves on the release tree, at pkv_def's production rule B (the
 # capture's). Only in the unpinned target: the receipt target's pinned GetFixture would restore at B = 16.
 target_sources(superslm_precache_unpinned PRIVATE ${PC_DIR}/unpinned/e5_unpinned.cpp)
+# Plan 9.5 [F4]: the pinned 1.14.0 SPX1 blobs refused by this build, at each fixture's rule B (the pins'), and the
+# grade's must-reject. Unpinned only, for the same reason as 9.9.
+target_sources(superslm_precache_unpinned PRIVATE ${PC_DIR}/unpinned/f4_unpinned.cpp)
 target_compile_definitions(superslm_precache_unpinned PRIVATE PC_REFERENCE_DIR="${PC_DIR}/reference")
 target_compile_definitions(superslm_precache_unpinned_getfixture_receipt PRIVATE
     PKV_PIN_GENERATED_FIXTURES=1 PC_UNPINNED_RECEIPT_VIA_GETFIXTURE=1)
