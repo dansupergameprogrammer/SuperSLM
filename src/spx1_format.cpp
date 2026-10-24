@@ -218,7 +218,9 @@ void WriteDeltaHeader(uint8_t* p, const Header& h, const uint8_t* parent_rows_di
 	Put32(p, 228, 0);
 }
 
-bool IsDelta(const uint8_t* p, size_t n) noexcept { return p != nullptr && n >= 4 && std::memcmp(p, kDeltaMagic, 4) == 0; }
+bool IsDelta(const uint8_t* p, size_t n) noexcept {
+	return p != nullptr && n >= 4 && std::memcmp(p, kDeltaMagic, 4) == 0;
+}
 
 Verdict ReadDelta(const uint8_t* p, size_t n, const Expect& x, DeltaFields* out) {
 	Identity id;

@@ -2567,7 +2567,8 @@ void Cell_X_9_1() {
 
 // 9.X2 [J1-X] The ABI inventory carries sslm_jump_options and sslm_jump_mode; sslm_seq_jump_forward keeps its
 // ordinal in the verb list; the status list's entry count equals the base this
-// line builds on: main's 30 plus the merged precached-prefixes line's SSLM_RESTORE_PRODUCER_MISMATCH, 31 (as 9.2).
+// line builds on: main's 30 plus the merged precached-prefixes line's SSLM_RESTORE_PRODUCER_MISMATCH, 31, plus 1.18.0's
+// SSLM_RESTORE_PARENT_MISMATCH, 32 (as 9.2).
 // J1 and J1-X ship together as 1.15.0, so this cell checks no version; 9.2's receipt reads it at the release commit
 // (plan rev 1.3.7, section 17.13).
 void Cell_X_9_2() {

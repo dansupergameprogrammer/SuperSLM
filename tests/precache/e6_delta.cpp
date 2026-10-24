@@ -6,6 +6,8 @@
 // the expected assemble output is that full save, so neither reuses the engine's writer.
 #include "precache_common.h"
 #include <atomic>
+#include <filesystem>
+#include "support/bad_alloc_injection.h"
 
 #define PC_RESTORE_PARENT_MISMATCH static_cast<sslm_status>(31)
 #ifdef SSLM_HAS_PREFIX_DELTA_ABI
@@ -942,13 +944,16 @@ void ParentRelease16() {
 PKV_CELL("D16/E6", "E6", ParentRelease16);
 
 // D15: the blobs for the independent oracle, tests/precache/check_spd1.py, written to
-// $SUPERSLM_PRECACHE_DELTA_OUT (the cell fails when it is unset). Run the script on that directory after it.
+// $SUPERSLM_PRECACHE_DELTA_OUT (default: <temp>/superslm_d15). Run the script on that directory after it.
 void OracleBlobs15() {
     const Fixture& fx = GetFixture("pkv_def");
     if (!fx.ok) return;
-    const char* dir = std::getenv("SUPERSLM_PRECACHE_DELTA_OUT");
-    PKV_CHECK_MSG(dir && *dir, "D15 SUPERSLM_PRECACHE_DELTA_OUT is unset");
-    if (!dir || !*dir) return;
+    // $SUPERSLM_PRECACHE_DELTA_OUT, or a directory under the system temp directory when it is unset.
+    const char* env = std::getenv("SUPERSLM_PRECACHE_DELTA_OUT");
+    std::string dir = env && *env ? env : (std::filesystem::temp_directory_path() / "superslm_d15").string();
+    std::error_code made;
+    std::filesystem::create_directories(dir, made);
+    std::printf("D15/E6: blobs for tests/precache/check_spd1.py in %s\n", dir.c_str());
     Family f(fx, 1007, 300);
     if (!f.ok) return;
     for (auto [name, bytes] : {std::pair<const char*, const std::vector<uint8_t>*>{"parent.spx1", &f.parent_full},
@@ -959,5 +964,71 @@ void OracleBlobs15() {
     }
 }
 PKV_CELL("D15/E6", "E6", OracleBlobs15);
+
+// D17: the allocation failures of plan §4.2 item 7: SHA-256's injected std::bad_alloc becomes SSLM_ALLOCATION_FAILED
+// at each new verb, with nothing drawn and *out cleared.
+void Allocation17() {
+    const Fixture& fx = GetFixture("pkv_def");
+    if (!fx.ok) return;
+    Family f(fx, 1000);
+    if (!f.ok) return;
+    using superslm_test::InjectThrowKind;
+    std::vector<uint8_t> buf(f.delta.size());
+    size_t n = buf.size();
+    superslm_test::ArmInjectedFault(InjectThrowKind::kBadAlloc);
+    Status(sslm_prefix_save_delta(f.child, buf.data(), &n), SSLM_ALLOCATION_FAILED, "D17 save_delta");
+    superslm_test::DisarmInjectedFault();
+    for (bool fresh_parent : {false, true}) {  // the reader's digest, then (on a never-hashed parent) the parent's
+        sslm_prefix parent = f.parent;
+        if (fresh_parent && !Restored(fx, &f.pool->pool, f.parent_full, nullptr, f.sc.h, &parent)) return;
+        const uint32_t free_before = FreePages(f.pool->pool);
+        sslm_prefix out = nullptr;
+        superslm_test::ArmInjectedFault(InjectThrowKind::kBadAlloc);
+        const sslm_status st = Restore(fx, &f.pool->pool, f.delta, parent, &out);
+        superslm_test::DisarmInjectedFault();
+        Status(st, SSLM_ALLOCATION_FAILED, "D17 restore");
+        PKV_CHECK(out == nullptr);
+        PKV_CHECK_EQ(FreePages(f.pool->pool), free_before);
+        sslm_prefix ok = nullptr;
+        if (Restored(fx, &f.pool->pool, f.delta, parent, f.sc.h, &ok))
+            PKV_CHECK_MSG(Save(ok) == f.child_full, "D17 restore after the fault differs");
+    }
+    std::vector<uint8_t> full(f.child_full.size());
+    n = full.size();
+    superslm_test::ArmInjectedFault(InjectThrowKind::kBadAlloc);
+    Status(sslm_prefix_assemble(f.parent_full.data(), f.parent_full.size(), f.delta.data(), f.delta.size(),
+                                full.data(), &n), SSLM_ALLOCATION_FAILED, "D17 assemble");
+    superslm_test::DisarmInjectedFault();
+}
+PKV_CELL("D17/E6", "E6", Allocation17);
+
+// D18: a child restored (not built) saves the same delta, and an origin below one page with the child's rows
+// inside the origin's page.
+void SmallAndRestored18() {
+    const Fixture& fx = GetFixture("pkv_def");
+    if (!fx.ok) return;
+    Family f(fx, 1000);
+    if (!f.ok) return;
+    sslm_prefix priv = nullptr, hinted = nullptr;
+    if (Restored(fx, &f.pool->pool, f.child_full, nullptr, f.sc.h, &priv))
+        PKV_CHECK_MSG(SaveDelta(priv) == f.delta, "D18 a privately restored child saves another delta");
+    if (Restored(fx, &f.pool->pool, f.child_full, f.parent, f.sc.h, &hinted))
+        PKV_CHECK_MSG(SaveDelta(hinted) == f.delta, "D18 a hint-restored child saves another delta");
+    size_t n = 0;
+    Status(sslm_prefix_save_delta(f.parent, nullptr, &n), SSLM_INVALID_ARGUMENT, "D18 root through the size query");
+    Family small(fx, 7, 5);  // O = 7 < B = 16, rows [7, 12) inside page 0
+    if (!small.ok) return;
+    PKV_CHECK_MSG(small.delta == ExpectedDelta(fx, small.child_full), "D18 small-origin delta bytes");
+    sslm_prefix out = nullptr;
+    uint32_t shared = UINT32_MAX;
+    if (Restored(fx, &small.pool->pool, small.delta, small.parent, small.sc.h, &out, &shared)) {
+        PKV_CHECK_EQ(shared, 0u);
+        PKV_CHECK_MSG(Save(out) == small.child_full, "D18 small-origin restore");
+    }
+    std::vector<uint8_t> full;
+    Status(Assemble(small.parent_full, small.delta, &full), SSLM_OK, "D18 small-origin assemble");
+    PKV_CHECK_MSG(full == small.child_full, "D18 small-origin assemble bytes");
+}
+PKV_CELL("D18/E6", "E6", SmallAndRestored18);
 
 }  // namespace

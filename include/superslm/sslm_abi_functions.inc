@@ -203,7 +203,8 @@ SUPERSLM_API sslm_status sslm_prefix_save_delta(sslm_prefix prefix, void* buf, s
  * both are well formed but the parent's length, backend, producer, model, precision or rows are not the
  * delta's; a null or short `out` reports the size through *out_n with SSLM_BUFFER_TOO_SMALL. `out`
  * must overlap neither input (SSLM_INVALID_ARGUMENT). Having no model, it cannot check the delta's
- * geometry against one; restoring its output does. */
+ * geometry (bytes 216..227) against one, and restoring its output cannot either: a caller that must
+ * reject an edited delta compares those bytes with the model's or restores the SPD1 onto its parent. */
 SUPERSLM_API sslm_status sslm_prefix_assemble(const void* parent, size_t parent_n, const void* delta,
                                               size_t delta_n, void* out, size_t* out_n);
 /* Page counts of a pool (either create verb): page_count, free_pages, shared_pages and B. The

@@ -3748,7 +3748,7 @@ void Cell_9_2() {
 		          "[9.2] the version %s is not a released one: CHANGELOG.md has no dated \"## [%s] - \" heading",
 		          version.c_str(), version.c_str());
 	}
-	// No new status (§5.3; rev 1.2.2, audit M-2): the status list's entry count equals the base this line
+	// No new status from schema fast-decode (§5.3; rev 1.2.2, audit M-2); 1.18.0's delta saves add one, below: the status list's entry count equals the base this line
 	// builds on, and the existing ordinals are unchanged. That base is main's 30 plus the one status the
 	// merged precached-prefixes line appends (SSLM_RESTORE_PRODUCER_MISMATCH, ordinal 30): 31. Schema
 	// fast-decode itself still adds none.

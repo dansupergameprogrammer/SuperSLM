@@ -93,7 +93,8 @@ enum class Verdict {
 	kModel,               // model hash
 	kKvPrecision,         // kv_precision
 	kSchema,              // the schema hash names no schema, the walk is past its states, or unbound with a walk
-	kDomain,              // L outside [0, cap], n != the size for L, origin outside [0, L], the token, m outside int32
+	kDomain,              // L outside [0, cap], n != the size for L, origin outside [0, L], the token, m outside int32;
+	                      // for SPD1 (ReadDelta), origin outside [1, L], geometry, reserved != 0, n != DeltaSize
 };
 
 // The fields a validated blob carries.
@@ -162,8 +163,10 @@ enum class AssembleVerdict {
 // The child's full SPX1 from its parent's SPX1 and its own SPD1 (no model): the delta's header fields under the
 // magic 'SPX1', the delta's residual, and every run's parent rows [0, origin) then delta rows [origin, L), sealed.
 // A null or short `out` (with a valid `out_n`) reports the size; an `out` overlapping either input is kMalformed.
-// Writes `out` only on kOk. With no model it cannot check the geometry fields against one: a delta whose runs and
-// head_dim are edited with the same product assembles, and only a restore of the output refuses it.
+// Writes `out` only on kOk. With no model it cannot check the geometry fields (216..227) against one: a delta whose
+// runs and head_dim are edited to the same product assembles into rows in the wrong order, and the output SPX1 carries
+// no geometry, so restoring it cannot tell either. A caller that must reject such a delta compares those fields with
+// the model's, or restores the SPD1 itself onto its parent (ReadDelta checks them).
 AssembleVerdict Assemble(const uint8_t* parent, size_t parent_n, const uint8_t* delta, size_t delta_n, uint8_t* out,
                          size_t* out_n);
 

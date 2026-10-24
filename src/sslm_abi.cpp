@@ -5680,24 +5680,25 @@ sslm_status RestoreDelta(sslm_model model, sslm_kv_pool_s* pool_ptr, const uint8
 	const auto& c = model->view.config;
 	const auto model_hash = model->view.RawIntegrityHash();
 	superslm::spx1::DeltaFields f;
-	const sslm_status read = MapReadVerdict(superslm::spx1::ReadDelta(buf, n, CpuPrefixExpect(model, model_hash), &f));
-	if (read != SSLM_OK) return read;
+	// The reader's digest and the parent's rows digest are the two SHA-256 passes; SHA-256 throws only
+	// std::bad_alloc, and both run here, before any page is drawn, so one catch covers them and nothing after a draw.
+	const sslm_status checked = CatchAllocationFailure([&]() -> sslm_status {
+		const sslm_status read =
+		    MapReadVerdict(superslm::spx1::ReadDelta(buf, n, CpuPrefixExpect(model, model_hash), &f));
+		if (read != SSLM_OK) return read;
+		if (!parent || !parent->frozen || parent->model != model || parent->state.context_length != f.header.origin) {
+			return SSLM_RESTORE_PARENT_MISMATCH;
+		}
+		return CachedRowsDigest(parent) == f.parent_rows_digest ? SSLM_OK : SSLM_RESTORE_PARENT_MISMATCH;
+	});
+	if (checked != SSLM_OK) return checked;
 	const int64_t length = f.header.length;
 	const int64_t origin = f.header.origin;
-	if (!parent || !parent->frozen || parent->model != model || parent->state.context_length != origin) {
-		return SSLM_RESTORE_PARENT_MISMATCH;
-	}
-	// The digest (SHA-256) throws only std::bad_alloc, and only here, before any page is drawn: the catch covers
-	// this step alone, so nothing after a draw can leave through it.
-	std::array<uint8_t, 32> parent_digest{};
-	const sslm_status hashed = CatchAllocationFailure([&]() -> sslm_status {
-		parent_digest = CachedRowsDigest(parent);
-		return SSLM_OK;
-	});
-	if (hashed != SSLM_OK) return hashed;
-	if (parent_digest != f.parent_rows_digest) return SSLM_RESTORE_PARENT_MISMATCH;
 	const int64_t B = pool_ptr->page_positions;
 	const uint32_t share = parent->pool == pool_ptr ? static_cast<uint32_t>(origin / B) : 0;
+	// A frozen parent of length origin maps at least ceil(origin/B) pages; checked, as the SPX1 hint path checks
+	// before it reads a handle's table.
+	if (share > superslm::kv_pages::HolderMapped(parent->kv)) return SSLM_RESTORE_PARENT_MISMATCH;
 	const uint8_t* rows = f.rows;
 	return RestorePrefixPages(model, pool_ptr, parent, share, f.header, f.schema_index, f.residual,
 	                          [&](superslm::kv_pages::PageHolder* holder, int64_t first_private) {

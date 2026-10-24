@@ -1105,7 +1105,7 @@ hash, or a name hashing to zero, so a saved schema hash resolves uniquely.
 
 `SSLM_HAS_PREFIX_DELTA_ABI` marks `sslm_prefix_save_delta`, `sslm_prefix_assemble`, and
 `sslm_prefix_restore`'s reading of `SPD1`. A nested prefix's full `SPX1` repeats every row of its
-parent chain; its `SPD1` delta stores only its own rows. Save, restore and the assemble each use the
+parent chain; its `SPD1` delta stores only its own rows. The delta save and the assemble use the
 two-call buffer convention above.
 
 `sslm_prefix_save_delta` writes a frozen nested prefix (origin 1 or more) as `SPD1`: the same header
@@ -1116,8 +1116,8 @@ or a null handle is refused with `SSLM_INVALID_ARGUMENT`. No parent handle is ne
 restored privately saves the same delta as the one built with `sslm_prefix_begin_from`.
 
 `sslm_prefix_restore` given an `SPD1` requires its parent as `parent_or_null`. The delta's fields are
-checked first, in `SPX1`'s order through the schema check and then its own domain checks (origin, geometry,
-size, token, mantissa), with the same statuses. Then the parent must be frozen, of the same
+checked first, in `SPX1`'s order through the schema check and then its own domain checks (length within the
+context cap, origin, geometry, size, token, mantissa), with the same statuses. Then the parent must be frozen, of the same
 model, hold exactly `origin` positions, and its rows `[0, origin)` must hash to the parent rows digest;
 otherwise the restore returns `SSLM_RESTORE_PARENT_MISMATCH` (ordinal 31) with nothing drawn. In the
 restore pool the parent's leading `floor(origin / B)` pages are shared; a parent in another pool of
@@ -1133,8 +1133,9 @@ null or malformed input, or an `SPD1` given as the parent, is `SSLM_INVALID_ARGU
 chain from its root, one level at a time). Two well-formed blobs that do not pair (the parent's
 length is not the delta's origin; backend, producer, adapter, model or precision differ; or the
 parent's rows do not hash to the parent rows digest) return `SSLM_RESTORE_PARENT_MISMATCH`. The output must
-overlap neither input. With no model, assemble cannot check the delta's geometry fields against one, so a cook
-or load check should restore the result (or compare the geometry with the model) rather than trust assemble alone.
+overlap neither input. With no model, assemble cannot check the delta's geometry fields (bytes 216 to 227)
+against one, and the assembled `SPX1` carries no geometry, so restoring it cannot tell either. A check that must
+reject an edited delta compares those bytes with the model's, or restores the `SPD1` itself onto its parent.
 
 ### Schema-constrained generation
 

@@ -5,7 +5,8 @@ following the word "ordinal" ("ordinals 24 to 29" is a range, not a statement, a
 pairs with the one backticked status name of the SSLM_STATUS_ENUM_LIST X-macro on its own line; a line
 with no such name pairs with the first one on the next line of the same paragraph; with none on either
 line the statement is unpaired and the check refuses. Each stated integer must equal the name's
-position in the X-macro. SSLM_RESTORE_PRODUCER_MISMATCH must be stated, at 30. A name with
+position in the X-macro. SSLM_RESTORE_PRODUCER_MISMATCH must be stated, at 30, and (1.18.0)
+SSLM_RESTORE_PARENT_MISMATCH at 31. A name with
 fewer statements than its recorded floor refuses, so a statement reworded past the locator drops out
 loudly instead of letting the check pass on fewer statements.
 
