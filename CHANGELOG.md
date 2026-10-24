@@ -2,6 +2,20 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
+## [Unreleased]
+
+Delta prefix saves (plan superslm-prefix-delta-1p18). Not released; version, measured numbers and the release note
+come at release.
+
+- **`sslm_prefix_save_delta`.** A frozen nested prefix saves as `SPD1`: its header, residual and only its own rows
+  `[origin, length)`, plus the SHA-256 of its rows `[0, origin)`. At 0.5B geometry a child of 200 tokens on a
+  1,000-token parent is 1.23 MB instead of 7.37 MB.
+- **`sslm_prefix_restore` reads `SPD1`** onto a required live parent (frozen, same model, length = the delta's origin,
+  rows matching the digest), sharing the parent's full pages in its pool. New status `SSLM_RESTORE_PARENT_MISMATCH`
+  (ordinal 31). `SPX1` restores are unchanged.
+- **`sslm_prefix_assemble`** builds a child's full `SPX1` from its parent's `SPX1` and its `SPD1` with no model.
+- `SSLM_HAS_PREFIX_DELTA_ABI` marks the three. Two C verbs are appended.
+
 ## [1.15.0] - 2026-10-23
 
 Faster schema-bound decode on the CPU (schema fast-decode plan rev 1.3.6, slices M1, J1, TF and J1-X).

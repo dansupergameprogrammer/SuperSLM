@@ -186,6 +186,24 @@ SUPERSLM_API sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t*
 SUPERSLM_API sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool, const void* buf,
                                               size_t n, sslm_prefix parent_or_null, sslm_prefix* out,
                                               uint32_t* out_shared_pages);
+/* SuperSLM 1.18.0, delta saves. Save a frozen NESTED prefix (origin >= 1) as SPD1 bytes: its header,
+ * its residual and only its own rows [origin, L), plus the SHA-256 of its rows [0, origin) (the parent
+ * rows digest, equal to the SHA-256 of a parent SPX1's rows section). Size reporting and refusals are
+ * sslm_prefix_save's; a root prefix (origin 0) is SSLM_INVALID_ARGUMENT. No parent handle is needed.
+ * sslm_prefix_restore reads SPD1 with a REQUIRED parent: frozen, of `model`, holding exactly origin
+ * positions, rows hashing to the parent rows digest, checked after every field of the delta and before
+ * any draw; any other parent (null included) is SSLM_RESTORE_PARENT_MISMATCH. In `*pool` the parent's
+ * leading floor(origin/B) pages are shared; a parent in another pool of the model is copied from and
+ * shares nothing. The result saves the same SPX1 bytes as the prefix the delta was saved from.
+ * Releasing the parent while restore reads it is caller undefined behavior; it may be released after. */
+SUPERSLM_API sslm_status sslm_prefix_save_delta(sslm_prefix prefix, void* buf, size_t* n);
+/* The child's full SPX1 from its parent's SPX1 and its SPD1, with no model: byte-equal to the child's
+ * sslm_prefix_save when both came from this engine. SSLM_INVALID_ARGUMENT for a null or malformed
+ * input (an SPD1 parent included: assemble a chain from its root); SSLM_RESTORE_PARENT_MISMATCH when
+ * both are well formed but the parent's length, backend, producer, model, precision or rows are not the
+ * delta's; a null or short `out` reports the size through *out_n with SSLM_BUFFER_TOO_SMALL. */
+SUPERSLM_API sslm_status sslm_prefix_assemble(const void* parent, size_t parent_n, const void* delta,
+                                              size_t delta_n, void* out, size_t* out_n);
 /* Page counts of a pool (either create verb): page_count, free_pages, shared_pages and B. The
  * caller sets out->struct_size. A diagnostic for sizing admissions, read under the pool lock. */
 SUPERSLM_API sslm_status sslm_kv_pool_stats(sslm_kv_pool pool, sslm_kv_pool_stats_out* out);

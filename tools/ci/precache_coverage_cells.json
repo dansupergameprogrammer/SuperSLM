@@ -1,5 +1,5 @@
 {
-  "_comment": "The precache CPU cells the branch-coverage job runs (tools/ci/run_precache_suites.py), 2026-10-23 at claude/sfd-1p15: the cells that pass alone, by exact id, on Linux with only tools/gen_paged_kv_fixture.py's four generated fixtures, and take under 15 s each under clang-18 coverage instrumentation (about 75 s for the whole list on a loaded 4-core machine). Left out: cells that read box artifacts (real models, E0 artifacts, references, GPU captures, cross-compiler blobs) or the synthetic 0.5B/1.5B models, which no cloud generator makes (several of those pass in a batch only because an earlier cell's failed synthetic load is cached, so each listed cell was run alone); the 4.x grids and the 32k cells; and the slow cells 2.6/E3, 5.10/E3 and 1.2/E3. A cell is added only once it passes alone in the cloud and is fast.",
+  "_comment": "The precache CPU cells the branch-coverage job runs (tools/ci/run_precache_suites.py), 2026-10-23 at claude/sfd-1p15: the cells that pass alone, by exact id, on Linux with only tools/gen_paged_kv_fixture.py's four generated fixtures, and take under 15 s each under clang-18 coverage instrumentation (about 75 s for the whole list on a loaded 4-core machine). Left out: cells that read box artifacts (real models, E0 artifacts, references, GPU captures, cross-compiler blobs) or the synthetic 0.5B/1.5B models, which no cloud generator makes (several of those pass in a batch only because an earlier cell's failed synthetic load is cached, so each listed cell was run alone); the 4.x grids and the 32k cells; and the slow cells 2.6/E3, 5.10/E3 and 1.2/E3. A cell is added only once it passes alone in the cloud and is fast. 2026-10-24 (delta prefix saves): the E6 cells, all cloud-only on the generated fixtures.",
   "e1": [
     "8.5/E2",
     "8.6/E2",
@@ -35,7 +35,24 @@
     "5.11/E3",
     "7.4/E3",
     "3.2/E3",
-    "6.6/E4"
+    "6.6/E4",
+    "D1/E6",
+    "D2/E6",
+    "D3/E6",
+    "D3b/E6",
+    "D4/E6",
+    "D5/E6",
+    "D5b/E6",
+    "D6/E6",
+    "D7/E6",
+    "D7b/E6",
+    "D8/E6",
+    "D9/E6",
+    "D10/E6",
+    "D11/E6",
+    "D11b/E6",
+    "D13/E6",
+    "D16/E6"
   ],
   "unpinned": [
     "8.13/E2",

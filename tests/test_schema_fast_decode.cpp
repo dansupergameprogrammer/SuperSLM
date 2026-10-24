@@ -3757,7 +3757,8 @@ void Cell_9_2() {
 #define SFD_COUNT_STATUS(name) ++n;
 		SSLM_STATUS_ENUM_LIST(SFD_COUNT_STATUS)
 #undef SFD_COUNT_STATUS
-		CHECK_MSG(n == 31, "[9.2] the status list has %d entries; main plus precached prefixes has 31", n);
+		// 1.18.0 appends SSLM_RESTORE_PARENT_MISMATCH (delta prefix saves): 32. Schema fast-decode still adds none.
+		CHECK_MSG(n == 32, "[9.2] the status list has %d entries; main plus precached prefixes and delta saves has 32", n);
 	}
 	CHECK_MSG(static_cast<int>(SSLM_RESTORE_PRODUCER_MISMATCH) == 30, "[9.2] the precache status ordinal moved");
 	CHECK_MSG(static_cast<int>(SSLM_KV_BUDGET_EXCEEDED) == 29 && static_cast<int>(SSLM_ALLOCATION_FAILED) == 25 &&

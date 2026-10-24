@@ -107,4 +107,62 @@ struct Fields {
 // Validates the n-byte blob in the order above and, on kOk, fills *out. Reads nothing else and changes nothing.
 Verdict Read(const uint8_t* blob, size_t n, const Expect& expect, Fields* out);
 
+// ---- 'SPD1', the delta of a nested prefix (SuperSLM 1.18.0) -----------------------------------------------------
+//
+// Offsets 0..183 are SPX1's, written by WriteHeader, with the magic 'SPD1'; then
+//
+//   184 parent rows digest (32): SHA-256 of rows [0, origin) of every run, in SPX1's row order, which is the
+//       SHA-256 of a parent SPX1's rows section when that parent's length is the origin
+//   216 runs   220 head_dim   224 hidden_size   228 reserved (0)
+//
+// then the residual (hidden_size bytes), then rows [origin, L) of every run, [run][pos origin..L)[d]. The origin is
+// at least 1: a root prefix has no delta.
+
+inline constexpr size_t kDeltaHeaderBytes = 232;
+
+// The delta size: 232 + hidden_size + (length - origin) * runs * head_dim, by checked arithmetic. False on
+// overflow or when origin is outside [1, length].
+bool DeltaSize(size_t runs, size_t head_dim, size_t hidden_size, uint64_t length, uint64_t origin,
+               size_t* out) noexcept;
+
+inline uint8_t* DeltaResidual(uint8_t* blob) noexcept { return blob + kDeltaHeaderBytes; }
+inline uint8_t* DeltaRows(uint8_t* blob, size_t hidden_size) noexcept {
+	return blob + kDeltaHeaderBytes + hidden_size;
+}
+
+// Writes the 232-byte delta header: WriteHeader's fields, the magic 'SPD1', the parent rows digest and the
+// geometry. Seal it with Seal after the residual and the rows.
+void WriteDeltaHeader(uint8_t* blob, const Header& h, const uint8_t* parent_rows_digest, uint32_t runs,
+                      uint32_t head_dim, uint32_t hidden_size) noexcept;
+
+// True when the n bytes start with 'SPD1' (and n >= 4). Decides which reader a restore runs.
+bool IsDelta(const uint8_t* blob, size_t n) noexcept;
+
+struct DeltaFields {
+	Header header;
+	int32_t schema_index = -1;
+	std::array<uint8_t, 32> parent_rows_digest{};
+	const uint8_t* residual = nullptr;
+	const uint8_t* rows = nullptr;  // rows [origin, L) of every run, (L - origin) positions per run
+};
+
+// Validates an n-byte delta in Read's order, with the delta's domains: the size checks use 232, L within the cap,
+// origin within [1, L], runs, head_dim and hidden_size equal to the expectation, reserved 0, n equal to
+// DeltaSize, then the token and m as Read. On kOk fills *out. Reads nothing else and changes nothing.
+Verdict ReadDelta(const uint8_t* blob, size_t n, const Expect& expect, DeltaFields* out);
+
+// The model-free assemble's outcomes.
+enum class AssembleVerdict {
+	kOk,
+	kMalformed,       // either input fails its envelope (size, magic, digest, domains), or the parent is an SPD1
+	kParentMismatch,  // both well formed, but the parent's length, identity fields or rows digest are not the delta's
+	kBufferTooSmall,  // *out_n receives the size
+};
+
+// The child's full SPX1 from its parent's SPX1 and its own SPD1 (no model): the delta's header fields under the
+// magic 'SPX1', the delta's residual, and every run's parent rows [0, origin) then delta rows [origin, L), sealed.
+// A null or short `out` (with a valid `out_n`) reports the size. Writes `out` only on kOk.
+AssembleVerdict Assemble(const uint8_t* parent, size_t parent_n, const uint8_t* delta, size_t delta_n, uint8_t* out,
+                         size_t* out_n);
+
 }  // namespace superslm::spx1

@@ -19,9 +19,11 @@ import sys
 
 # Recorded floors (plan 7.17): the statements counted at the anchor, plus the new status once.
 # Rev 1.18.4 (G11): the new status's floor is 2, its paired sentence and its own-line statement.
-FLOORS = {"SSLM_KV_BUDGET_EXCEEDED": 2, "SSLM_RESTORE_PRODUCER_MISMATCH": 2}
+FLOORS = {"SSLM_KV_BUDGET_EXCEEDED": 2, "SSLM_RESTORE_PRODUCER_MISMATCH": 2,
+          "SSLM_RESTORE_PARENT_MISMATCH": 2}
 # The new status and the ordinal the release states it at.
-REQUIRED = {"SSLM_RESTORE_PRODUCER_MISMATCH": 30}
+# 1.18.0 (delta prefix saves) appends SSLM_RESTORE_PARENT_MISMATCH at 31.
+REQUIRED = {"SSLM_RESTORE_PRODUCER_MISMATCH": 30, "SSLM_RESTORE_PARENT_MISMATCH": 31}
 
 _ORDINAL = re.compile(r"\bordinal\s+(\d+)\b", re.I)
 _BACKTICKED = re.compile(r"`(SSLM_[A-Z0-9_]+)`")

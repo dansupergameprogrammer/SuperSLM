@@ -183,7 +183,11 @@ typedef struct sslm_detok_state {
      * sees this status. Reset or adopt to continue. Appended at the END: every published ordinal
      * stays stable. */ \
     X(SSLM_KV_BUDGET_EXCEEDED) /* 29 */ \
-    X(SSLM_RESTORE_PRODUCER_MISMATCH) /* 30 */
+    X(SSLM_RESTORE_PRODUCER_MISMATCH) /* 30 */ \
+    /* 1.18.0: an SPD1 delta's parent cannot serve it (null, unfrozen, another model, another length, or rows that \
+     * do not hash to the delta's parent rows digest), or sslm_prefix_assemble's parent is not the delta's. \
+     * Appended at the END: every published ordinal stays stable. */ \
+    X(SSLM_RESTORE_PARENT_MISMATCH) /* 31 */
 
 typedef enum sslm_status {
 #define SSLM_STATUS_ENUM_VALUE_(name) name,
@@ -300,6 +304,8 @@ typedef struct sslm_stats_out {
  * SSLM_KV_BUDGET_EXCEEDED, so a consumer can test for the whole surface at once. */
 #define SSLM_HAS_PAGED_KV_ABI 1
 #define SSLM_HAS_PREFIX_SAVE_ABI 1
+/* 1.18.0: sslm_prefix_save_delta, sslm_prefix_assemble, and sslm_prefix_restore of an SPD1 delta. */
+#define SSLM_HAS_PREFIX_DELTA_ABI 1
 
 /* sslm_kv_pool_stats' output. The caller sets struct_size = sizeof(sslm_kv_pool_stats_out); any
  * other value is SSLM_INVALID_ARGUMENT. shared_pages is the number of distinct pages that at least

@@ -498,7 +498,9 @@ void Chain8() {
     if (!Restored(fx, &cp.pool, d2, r1, cold.h, &r2, &shared)) return;
     PKV_CHECK_EQ(shared, uint32_t(833 / fx.B()));
     PKV_CHECK_MSG(Save(r2) == f2, "D8 cold chain restore saves different bytes");
-    TwinTokens(fx, &cp.pool, r2, c2, 16);
+    // c2 lives in the build pool and r2 in the cold one: each decodes from its own pool.
+    const auto built = Decode(fx, &pool.pool, c2, true, 16), cold_tokens = Decode(fx, &cp.pool, r2, true, 16);
+    PKV_CHECK_MSG(built.size() == 16 && built == cold_tokens, "D8 cold chain decodes other tokens");
 }
 PKV_CELL("D8/E6", "E6", Chain8);
 
@@ -619,5 +621,317 @@ void Empty13() {
     PKV_CHECK_MSG(full == f.child_full, "D13 empty child assemble");
 }
 PKV_CELL("D13/E6", "E6", Empty13);
+
+// ---- Rev 2 legs (coverage audit round 1) ------------------------------------------------------------
+
+// A contiguous pool (B = cap), the only other page size a pool of one model can have.
+struct ContiguousPool {
+    AlignedBuf mem;
+    sslm_kv_pool pool = nullptr;
+    sslm_status status = SSLM_INVALID_ARGUMENT;
+    ContiguousPool(sslm_model model, uint32_t blocks) {
+        mem.Reset(sslm_kv_pool_contiguous_size(model, blocks));
+        status = sslm_kv_pool_create_contiguous(model, mem.p, mem.n, blocks, &pool);
+    }
+    ~ContiguousPool() { if (pool) sslm_kv_pool_destroy(pool); }
+};
+
+// The digest of a prefix's rows [0, upto), from its SPX1 save, independently of the engine's digest code.
+std::array<uint8_t, 32> PrefixRowsDigest(const Fixture& fx, sslm_prefix p, int64_t upto) {
+    const auto full = Save(p);
+    const size_t D = fx.geo.head_dim, hidden = ArtifactHiddenSize(fx);
+    const int64_t L = full.size() >= kHeader ? static_cast<int64_t>(Le64(full, 112)) : 0;
+    std::vector<uint8_t> rows;
+    for (size_t r = 0; r < Runs(fx) && upto <= L; ++r) {
+        const uint8_t* run = full.data() + kHeader + hidden + r * size_t(L) * D;
+        rows.insert(rows.end(), run, run + size_t(upto) * D);
+    }
+    return Sha32(rows.data(), rows.size());
+}
+
+// D3b: across page sizes, both directions: paged parent -> contiguous child, contiguous parent -> paged child.
+void ContiguousPools3b() {
+    const Fixture& fx = GetFixture("pkv_def");
+    if (!fx.ok) return;
+    Family f(fx, 1007, 300);
+    if (!f.ok) return;
+    ContiguousPool cp(fx.model, 6);
+    Status(cp.status, SSLM_OK, "D3b contiguous pool");
+    if (cp.status != SSLM_OK) return;
+    Handles ch;
+    sslm_prefix out = nullptr;
+    uint32_t shared = UINT32_MAX;
+    if (Restored(fx, &cp.pool, f.delta, f.parent, ch, &out, &shared)) {  // paged parent, contiguous child
+        PKV_CHECK_EQ(shared, 0u);
+        PKV_CHECK_MSG(Save(out) == f.child_full, "D3b paged parent into a contiguous pool: bytes differ");
+    }
+    sslm_prefix cparent = nullptr;  // contiguous parent, paged child
+    if (Restored(fx, &cp.pool, f.parent_full, nullptr, ch, &cparent)) {
+        sslm_prefix back = nullptr;
+        shared = UINT32_MAX;
+        if (Restored(fx, &f.pool->pool, f.delta, cparent, f.sc.h, &back, &shared)) {
+            PKV_CHECK_EQ(shared, 0u);
+            PKV_CHECK_MSG(Save(back) == f.child_full, "D3b contiguous parent into a paged pool: bytes differ");
+        }
+        // And the same contiguous pool for both: one page each, nothing shared.
+        sslm_prefix both = nullptr;
+        shared = UINT32_MAX;
+        if (Restored(fx, &cp.pool, f.delta, cparent, ch, &both, &shared)) {
+            PKV_CHECK_EQ(shared, 0u);
+            PKV_CHECK_MSG(Save(both) == f.child_full, "D3b contiguous parent and child: bytes differ");
+        }
+    }
+}
+PKV_CELL("D3b/E6", "E6", ContiguousPools3b);
+
+// D5b: each parent check on its own (rows [0, O) still hash to the digest), and the two order legs.
+void ParentChecksAlone5b() {
+    const Fixture& fx = GetFixture("pkv_def");
+    if (!fx.ok) return;
+    Family f(fx, 1000);
+    if (!f.ok) return;
+    std::array<uint8_t, 32> want{};
+    std::copy(f.delta.begin() + 184, f.delta.begin() + 216, want.begin());
+    auto refused = [&](const char* what, sslm_prefix parent) {
+        const uint32_t free_before = FreePages(f.pool->pool);
+        sslm_prefix out = nullptr;
+        Status(Restore(fx, &f.pool->pool, f.delta, parent, &out), PC_RESTORE_PARENT_MISMATCH, what);
+        PKV_CHECK_MSG(out == nullptr, "%s: *out not cleared", what);
+        PKV_CHECK_EQ(FreePages(f.pool->pool), free_before);
+    };
+    // O + 1: the same stream plus one token; its rows [0, O) are the parent's.
+    sslm_prefix longer = Root(fx, &f.pool->pool, f.sc.h, 1001, 61);
+    if (longer) {
+        PKV_CHECK_MSG(PrefixRowsDigest(fx, longer, 1000) == want, "D5b precondition: the O+1 parent's rows differ");
+        refused("D5b length O+1 alone", longer);
+    }
+    // Unfrozen: the same stream, not frozen (its rows are the parent's; it cannot be saved, so this is by stream).
+    sslm_prefix open = nullptr;
+    Status(sslm_prefix_begin_budgeted(fx.model, &f.pool->pool, 1000, &open), SSLM_OK, "D5b unfrozen begin");
+    if (open) {
+        f.sc.h.prefixes.push_back(open);
+        Status(PrefixPrefillAll(fx.model, open, Stream(61, 1000, fx.vocab), 64), SSLM_OK, "D5b unfrozen prefill");
+        refused("D5b unfrozen alone", open);
+    }
+    // Another model handle: a second mapping of the same pkv_def bytes, with the same rows.
+    sslm_model second = nullptr;
+    AlignedBuf copy(fx.size);
+    std::memcpy(copy.p, fx.bytes.p, fx.size);
+    Status(sslm_model_map(copy.p, fx.size, &second), SSLM_OK, "D5b second mapping");
+    if (second) {
+        if (fx.pinned > 0) Status(KvPagesTestPinPagePositions(second, fx.pinned), SSLM_OK, "D5b pin second mapping");
+        Fixture twin;  // a non-owning view for the helpers; released below
+        twin.model = second;
+        twin.geo = fx.geo;
+        twin.vocab = fx.vocab;
+        twin.pinned = fx.pinned;
+        twin.ok = true;
+        {
+            PagePool tp(second, uint32_t(2 * fx.CapPages()));
+            Handles th;
+            sslm_prefix other = Root(twin, &tp.pool, th, 1000, 61);
+            if (other) {
+                PKV_CHECK_MSG(Save(other).size() == f.parent_full.size() &&
+                              PrefixRowsDigest(fx, other, 1000) == want,
+                              "D5b precondition: the second mapping's rows differ");
+                refused("D5b another model handle with the same rows", other);
+            }
+        }
+        twin.model = nullptr;
+        sslm_model_unmap(second);
+    }
+    // Order: a reader refusal outranks a parent refusal; a parent refusal outranks exhaustion.
+    {
+        auto bad = f.delta;
+        bad[60] ^= 1;
+        Digest(bad);
+        sslm_prefix out = nullptr;
+        Status(Restore(fx, &f.pool->pool, bad, nullptr, &out), SSLM_RESTORE_MODEL_MISMATCH,
+               "D5b bad model hash with a null parent");
+    }
+    {
+        Scene sc;
+        const uint32_t parent_pages = uint32_t((1000 + fx.B() - 1) / fx.B());
+        PagePool& pool = sc.AddPool(fx.model, parent_pages + 2 * parent_pages);
+        sslm_prefix right = nullptr, wrong = nullptr;
+        if (Restored(fx, &pool.pool, f.parent_full, nullptr, sc.h, &right) &&
+            (wrong = Root(fx, &pool.pool, sc.h, 1000, 99)) != nullptr) {
+            // Leave too few pages for the child: draw them away with a legacy-free budget prefix.
+            sslm_prefix filler = nullptr;
+            const uint32_t free_now = FreePages(pool.pool);
+            if (free_now > 1) {
+                Status(sslm_prefix_begin_budgeted(fx.model, &pool.pool, int32_t((free_now - 2) * fx.B()), &filler),
+                       SSLM_OK, "D5b filler");
+                if (filler) sc.h.prefixes.push_back(filler);
+            }
+            sslm_prefix out = nullptr;
+            Status(Restore(fx, &pool.pool, f.delta, wrong, &out), PC_RESTORE_PARENT_MISMATCH,
+                   "D5b wrong parent with too few pages");
+            Status(Restore(fx, &pool.pool, f.delta, right, &out), SSLM_KV_POOL_EXHAUSTED,
+                   "D5b right parent with too few pages");
+        }
+    }
+}
+PKV_CELL("D5b/E6", "E6", ParentChecksAlone5b);
+
+// D7b: assemble keeps the delta's own header (forged version, backend 1, distinct counts) and refuses by number.
+void AssembleFields7b() {
+    const Fixture& fx = GetFixture("pkv_def");
+    if (!fx.ok) return;
+    Family f(fx, 1000);
+    if (!f.ok) return;
+    std::vector<uint8_t> out;
+    {   // engine 1.17.0 on both, resealed
+        auto p = f.parent_full, d = f.delta, c = f.child_full;
+        for (auto* b : {&p, &d, &c}) { PutLe32(*b, 12, 17); PutLe32(*b, 16, 0); Digest(*b); }
+        Status(Assemble(p, d, &out), SSLM_OK, "D7b forged 1.17.0");
+        PKV_CHECK_MSG(out == c, "D7b assemble did not keep the delta's engine version");
+    }
+    {   // backend 1 on both
+        auto p = f.parent_full, d = f.delta, c = f.child_full;
+        for (auto* b : {&p, &d, &c}) { PutLe32(*b, 4, 1); Digest(*b); }
+        Status(Assemble(p, d, &out), SSLM_OK, "D7b forged GPU backend");
+        PKV_CHECK_MSG(out == c, "D7b assemble did not keep backend 1");
+    }
+    {   // distinct state fields in the delta: through assemble, and through restore -> save
+        auto d = f.delta, c = f.child_full;
+        const uint64_t counts[5] = {11, 13, 17, 19, 23};
+        for (auto* b : {&d, &c}) {
+            for (int i = 0; i < 5; ++i) PutLe64(*b, 144 + 8 * i, counts[i]);
+            PutLe64(*b, 128, 12345);
+            PutLe64(*b, 136, uint64_t(-7));
+            PutLe32(*b, 108, 3);
+            Digest(*b);
+        }
+        Status(Assemble(f.parent_full, d, &out), SSLM_OK, "D7b distinct fields");
+        PKV_CHECK_MSG(out == c, "D7b assemble did not keep the delta's state fields");
+        sslm_prefix r = nullptr;
+        if (Restored(fx, &f.pool->pool, d, f.parent, f.sc.h, &r))
+            PKV_CHECK_MSG(Save(r) == c, "D7b restore did not keep the delta's state fields");
+    }
+    struct Leg { const char* what; size_t off; bool wide; uint64_t value; sslm_status want; };
+    for (const Leg& x : {Leg{"reserved", 228, false, 1, SSLM_INVALID_ARGUMENT},
+                         Leg{"origin 0", 120, true, 0, SSLM_INVALID_ARGUMENT},
+                         Leg{"origin past L", 120, true, 1201, SSLM_INVALID_ARGUMENT},
+                         Leg{"runs 2^16", 216, false, 65536, SSLM_INVALID_ARGUMENT},
+                         Leg{"length 2^40", 112, true, uint64_t(1) << 40, SSLM_INVALID_ARGUMENT}}) {
+        auto d = f.delta;
+        if (x.wide) PutLe64(d, x.off, x.value); else PutLe32(d, x.off, uint32_t(x.value));
+        if (std::strcmp(x.what, "runs 2^16") == 0) PutLe32(d, 220, 65536);
+        Digest(d);
+        Status(Assemble(f.parent_full, d, &out), x.want, x.what);
+    }
+    {   // a parent whose size is not its length's under the delta's geometry
+        auto p = f.parent_full;
+        p.push_back(0);
+        Digest(p);
+        Status(Assemble(p, f.delta, &out), SSLM_INVALID_ARGUMENT, "D7b parent of another size");
+        auto m = f.parent_full;
+        std::memcpy(m.data(), "SPX9", 4);
+        Digest(m);
+        Status(Assemble(m, f.delta, &out), SSLM_INVALID_ARGUMENT, "D7b parent of another magic");
+    }
+    {   // a size query on a mismatched pair reports the mismatch
+        const auto other = RootBlob(fx, 999);
+        size_t n = 0;
+        if (RequireBlob(other, "D7b"))
+            Status(sslm_prefix_assemble(other.data(), other.size(), f.delta.data(), f.delta.size(), nullptr, &n),
+                   PC_RESTORE_PARENT_MISMATCH, "D7b size query on a mismatched pair");
+    }
+}
+PKV_CELL("D7b/E6", "E6", AssembleFields7b);
+
+// D11b: the digest cache is only the parent use: save_delta then restore onto the same handle, the reverse, and
+// both at once.
+void CacheUses11b() {
+    const Fixture& fx = GetFixture("pkv_def");
+    if (!fx.ok) return;
+    for (bool save_first : {true, false}) {
+        Scene sc;
+        PagePool& pool = sc.AddPool(fx.model, uint32_t(6 * fx.CapPages()));
+        sslm_prefix root = Root(fx, &pool.pool, sc.h, 500, 61);
+        sslm_prefix c1 = root ? Child(fx, root, sc.h, 500, 63) : nullptr;
+        sslm_prefix c2 = c1 ? Child(fx, c1, sc.h, 200, 64) : nullptr;
+        if (!c2) return;
+        const auto d2 = SaveDelta(c2), f2 = Save(c2);
+        std::vector<uint8_t> d1;
+        if (save_first) d1 = SaveDelta(c1);
+        sslm_prefix out = nullptr;
+        if (Restored(fx, &pool.pool, d2, c1, sc.h, &out))
+            PKV_CHECK_MSG(Save(out) == f2, "D11b restore onto c1 (save %s)", save_first ? "first" : "after");
+        if (!save_first) d1 = SaveDelta(c1);
+        PKV_CHECK_MSG(d1 == ExpectedDelta(fx, Save(c1)), "D11b c1's delta changed by the cache (save %s)",
+                      save_first ? "first" : "after");
+    }
+    Scene sc;
+    PagePool& pool = sc.AddPool(fx.model, uint32_t(8 * fx.CapPages()));
+    sslm_prefix root = Root(fx, &pool.pool, sc.h, 500, 61);
+    sslm_prefix c1 = root ? Child(fx, root, sc.h, 500, 63) : nullptr;
+    sslm_prefix c2 = c1 ? Child(fx, c1, sc.h, 200, 64) : nullptr;
+    if (!c2) return;
+    const auto d2 = SaveDelta(c2), f2 = Save(c2), want1 = ExpectedDelta(fx, Save(c1));
+    std::vector<std::vector<uint8_t>> saved(4);
+    std::vector<sslm_prefix> outs(4, nullptr);
+    std::vector<sslm_status> st(4, SSLM_INVALID_ARGUMENT);
+    std::atomic<int> go{0};
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back([&, i] {
+            while (go.load() == 0) {}
+            size_t n = want1.size();
+            saved[i].assign(n, 0);
+            if (sslm_prefix_save_delta(c1, saved[i].data(), &n) != SSLM_OK) saved[i].clear();
+        });
+        threads.emplace_back([&, i] {
+            while (go.load() == 0) {}
+            st[i] = sslm_prefix_restore(fx.model, &pool.pool, d2.data(), d2.size(), c1, &outs[i], nullptr);
+        });
+    }
+    go.store(1);
+    for (auto& t : threads) t.join();
+    for (int i = 0; i < 4; ++i) {
+        PKV_CHECK_MSG(saved[i] == want1, "D11b concurrent save_delta %d differs", i);
+        Status(st[i], SSLM_OK, "D11b concurrent restore");
+        if (outs[i]) {
+            sc.h.prefixes.push_back(outs[i]);
+            PKV_CHECK_MSG(Save(outs[i]) == f2, "D11b concurrent restore %d differs", i);
+        }
+    }
+}
+PKV_CELL("D11b/E6", "E6", CacheUses11b);
+
+// D16: the parent may be released after the restore.
+void ParentRelease16() {
+    const Fixture& fx = GetFixture("pkv_def");
+    if (!fx.ok) return;
+    PagePool pool(fx.model, uint32_t(3 * fx.CapPages()));
+    const uint32_t start = FreePages(pool.pool);
+    std::vector<uint8_t> parent_full, delta, child_full;
+    {
+        Handles h;
+        sslm_prefix parent = Root(fx, &pool.pool, h, 1000, 61);
+        sslm_prefix child = parent ? Child(fx, parent, h, 200) : nullptr;
+        if (!child) return;
+        parent_full = Save(parent);
+        delta = SaveDelta(child);
+        child_full = Save(child);
+    }
+    PKV_CHECK_EQ(FreePages(pool.pool), start);
+    sslm_prefix parent = nullptr, out = nullptr;
+    Handles h;
+    if (!Restored(fx, &pool.pool, parent_full, nullptr, h, &parent)) return;
+    if (Restore(fx, &pool.pool, delta, parent, &out) != SSLM_OK || !out) {
+        PKV_CHECK_MSG(false, "D16 restore refused");
+        return;
+    }
+    const auto before = Decode(fx, &pool.pool, out, true, 16);
+    h.prefixes.clear();
+    Status(sslm_prefix_release(parent), SSLM_OK, "D16 release parent");
+    PKV_CHECK_MSG(Save(out) == child_full, "D16 child changed after its parent's release");
+    PKV_CHECK_MSG(Decode(fx, &pool.pool, out, true, 16) == before, "D16 decode changed after the parent's release");
+    Status(sslm_prefix_release(out), SSLM_OK, "D16 release child");
+    PKV_CHECK_EQ(FreePages(pool.pool), start);
+}
+PKV_CELL("D16/E6", "E6", ParentRelease16);
 
 }  // namespace

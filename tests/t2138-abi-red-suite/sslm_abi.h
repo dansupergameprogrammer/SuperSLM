@@ -176,6 +176,7 @@ typedef enum sslm_status {
      * entry for the budget-holder limit contract. */
     SSLM_KV_BUDGET_EXCEEDED,
     SSLM_RESTORE_PRODUCER_MISMATCH,
+    SSLM_RESTORE_PARENT_MISMATCH,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, F1) -- the enum's own final member, no
      * explicit value, auto-valuing to one past this header's own last explicit member and moving

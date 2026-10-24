@@ -1101,6 +1101,38 @@ one version line may accept one another's blobs, outside that fidelity promise.
 Model mapping refuses two schema names with the same nonzero FNV-1a 64-bit
 hash, or a name hashing to zero, so a saved schema hash resolves uniquely.
 
+### Delta prefix saves (1.18.0 CPU ABI)
+
+`SSLM_HAS_PREFIX_DELTA_ABI` marks `sslm_prefix_save_delta`, `sslm_prefix_assemble`, and
+`sslm_prefix_restore`'s reading of `SPD1`. A nested prefix's full `SPX1` repeats every row of its
+parent chain; its `SPD1` delta stores only its own rows. Save, restore and the assemble each use the
+two-call buffer convention above.
+
+`sslm_prefix_save_delta` writes a frozen nested prefix (origin 1 or more) as `SPD1`: the same header
+fields as its `SPX1`, the SHA-256 of its rows `[0, origin)` (the *parent rows digest*, which equals the
+SHA-256 of the parent `SPX1`'s rows section), its geometry, its residual and its rows `[origin, length)`.
+Its size is `232 + hidden_size + (length - origin) * bytes_per_token`. A root prefix, an unfrozen one,
+or a null handle is refused with `SSLM_INVALID_ARGUMENT`. No parent handle is needed: a nested prefix
+restored privately saves the same delta as the one built with `sslm_prefix_begin_from`.
+
+`sslm_prefix_restore` given an `SPD1` requires its parent as `parent_or_null`. The delta's fields are
+checked first, in `SPX1`'s order, with the same statuses. Then the parent must be frozen, of the same
+model, hold exactly `origin` positions, and its rows `[0, origin)` must hash to the parent rows digest;
+otherwise the restore returns `SSLM_RESTORE_PARENT_MISMATCH` (ordinal 31) with nothing drawn. In the
+restore pool the parent's leading `floor(origin / B)` pages are shared; a parent in another pool of
+the same model is copied from and shares nothing. The rest of the parent's rows are copied from it
+and the delta's rows from the blob. The result saves the same `SPX1` bytes as the prefix the delta
+was saved from, and its adopters emit the same tokens. A frozen parent's rows digest is computed once,
+on first use, and kept. Releasing the parent while restore reads it is caller undefined behavior; it
+may be released afterwards. `sslm_seq_restore` refuses an `SPD1` as any foreign blob.
+
+`sslm_prefix_assemble` needs no model: from a parent's `SPX1` and a child's `SPD1` it writes the
+child's full `SPX1`, byte-equal to the child's `sslm_prefix_save` when both came from this library. A
+null or malformed input, or an `SPD1` given as the parent, is `SSLM_INVALID_ARGUMENT` (assemble a
+chain from its root, one level at a time). Two well-formed blobs that do not pair (the parent's
+length is not the delta's origin; backend, producer, adapter, model or precision differ; or the
+parent's rows do not hash to the parent rows digest) return `SSLM_RESTORE_PARENT_MISMATCH`.
+
 ### Schema-constrained generation
 
 A schema is compiled offline (see [sslm_format.md](sslm_format.md)'s
@@ -1326,7 +1358,8 @@ schema-content span on an unbound sequence; a prefix or restore whose
 schema doesn't match; a fixed span the schema's own DFA cannot reach; a
 schema the offline compiler could not prove satisfiable), the shared
 `SSLM_GPU_SHADER_BINARY_STALE` deployment-mismatch cause, the
-`SSLM_RESTORE_PRODUCER_MISMATCH` producer-version refusal (ordinal 30), plus one
+`SSLM_RESTORE_PRODUCER_MISMATCH` producer-version refusal (ordinal 30), the
+`SSLM_RESTORE_PARENT_MISMATCH` delta-parent refusal (ordinal 31), plus one
 process-level resource-exhaustion cause distinct from a caller-supplied
 buffer running out.
 
