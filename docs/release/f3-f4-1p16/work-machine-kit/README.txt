@@ -8,7 +8,10 @@ FINISHED, bring the drive back to the dev box.
 
 It picks the RX 7900 XTX by itself (vendor 1002 with at least 4 GB; the Ryzen's integrated Radeon, about 0.5 GB, is
 skipped) and writes results\<computer name>\ on this drive. The D3D12 debug layer is off for every step. Each step
-stops itself at 15 minutes, and the kit rests 5 minutes between steps.
+stops itself at 15 minutes, and the kit rests 5 minutes between steps (and a full 5 minutes after a crash).
+
+Before the three t- steps, close browsers, video players, calls (Teams, Zoom, Slack, Discord) and games. The kit waits
+up to 10 minutes for them to close; a speed reading taken while any of them runs is marked busy and thrown away.
 
   f2set       4.4 here: the six F2 cells, pcg_cell_schema (E0 artifacts), pcg_cell_9_10 (this card's v1.13.1
               captures) and pcg_cell_6_5 on pkv_def's shapes                                     about 3 min

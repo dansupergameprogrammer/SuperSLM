@@ -17,9 +17,9 @@ same harness and the same commissioning as 10.3"). This tool turns them into dec
       receipt commissioned on that adapter. Prints each required reading (1.5B on both GPUs and 0.5B on the RTX
       2080 SUPER, at 128 and 1,000 tokens) as met, missed, or absent; the bar is met only when all six are met.
 
-  summary DIR [DIR ...]
-      4.4's roll-up from the box's logs directory and the kit's results directory: each step's verdict (its .done
-      marker: PASS, FAIL ..., or NOT DONE), and every suite line ("<suite>: checks=N ... -> PASS|FAIL") in its log.
+  summary [--box DIR] [--kit DIR]
+      4.4's roll-up over every step each machine owes (BOX_STEPS, KIT_STEPS): its verdict (the .done marker: PASS,
+      FAIL ..., or NOT RUN when it never finished), every suite line in its log, and 4.6's findings apart.
 
 Exit status: 0 for COMMISSIONABLE / MET / every suite PASS, 1 otherwise, 2 for a usage or input error.
 """
@@ -81,6 +81,14 @@ def collect(paths, role):
             if len(r.get("runner", "")) != 64:
                 problems.append(f"{p}: a reading with no runner SHA-256")
                 continue
+            if r.get("quiet") != "1":
+                # The quiet guard (§8): a busy GPU slows the prefill arm far more than the restore arm, so a
+                # reading taken with an offender present can read met falsely. Not usable in either direction.
+                problems.append(f"{p}: {key(r)} was taken on a busy machine (quiet={r.get('quiet', 'absent')}); rerun it")
+                continue
+            if any(key(o) == key(r) for o in out):
+                problems.append(f"{p}: a second {role} reading of {key(r)}; pass each reading once")
+                continue
             out.append(r)
     runners = {}
     for r in out:
@@ -97,8 +105,16 @@ def commission(args):
     problems += p2
     if not acc:
         problems.append("no must-accept readings")
+    acc_by = {key(r): r for r in acc}
     rej_by = {key(r): r for r in rej}
     lines = []
+    # Every reading the bar grades needs its own must-accept and must-reject (code review N4): an adapter commissioned
+    # at one model is not commissioned at the other.
+    for adapter, model in REQUIRED:
+        for L in REQUIRED_L:
+            if (adapter, model, L) not in acc_by:
+                problems.append(f"must-accept {(adapter, model, L)}: no reading")
+                lines.append(f"  must-accept {adapter} {model} L={L}: absent -> REFUSED")
     for r in sorted(acc, key=key):
         k = key(r)
         ok_a = r.get("bar") == "met" and r.get("resolved") == "1"
@@ -131,6 +147,10 @@ def commission(args):
     print("receipt: PC-GPU-TIMING-1")
     print("instrument: tests/precache-gpu/pcg_cell_10_4_timing.cpp (plain configuration)")
     print("must-reject construction: tests/precache-gpu/apply_gpu_mutant.py restore-prefills")
+    print("# Plan §8: commissioned by a seat independent of the builder. The builder wrote the instrument, the mutant and")
+    print("# this tool, so the debunker reviews the construction as well as the readings: the mutant's diff (apply it to a")
+    print("# copy of src/gpu/gpu_1p0.cpp and read it) and the instrument's quiet guard, and records that below.")
+    print("construction_reviewed: ")
     for a in adapters:
         ra = next(r for r in acc if r["adapter"] == a)
         rr = next((r for r in rej if r["adapter"] == a), None)
@@ -163,6 +183,8 @@ def read_receipt(path):
     when = re.search(r"^signed_at_utc:[ \t]*(\S.*)$", text, re.M)
     if not signer or not when:
         return None, "the receipt is unsigned (signed_by and signed_at_utc must both be filled in)"
+    if not re.search(r"^construction_reviewed:[ \t]*(\S.*)$", text, re.M):
+        return None, "the receipt does not record the debunker's review of the construction (construction_reviewed)"
     runners, adapter = {}, None
     for line in text.splitlines():
         m = re.match(r"^adapter: (\w+)", line)
@@ -212,37 +234,53 @@ def grade(args):
     return 0 if met_all and not problems else 1
 
 
-NOT_STEPS = {"rest", "kit"}  # the box's rest log and the kit's own run log carry no step
+# The steps each machine owes (code review B1: a step that never started leaves no file, so the list cannot come from
+# the directory). The box's `kit` piece only copies files and is not a certification step.
+BOX_STEPS = ["build", "build-mut", "cpu95", "f2set", "real15", "real05", "r10x", "t-acc-15", "t-rej-15", "t-acc-05",
+             "t-rej-05", "t-grade-15", "t-grade-05", "mutants", "cross"]
+KIT_STEPS = ["f2set", "real15", "real05", "r10x", "t-acc-15", "t-rej-15", "t-grade-15"]
+FINDING = re.compile(r"4\.6-FINDING: ([^;]*)")
 
 
 def summary(args):
-    """Each step's verdict is its .done marker's first word (the pieces mark PASS or FAIL ...; a mutant step's PASS
-    means the mutant was killed, so its suites' FAIL lines are expected and shown only as detail)."""
-    worst = 0
-    for d in args.dirs:
+    """4.4's roll-up. A step's verdict is its .done marker's first word: PASS, FAIL, or NOT RUN when there is no
+    marker (a log without one is a crashed step). A mutant step's PASS means the mutant was killed, so its suites'
+    FAIL lines are expected and shown only as detail. 4.6 is graded apart (plan §9 F3: "4.6 records a finding either
+    way"): a 4.6 difference is printed as a finding and does not fail 4.4."""
+    pairs = [(d, BOX_STEPS, "box") for d in (args.box or [])] + [(d, KIT_STEPS, "kit") for d in (args.kit or [])]
+    if not pairs:
+        print("summary: pass --box DIR and/or --kit DIR")
+        return 2
+    worst, findings = 0, []
+    for d, steps, kind in pairs:
         if not os.path.isdir(d):
             print(f"{d}: not a directory")
             worst = 2
             continue
-        print(f"== {d}")
-        steps = sorted({os.path.basename(p).rsplit(".", 1)[0] for p in glob.glob(os.path.join(d, "*.done"))}
-                       | {os.path.basename(p)[:-4] for p in glob.glob(os.path.join(d, "*.log"))})
+        print(f"== {kind} {d}")
         for step in steps:
-            if step in NOT_STEPS:
-                continue
             done = os.path.join(d, step + ".done")
+            lp = os.path.join(d, step + ".log")
             mark = open(done, encoding="utf-8", errors="replace").read().strip() if os.path.exists(done) else ""
-            verdict = mark.split(" ", 1)[0] if mark else "NOT DONE"
-            print(f"  {step}: {mark if mark else verdict}")
+            if mark:
+                verdict = mark.split(" ", 1)[0]
+                print(f"  {step}: {mark}")
+            else:
+                verdict = "NOT RUN"
+                print(f"  {step}: NOT RUN{' (a log without a marker: it crashed; rerun it)' if os.path.exists(lp) else ''}")
             if verdict != "PASS":
                 worst = max(worst, 1)
-            lp = os.path.join(d, step + ".log")
+            findings += [f"{kind} {step}: {f.strip()}" for f in FINDING.findall(mark)]
             if os.path.exists(lp):
                 with open(lp, "r", encoding="utf-8", errors="replace") as f:
                     for line in f:
                         m = SUITE.match(line.strip())
                         if m:
                             print(f"    {m.group(1)}: checks={m.group(2)} failures={m.group(3)} -> {m.group(4)}")
+    print("4.6 (a finding either way, not a 4.4 gate):")
+    for f in findings or ["no difference recorded"]:
+        print(f"  {f}")
+    print(f"4.4: {'PASS' if worst == 0 else 'NOT PASSED'}")
     return worst
 
 
@@ -256,7 +294,8 @@ def main(argv=None):
     g.add_argument("--receipt", required=True)
     g.add_argument("--log", nargs="+", required=True)
     s = sub.add_parser("summary")
-    s.add_argument("dirs", nargs="+")
+    s.add_argument("--box", nargs="+", help="the box's logs directory")
+    s.add_argument("--kit", nargs="+", help="the kit's results\\<computer> directory")
     a = ap.parse_args(argv)
     return {"commission": commission, "grade": grade, "summary": summary}[a.cmd](a)
 

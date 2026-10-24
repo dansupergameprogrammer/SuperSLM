@@ -19,15 +19,31 @@
 // accept and reject readings into the commissioning summary the debunker signs as a PC-GPU-TIMING-1 receipt, and only
 // then grades the --role=grade readings against the bar.
 //
+// QUIET GUARD (§8: "idle checks as PKV §8's harness"; tests/paged-kv-gpu/pkvg_g6_decode_timing.cpp's guard, ported):
+// before each length's warm-up and after its last pair, the process list and D:\_ssu_build_lock are read. A busy GPU
+// slows the prefill arm far more than the restore arm and so inflates the ratio; a reading with an offender at either
+// end is stamped quiet=0 (the offenders on a "10.4 busy" line), and grade_f3.py refuses it in commission and grade.
+// Offenders: G6's list (editors, compilers, build tools, the suite's own processes, now with pcg_cell_ too) plus
+// --contenders=a,b,... (lower-case image names without .exe; the work-machine kit passes its browsers, video and
+// conferencing apps). The build lock counts unless this process inherited the token of the driver that holds it
+// (SSU_BUILD_LOCK_TOKEN: the box pieces take the lock themselves around every GPU piece).
+//
 // Run:  pcg_cell_10_4_timing.exe --model=FILE --tag=0p5|1p5 --ids=FILE --role=accept|reject|grade [--lengths=128,1000]
+//                                [--contenders=chrome,msedge,...]
 //       (--ids: world.ids for the 0.5B, world.1p5.ids for the 1.5B; the first L ids are the prefix)
 // Configuration: plain only. Like the G6 decode timing harness, it refuses the test-seam configurations, so a reading
 // is never taken on an engine compiled with fault-injection hooks.
 #include "pcg_f3_common.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <numeric>
+
+#if defined(_WIN32)
+#include <tlhelp32.h>
+#endif
 
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION) || defined(SUPERSLM_GPU_TEST_SEAMS) || \
     defined(SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION) || defined(SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING)
@@ -42,6 +58,60 @@ namespace {
 constexpr int kPairs = 8;
 constexpr double kStudent95 = 2.365;  // two-sided t_0.975 with 7 degrees of freedom
 constexpr double kBar = 100.0;
+
+// ---- the quiet guard (pkvg_g6_decode_timing.cpp's Offenders, ported) ----
+std::string Lower(std::string s) {
+	for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	return s;
+}
+std::vector<std::string> Offenders(const std::vector<std::string>& contenders) {
+	std::vector<std::string> out;
+#if defined(_WIN32)
+	const char* token = std::getenv("SSU_BUILD_LOCK_TOKEN");
+	if (GetFileAttributesA("D:\\_ssu_build_lock") != INVALID_FILE_ATTRIBUTES && !(token && *token))
+		out.push_back("D:\\_ssu_build_lock-present");
+	static const char* const kBusy[] = {"unrealeditor", "unrealeditor-cmd", "cl", "link", "dotnet", "unrealbuildtool", "ninja",
+	                                    "cmake", "msbuild", "cc1plus", "smoke_adapter_driver", "exampleproject"};
+	static const char* const kBusyPrefix[] = {"superslm_", "pkvg_", "g1d_cell_", "g1e_cell_", "pcg_cell_"};
+	const DWORD self_pid = GetCurrentProcessId();
+	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (snap == INVALID_HANDLE_VALUE) {
+		out.push_back("process-list-unreadable");
+		return out;
+	}
+	PROCESSENTRY32 pe{};
+	pe.dwSize = sizeof pe;
+	for (BOOL more = Process32First(snap, &pe); more; more = Process32Next(snap, &pe)) {
+		if (pe.th32ProcessID == self_pid) continue;
+		std::string name = Lower(pe.szExeFile);
+		const std::string full = name;
+		if (name.size() > 4 && name.compare(name.size() - 4, 4, ".exe") == 0) name.resize(name.size() - 4);
+		bool busy = false;
+		for (const char* b : kBusy) busy = busy || name == b;
+		for (const char* b : kBusyPrefix) busy = busy || name.rfind(b, 0) == 0;
+		for (const std::string& c : contenders) busy = busy || name == c;
+		if (busy) out.push_back(full + "#" + std::to_string(pe.th32ProcessID));
+	}
+	CloseHandle(snap);
+#else
+	(void)contenders;
+	out.push_back("no-process-list-on-this-platform");
+#endif
+	return out;
+}
+std::vector<std::string> Words(const std::string& s) {
+	std::vector<std::string> v;
+	std::stringstream in(s);
+	std::string w;
+	while (std::getline(in, w, ','))
+		if (!w.empty()) v.push_back(Lower(w));
+	return v;
+}
+std::string JoinWords(const std::vector<std::string>& v) {
+	std::string s;
+	for (const std::string& x : v) s += (s.empty() ? "" : ",") + x;
+	return s;
+}
 
 struct Pair {
 	double prefill_ms = 0, restore_ms = 0;
@@ -73,6 +143,7 @@ Pair OnePair(const Env& e, Rig& rig, const std::vector<int32_t>& tokens) {
 
 void Cell(const Env& e, int argc, char** argv) {
 	const std::string tag = Arg(argc, argv, "--tag"), role = Arg(argc, argv, "--role");
+	const std::vector<std::string> contenders = Words(Arg(argc, argv, "--contenders"));
 	std::string lengths = Arg(argc, argv, "--lengths");
 	if (lengths.empty()) lengths = "128,1000";
 	const bool args = !tag.empty() && (role == "accept" || role == "reject" || role == "grade");
@@ -98,6 +169,7 @@ void Cell(const Env& e, int argc, char** argv) {
 	std::fflush(stdout);
 	for (int32_t L : Ls) {
 		const std::vector<int32_t> tokens(ids.begin(), ids.begin() + L);
+		const std::vector<std::string> busy_before = Offenders(contenders);
 		(void)OnePair(e, rig, tokens);  // the untimed warm-up pair
 		std::vector<double> logs;
 		double pre = 0, res = 0;
@@ -119,10 +191,16 @@ void Cell(const Env& e, int argc, char** argv) {
 		const double half = kStudent95 * std::sqrt(sq / (kPairs - 1) / kPairs);
 		const double lo = std::exp(mean - half), hi = std::exp(mean + half);
 		CHECK_MSG(resolved, "10.4 timing %s L=%d: a pair fell under the timer's resolving floor (100 ticks)", tag.c_str(), L);
+		const std::vector<std::string> busy_after = Offenders(contenders);
+		const bool quiet = busy_before.empty() && busy_after.empty();
+		if (!quiet)
+			std::printf("10.4 busy role=%s model=%s L=%d before=%s after=%s\n", role.c_str(), tag.c_str(), L,
+			            busy_before.empty() ? "none" : JoinWords(busy_before).c_str(),
+			            busy_after.empty() ? "none" : JoinWords(busy_after).c_str());
 		std::printf("10.4 reading role=%s runner=%s adapter=%s model=%s L=%d pairs=%d bytes_including_digest=%zu "
-		            "prefill_ms=%.3f restore_ms=%.3f ratio95=[%.1f,%.1f] resolved=%d bar=%s\n",
+		            "prefill_ms=%.3f restore_ms=%.3f ratio95=[%.1f,%.1f] resolved=%d quiet=%d bar=%s\n",
 		            role.c_str(), runner.empty() ? "unknown" : runner.c_str(), adapter.c_str(), tag.c_str(), L, kPairs, bytes,
-		            pre / kPairs, res / kPairs, lo, hi, resolved ? 1 : 0, resolved && lo >= kBar ? "met" : "missed");
+		            pre / kPairs, res / kPairs, lo, hi, resolved ? 1 : 0, quiet ? 1 : 0, resolved && lo >= kBar ? "met" : "missed");
 		std::fflush(stdout);
 	}
 }

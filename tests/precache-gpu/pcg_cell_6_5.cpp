@@ -13,7 +13,7 @@
 //
 // Shapes (6.1's "each shape of 4.1"): on pkv_def (the GPU suite's fixture, B = 16, cap 4,096), L in {0, 1, B-1, B,
 // B+1, 1,000, cap-1, cap}, with the bound legs at L in {1, B+1, 1,000}. On a real artifact (--model), the shipped
-// geometry: L in {1, B+1, 1,000} and the nested world -> persona of tests/t3035-precache-refs/prompts (world.ids, 1,012
+// geometry: L in {0, 1, B-1, B, B+1, 1,000} and the nested world -> persona of tests/t3035-precache-refs/prompts (world.ids, 1,012
 // ids; persona00.ids). The plan's other two readings of 6.1's shapes have no GPU counterpart, and the record says so:
 // the synthetic 0.5B/1.5B shapes are CPU-suite inputs with no GPU fixture on the box or the kit, and the GPU has no
 // damped-greedy decode and one adopter mode (a pooled budgeted sequence), so 6.2 runs greedy, budgeted.
@@ -79,12 +79,18 @@ void Resave(const Env& e, SslmGpuPrefixHandle* r, const std::vector<uint8_t>& a,
 // 6.2: adopters of the restored prefix and of its prefill twin. Returns the twin's stream.
 std::vector<int32_t> SameAdopters(Rig& rig, SslmGpuPrefixHandle* twin, SslmGpuPrefixHandle* r, int64_t L,
                                   const std::string& what) {
+	const int64_t cap = rig.e.geo.cap;
 	const std::vector<int32_t> a = AdopterOutcomes(rig, twin, L, kSteps, static_cast<int32_t>(kSteps + 16));
 	const std::vector<int32_t> b = AdopterOutcomes(rig, r, L, kSteps, static_cast<int32_t>(kSteps + 16));
 	size_t first = 0;
 	while (first < a.size() && first < b.size() && a[first] == b[first]) ++first;
 	CHECK_MSG(a.size() == static_cast<size_t>(kSteps) && a == b, "%s: 6.2 the restored prefix's adopter differs from the "
 	          "prefill twin's from step %zu (%zu and %zu steps)", what.c_str(), first, a.size(), b.size());
+	// Two streams of identical refusals would pass the equality above: away from the empty prefix and the cap, the
+	// twin's stream must open with a decoded token (code review 2026-10-24, N2).
+	if (L >= 1 && L < cap - 1)
+		CHECK_MSG(!a.empty() && a[0] >= 0, "%s: 6.2 the prefill twin's adopter decoded no first token (outcome %d)",
+		          what.c_str(), a.empty() ? 0 : a[0]);
 	return a;
 }
 
@@ -189,7 +195,9 @@ void RealModel(const Env& e, int argc, char** argv) {
 	const uint32_t pages = static_cast<uint32_t>(4 * g.PrefixPages(nested_len) + 4 * g.R(kSteps + 16) + 16);
 	Rig rig(e, pages);
 	if (!rig.pool || !RequireGpuGeometry(e, rig.pool, ("6.5 " + tag).c_str())) return;
-	for (int64_t L : {int64_t{1}, g.B + 1, int64_t{1000}})
+	// 4.1's page edges at the shipped B (0, B-1, B, B+1) and 1,000. cap-1 and cap (32,768 on both artifacts) are left
+	// to pkv_def: two cap-length batched prefills per card do not fit a 15-minute step (code review N1).
+	for (int64_t L : {int64_t{0}, int64_t{1}, g.B - 1, g.B, g.B + 1, int64_t{1000}})
 		RootShape(e, rig, std::vector<int32_t>(world.begin(), world.begin() + L), -1,
 		          "6.5 " + tag + " root L=" + std::to_string(L));
 	Nested(e, rig, world, persona, "6.5 " + tag + " nested");

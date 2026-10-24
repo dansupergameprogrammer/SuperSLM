@@ -48,7 +48,13 @@ function Cell([string]$Step, [string]$Exe, [string[]]$Arguments, [int]$Minutes) 
     $null = $p.Handle
     $code = 0
     if (-not $p.WaitForExit([int]$ms)) {
-        try { $p.Kill() } catch {}
+        try { $p.Kill(); $null = $p.WaitForExit(30000) } catch {}
+        if (-not $p.HasExited) {
+            # Code review N11: a cell that cannot be stopped would outlive its step and share the GPU with the next.
+            Add-Content -LiteralPath $log -Value 'KILL FAILED: the cell is still running; the kit stops here'
+            Say "KILL FAILED: $Exe is still running. The kit stops; restart the machine, then run run.cmd again."
+            exit 4
+        }
         Add-Content -LiteralPath $log -Value ('TIMEOUT after {0:N1} min: killed' -f ($ms / 60000))
         $code = 124
     } else { $code = $p.ExitCode }
@@ -79,6 +85,24 @@ $P = Join-Path $Kit 'prompts'
 $M05 = Join-Path $Kit 'models\qwen2.5-0.5b-instruct-dg.sslm'
 $M15 = Join-Path $Kit 'models\qwen2.5-1.5b-instruct-dg-g5.sslm'
 $Theirs = Join-Path $Kit 'blobs'   # the RTX 2080 SUPER's 4.6 saves
+# The quiet guard's GPU contenders on the work machine (browsers, video, conferencing, games, capture and GPU-heavy
+# editors), passed to the timing cell, which reads the process list before and after each length. Always-on driver
+# helpers (Radeon Software, Edge WebView2) are left off: they would mark every reading busy.
+$Contenders = 'chrome,msedge,firefox,brave,opera,teams,ms-teams,zoom,slack,discord,webex,ciscocollabhost,skype,' +
+    'vlc,mpc-hc64,potplayermini64,obs64,obs32,steam,steamwebhelper,epicgameslauncher,blender,' +
+    'photoshop,premiere pro,afterfx,resolve,unrealeditor,unity'
+# Before a timing step: wait up to 10 minutes for the contenders to close, asking once a minute. The cell still reads
+# the list itself; this only saves a wasted reading.
+function WaitQuiet {
+    for ($i = 0; $i -lt 10; $i++) {
+        $open = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { ($Contenders -split ',') -contains $_.ProcessName.ToLower() } |
+            ForEach-Object { $_.ProcessName } | Sort-Object -Unique)
+        if ($open.Count -eq 0) { return }
+        Say "timing step waiting: close $($open -join ', ') (a reading taken with them open is thrown away)"
+        Start-Sleep -Seconds 60
+    }
+    Say 'still not quiet after 10 minutes: running anyway; the readings will be stamped quiet=0 and not used'
+}
 
 # The steps, in order: a name and what it runs. RunStep returns the step's failures (none: PASS).
 $Steps = @(
@@ -107,7 +131,14 @@ function RunStep($s) {
             $other = Join-Path $Theirs "gpu-$($s.Tag)-10de_1e81.spx1"
             # 4.6 (a) here, (b) against the 2080 SUPER's blob, (c) the 2080 SUPER's blob restored here through the seam.
             $x = Cell $s.N 'pcg_cell_4_6.exe' @("--model=$($s.M)", "--tag=$($s.Tag)", "--ids=$ids", "--out=$Blobs46", "--other=$other", "--foreign=$other") 10
-            if ($x -ne 0) { $bad += "pcg_cell_4_6 $($s.Tag) exit $x (a 4.6 difference is a finding, not a broken kit)" }
+            # Code review N5: 4.6 records a finding either way (plan §9 F3). An assertion failure (exit 1 and a failing
+            # suite line) is a finding and does not fail the step; a timeout, crash or start-up failure does.
+            if ($x -ne 0) {
+                $sl = Select-String -LiteralPath (Join-Path $Res "$($s.N).log") -Pattern '^pcg_cell_4_6: checks=\d+ failures=(\d+)' | Select-Object -Last 1
+                if ($x -eq 1 -and $sl -and [int]$sl.Matches[0].Groups[1].Value -gt 0) {
+                    $bad += "4.6-FINDING: pcg_cell_4_6 $($s.Tag) : $($sl.Matches[0].Groups[1].Value) failure(s)"
+                } else { $bad += "pcg_cell_4_6 $($s.Tag) exit $x (no 4.6 reading)" }
+            }
             $x = Cell $s.N 'pcg_cell_6_5.exe' @("--model=$($s.M)", "--tag=$($s.Tag)", "--world=$ids", ('--persona=' + (Join-Path $P 'persona00.ids'))) 10
             if ($x -ne 0) { $bad += "pcg_cell_6_5 $($s.Tag) exit $x" }
         }
@@ -122,7 +153,10 @@ function RunStep($s) {
         't-*' {
             # The instrument decides nothing (grade_f3.py does, on the dev box): exit 0 means the run completed and
             # every reading resolved.
-            $x = Cell $s.N $s.Exe @("--model=$M15", '--tag=1p5', ('--ids=' + (Join-Path $P 'world.1p5.ids')), "--role=$($s.Role)") 15
+            # --contenders: the quiet guard's work-machine list (code review B3): GPU users a desk machine runs. A reading
+            # with any of them, or the instrument's own list, open before or after it is stamped quiet=0 and is not used.
+            $x = Cell $s.N $s.Exe @("--model=$M15", '--tag=1p5', ('--ids=' + (Join-Path $P 'world.1p5.ids')), "--role=$($s.Role)",
+                "--contenders=$Contenders") 15
             if ($x -ne 0) { $bad += "pcg_cell_10_4_timing $($s.Role) exit $x" }
         }
     }
@@ -132,10 +166,15 @@ function RunStep($s) {
 foreach ($s in $Steps) {
     $name = $s.N
     if (Done $name) { Say "$name : already done ($(Get-Content -LiteralPath (Join-Path $Res "$name.done")))"; continue }
-    Rest
-    Say "$name : starting (at most $StepMinutes min)"
     $stepLog = Join-Path $Res "$name.log"
+    # Code review B4: a log without its .done is a crash (a crash skips the end-of-step stamp): rest the full five
+    # minutes from now.
+    if (Test-Path $stepLog) { Say "$name : crashed last time; resting the full 5 minutes"; RestStamp }
+    Rest
+    if ($name -like 't-*') { WaitQuiet }
+    Say "$name : starting (at most $StepMinutes min)"
     if (Test-Path $stepLog) { Remove-Item -LiteralPath $stepLog }   # a rerun's log holds only the rerun
+    RestStamp   # code review B4: stamped at the start as well as the end
     $script:Deadline = (Get-Date).AddMinutes($StepMinutes)
     $t0 = Get-Date
     $bad = @()
@@ -143,7 +182,10 @@ foreach ($s in $Steps) {
     RestStamp
     $mins = ((Get-Date) - $t0).TotalMinutes
     if ($mins -gt $StepMinutes) { $bad += ('over the 15-minute bound ({0:N1} min)' -f $mins) }
+    $finds = @($bad | Where-Object { $_ -like '4.6-FINDING:*' })
+    $bad = @($bad | Where-Object { $_ -notlike '4.6-FINDING:*' })
     $v = $(if ($bad.Count -eq 0) { 'PASS' } else { 'FAIL ' + ($bad -join '; ') })
+    foreach ($f in $finds) { $v += " $f;" }
     Mark $name $v
     Say ('{0} : {1} ({2:N1} min)' -f $name, $v, $mins)
 }

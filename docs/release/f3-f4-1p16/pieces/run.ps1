@@ -19,7 +19,9 @@
 #   t-acc-15, t-acc-05     10.4 timing, the must-accept (this build), 1.5B / 0.5B
 #   t-rej-15, t-rej-05     10.4 timing, the must-reject (the restore-prefills mutant build), 1.5B / 0.5B
 #   t-grade-15, t-grade-05 10.4 timing, the readings graded once the debunker signs PC-GPU-TIMING-1
-#   mutants    upload-skip: pcg_cell_6_5 on pkv_def and pcg_cell_10_4_real 10.1's restore must both go red
+#   mutants    upload-skip: pcg_cell_6_5 on pkv_def and pcg_cell_10_4_real 10.1's restore must both go red, each on its
+#              named assertion (exit 1, a failing suite line, 6.2's or 10.1's stream message); a timeout, a skip or a
+#              start-up failure is "not killed"
 #   cross      after the kit returns (-KitResults F:\kit-f3-xtx\results\<computer>): the drive checked against its
 #              manifest, then 4.6 (b) and (c) here with the 7900 XTX's blobs, both models
 #   all        build, build-mut, cpu95, then every GPU piece except cross, in the order above
@@ -45,18 +47,27 @@ if ($Piece -eq 'all') {
 if ((F3-Done $Piece) -and -not $Force) { "already done: $(Get-Content (Join-Path $F3Logs "$Piece.done"))"; exit 0 }
 $log = F3-Log $Piece
 $isGpu = $Piece -in $Gpu
-try { F3-Busy } catch { "$Piece refused: $($_.Exception.Message)"; exit 3 }
+# Code review B4: a GPU piece's log without its .done is a crash (a reboot skips every finally). Rest the full five
+# minutes from now before rerunning it, whatever the stamp says.
+if ($isGpu -and (Test-Path $log) -and -not (F3-Done $Piece)) { F3-RestStamp; E4-Append (F3-Log 'rest') "crash evidence: $Piece.log without $Piece.done" }
 if ($isGpu) { F3-Rest (F3-Log 'rest') }
 if (Test-Path $log) { Remove-Item $log }
 $verdict = 'PASS'
+$findings = ''
 try { F3-Lock } catch { "$Piece refused: $($_.Exception.Message)"; exit 3 }
+# Code review N6: the busy check runs after the rest and after the lock is taken, so a process started during the
+# rest is seen.
+try { F3-Busy } catch { F3-Unlock; "$Piece refused: $($_.Exception.Message)"; exit 3 }
 $started = Get-Date
+# Code review B4: stamp at the start too, so the stamp never predates a piece that has begun GPU work.
+if ($isGpu) { F3-RestStamp }
 try {
     if ($isGpu) {
         $global:F3Deadline = $started.AddMinutes($F3GpuMinutes)
         $card = F3-Adapter $log
     }
     $fail = { param($what) if ($script:verdict -eq 'PASS') { $script:verdict = "FAIL $what" } else { $script:verdict += "; $what" } }
+    $note46 = { param($r) if ($r[0] -eq 'finding') { $script:findings += " 4.6-FINDING: $($r[1]);" } elseif ($r[0] -eq 'fail') { & $fail $r[1] } }
     switch ($Piece) {
         'build' {
             $head = (git -C $F3Src rev-parse HEAD).Trim()
@@ -116,7 +127,7 @@ try {
             $model = $(if ($Piece -eq 'real15') { $F3M15 } else { $F3M05 })
             $ids = Join-Path $F3Prompts $(if ($Piece -eq 'real15') { 'world.1p5.ids' } else { 'world.ids' })
             $c = F3-Cell $log "$F3Bin\pcg_cell_4_6.exe" @("--model=$model", "--tag=$tag", "--ids=$ids", "--out=$F3Blobs") 10
-            if ($c -ne 0) { & $fail "pcg_cell_4_6 (a) exit $c (a 4.6 difference is a finding: PC-5 stays)" }
+            & $note46 (F3-Cell46 $log $c "pcg_cell_4_6 (a) $tag")
             $c = F3-Cell $log "$F3Bin\pcg_cell_6_5.exe" @("--model=$model", "--tag=$tag", "--world=$ids", ('--persona=' + (Join-Path $F3Prompts 'persona00.ids'))) 10
             if ($c -ne 0) { & $fail "pcg_cell_6_5 $tag exit $c" }
         }
@@ -145,13 +156,15 @@ try {
         'mutants' {
             $bin = "$F3Mut\upload-skip\pkvg\bin"
             $c = F3-Cell $log "$bin\pcg_cell_6_5.exe" @("--fixture-dir=$F3FX") 5
-            E4-Append $log "SUMMARY upload-skip pcg_cell_6_5 exit $c (must be non-zero: the mutant is killed)"
-            if ($c -eq 0) { & $fail 'upload-skip survived pcg_cell_6_5' }
+            $k = F3-Killed $log $c 'pcg_cell_6_5' "6\.2 the restored prefix's adopter differs"
+            E4-Append $log "SUMMARY upload-skip pcg_cell_6_5 exit ${c}: $k (killed only on 6.2's assertion)"
+            if ($k -ne 'killed') { & $fail "upload-skip pcg_cell_6_5 $k" }
             if (-not (Test-Path (Join-Path $F3Blobs 'r10x\10.1.refs'))) { & $fail 'r10x has not captured 10.1' }
             else {
                 $c = F3-Cell $log "$bin\pcg_cell_10_4_real.exe" @('--cell=10.1', '--phase=restore', "--model=$F3M05", "--prompts=$F3Prompts", ('--blobs=' + (Join-Path $F3Blobs 'r10x'))) 8
-                E4-Append $log "SUMMARY upload-skip pcg_cell_10_4_real 10.1 restore exit $c (must be non-zero)"
-                if ($c -eq 0) { & $fail 'upload-skip survived pcg_cell_10_4_real' }
+                $k = F3-Killed $log $c 'pcg_cell_10_4_real' "10\.1 .*the restored prefix's adopter differs from the capture's|10\.1: \d+ of 50 adopter streams"
+                E4-Append $log "SUMMARY upload-skip pcg_cell_10_4_real 10.1 restore exit ${c}: $k (killed only on 10.1's stream assertion)"
+                if ($k -ne 'killed') { & $fail "upload-skip pcg_cell_10_4_real $k" }
             }
         }
         'cross' {
@@ -173,7 +186,7 @@ try {
                 $theirs = @(Get-ChildItem (Join-Path $KitResults 'blobs46') -Filter "gpu-$tag-1002_*.spx1")
                 if ($theirs.Count -ne 1) { & $fail "no single 7900 XTX $tag blob in the kit results"; continue }
                 $c = F3-Cell $log "$F3Bin\pcg_cell_4_6.exe" @("--model=$model", "--tag=$tag", "--ids=$ids", "--out=$out", "--other=$($theirs[0].FullName)", "--foreign=$($theirs[0].FullName)") 7
-                if ($c -ne 0) { & $fail "pcg_cell_4_6 (b, c) $tag exit $c (a difference is a finding)" }
+                & $note46 (F3-Cell46 $log $c "pcg_cell_4_6 (b, c) $tag")
             }
         }
         'kit' {
@@ -194,6 +207,7 @@ finally {
 $mins = ((Get-Date) - $started).TotalMinutes
 E4-Append $log ('piece took {0:N1} min' -f $mins)
 if ($isGpu -and $mins -gt $F3GpuMinutes) { $verdict = "FAIL over the 15-minute bound ($('{0:N1}' -f $mins) min); $verdict" }
+if ($findings) { $verdict += $findings }
 F3-Mark $Piece $verdict
 "$Piece $verdict"
 if ($verdict -like 'PASS*') { exit 0 } else { exit 1 }

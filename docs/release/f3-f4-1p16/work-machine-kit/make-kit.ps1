@@ -7,10 +7,16 @@ $F3 = 'D:\_scratch\f3-f4-1p16'
 $Src = 'D:\SuperSLM\.worktrees\f3-f4-1p16'
 $KitSrc = Join-Path $Src 'docs\release\f3-f4-1p16\work-machine-kit'
 $Prompts = 'D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts'
+# Code review N7: -Replace deletes <Dest> whole, so <Dest> must be a kit folder: its leaf is kit-f3-xtx, and an existing
+# one carries the marker this script writes. A mistyped -Dest (F:\, or another folder) is refused.
+if ((Split-Path -Leaf $Dest) -ne 'kit-f3-xtx') { throw "-Dest must end in \kit-f3-xtx (got $Dest)" }
 if (Test-Path $Dest) {
     if (-not $Replace) { throw "$Dest exists; pass -Replace to rebuild it" }
+    if (-not (Test-Path (Join-Path $Dest 'KIT-F3-XTX.marker'))) { throw "$Dest has no KIT-F3-XTX.marker: not a kit this script made; not deleting it" }
     Remove-Item -Recurse -Force $Dest   # only this kit's own folder
 }
+New-Item -ItemType Directory -Force $Dest | Out-Null
+Set-Content (Join-Path $Dest 'KIT-F3-XTX.marker') "made by make-kit.ps1 $(Get-Date -Format s)"
 foreach ($d in 'bin', 'bin\shaders', 'fixtures', 'e0', 'models', 'prompts', 'captures', 'blobs', 'results') {
     New-Item -ItemType Directory -Force (Join-Path $Dest $d) | Out-Null
 }

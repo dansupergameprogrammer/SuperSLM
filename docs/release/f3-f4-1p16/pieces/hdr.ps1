@@ -99,3 +99,30 @@ function global:F3-LastExit([string]$Log) {
     if ($l -match 'exit (-?\d+)$') { return [int]$Matches[1] }
     return -1
 }
+
+# Code review B2: a mutant is killed only by an assertion. Exit 1 (FinishSuite's failure exit), the suite's own line
+# with failures > 0, and the named assertion in the log. 124 (killed at the bound), 125 (never started) and any other
+# exit (a crash or a start-up failure such as a missing shader or DLL) reached no assertion: not killed.
+function global:F3-Killed([string]$Log, [int]$Code, [string]$Suite, [string]$Pattern) {
+    if ($Code -eq 124) { return 'not killed: stopped at the time bound' }
+    if ($Code -eq 125) { return 'not run: the stopwatch ran out before it started' }
+    if ($Code -ne 1) { return "not killed: exit $Code is not an assertion failure (crash or start-up failure)" }
+    $line = Select-String -LiteralPath $Log -Pattern ('^' + [regex]::Escape($Suite) + ': checks=\d+ failures=(\d+)') | Select-Object -Last 1
+    if (-not $line -or [int]$line.Matches[0].Groups[1].Value -eq 0) { return 'not killed: no failing suite line' }
+    if (-not (Select-String -LiteralPath $Log -Pattern $Pattern -Quiet)) { return 'not killed: exit 1, but not on the named assertion' }
+    return 'killed'
+}
+
+# Code review N5: 4.6 records a finding either way (plan §9 F3), so a 4.6 difference does not fail its step. Only an
+# assertion failure (exit 1 with a failing suite line) is a finding; a timeout, crash or start-up failure is a FAIL.
+# Returns @('', '') when clean, @('finding', text) or @('fail', text).
+function global:F3-Cell46([string]$Log, [int]$Code, [string]$What) {
+    if ($Code -eq 0) { return @('', '') }
+    $line = Select-String -LiteralPath $Log -Pattern '^pcg_cell_4_6: checks=\d+ failures=(\d+)' | Select-Object -Last 1
+    if ($Code -eq 1 -and $line -and [int]$line.Matches[0].Groups[1].Value -gt 0) {
+        $first = Select-String -LiteralPath $Log -Pattern '^FAIL .*pcg_cell_4_6' | Select-Object -Last 1
+        $t = "$What : $($line.Matches[0].Groups[1].Value) failure(s)$(if ($first) { ', last: ' + ($first.Line -replace ';', ',') })"
+        return @('finding', $t)
+    }
+    return @('fail', "$What exit $Code (no 4.6 reading)")
+}
