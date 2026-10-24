@@ -1,0 +1,10 @@
+[2026-10-24T10:11:19] pcg_cross_card.exe --fixture-dir=D:\kit-f2-xtx\fixtures --restore=D:\kit-f2-xtx\blobs\blob-10de_1e81.spx1 --save=D:\kit-f2-xtx\results\DESKTOP-CIJV137\blob-1002_744c.spx1
+fixture: D:\kit-f2-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+saved 15736 bytes to D:\kit-f2-xtx\results\DESKTOP-CIJV137\blob-1002_744c.spx1: producer vendor 1002 device 744c, engine 1.15.0
+restore: blob from vendor 10de device 1e81, this adapter vendor 1002 device 744c: another card
+pcg_cross_card: checks=14 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+[2026-10-24T10:11:24] exit 0

@@ -32,8 +32,22 @@ Two runs did not count, and both are in the logs:
 The g1c debug-layer messages were 0 WARNING-or-worse in every cell that reports them. The three `HR FAIL` lines in the
 f2 log come from `pcg_cell_faults`' injected allocation failures (E_OUTOFMEMORY), which the cell expects.
 
-## Still owed: the AMD Radeon RX 7900 XTX (work machine)
+## The AMD Radeon RX 7900 XTX (work machine, 2026-10-24)
 
-- The same F2 cells on that card, with the debug layer.
-- The cross-card leg: a blob saved on one card is refused `SSLM_RESTORE_PRODUCER_MISMATCH` on the other.
-- `pkvg_g4`/`pkvg_g5` at their own steps.
+`work-machine-kit/` was run from the drive on the work machine (`xtx-results/`): adapter 0, vendor `1002`, device
+`744c`, 24,516 MB. The Ryzen's integrated Radeon (`164e`, 485 MB) was skipped. The D3D12 debug layer was present.
+
+| Step | Result |
+|---|---|
+| f2 (debug layer on) | 6 / 6 PASS: 258 + 266 + 23 + 135 + 75 + 53 = **810 checks, 0 failures** |
+| schema | **8 checks, 0 failures** |
+| cross | the RTX 2080 SUPER's blob (`10de:1e81`) **refused** as another card's, with a null out-handle; this card's own blob saved (`blob-1002_744c.spx1`, 15,736 bytes) and restored on this card: 14 checks, 0 failures |
+| g5 | **24 cells, 0 red; 1,074 checks, 0 failures, 0 skips** |
+| g4 (without 1.9) | **17 cells, 0 red; 1,418 checks, 0 failures, 0 skips** |
+| g19 (1.9 alone, debug layer off) | **4,125 checks, 0 failures** |
+
+The reverse leg, on the RTX 2080 SUPER (`logs/cross-reverse-2080.log`): the 7900 XTX's blob is refused
+`SSLM_RESTORE_PRODUCER_MISMATCH` with a null out-handle, 8 checks, 0 failures. So the F2 cross-card leg holds in both
+directions. The drive's kit came back byte-identical to its manifest (0 mismatches over 98 files).
+
+Every count on the 7900 XTX equals the RTX 2080 SUPER's. Nothing is owed for F2 on either certified GPU.

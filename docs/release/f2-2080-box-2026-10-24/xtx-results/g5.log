@@ -1,0 +1,110 @@
+[2026-10-24T10:11:25] pkvg_g5.exe --pkv-fixtures=D:\kit-f2-xtx\fixtures --pkv-reference=D:\kit-f2-xtx\paged-kv-reference --model05=D:\kit-f2-xtx\models\qwen2.5-0.5b-instruct-dg.sslm --model15=D:\kit-f2-xtx\models\qwen2.5-1.5b-instruct-dg-g5.sslm --adapter=D:\kit-f2-xtx\adapters\pkv_def_zero_adapter.sslm --adapter-other-base=D:\kit-f2-xtx\adapters\pkv_qk_zero_adapter.sslm =1.7/G5 =1.8/G5 =2.6/G5 =2.7/G5 =2.11/G5 =5.9/G5 =3.6b/G5:restore_into_pool =3.6b/G5:resave-decode =3.6b/G5:resave-batch =3.6b/G5:resave-prefill =3.6b/G5:resave-schema_prefill =3.6b/G5:resave-adopt =3.6b/G5:resave-adopt-1008 =3.6c/G5:restore_into_pool =3.6d/G5:restore_into_pool =3.6d/G5:resave-bridge_decode_not_ready =3.6d/G5:resave-bridge_decode_ready =3.6d/G5:resave-finish_device_logits =3.6d/G5:resave-decode =3.6d/G5:resave-batch =3.6d/G5:resave-prompt_prefill =3.6d/G5:resave-schema_prefill =3.6d/G5:resave-adopt =3.6d/G5:precedence:restore_into_pool_bad_magic
+[G5 g1a] 1.7/G5 ...
+  fixture pkv_def: L=2 H_kv=2 D=48 cap=4096 B=16 page_bytes=6144 qk=0
+[G5 g1a] 1.7/G5: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1a] 1.7/G5 green (16 checks, 0 failed)
+[G5 g1a] 1.8/G5 ...
+[G5 g1a] 1.8/G5: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1a] 1.8/G5 green (30 checks, 0 failed)
+[G5 g1b] 2.6/G5 ...
+g1b: tiny D:\kit-f2-xtx\fixtures/pkv_def.sslm cap=4096 B=16 page_bytes=6144 cap_pages=256 vocab=256 dispatches/layer=24
+[G5 g1b] 2.6/G5: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1b] 2.6/G5 green (89 checks, 0 failed)
+[G5 g1b] 2.7/G5 ...
+[G5 g1b] 2.7/G5: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1b] 2.7/G5 green (283 checks, 0 failed)
+[G5 g1b] 2.11/G5 ...
+[G5 g1b] 2.11/G5: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1b] 2.11/G5 green (85 checks, 0 failed)
+[G5 g1b] 5.9/G5 ...
+[G5 g1b] 5.9/G5: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1b] 5.9/G5 green (54 checks, 0 failed)
+[G5 g1c] 3.6b/G5:restore_into_pool ...
+stack: D:\kit-f2-xtx\fixtures/pkv_def.sslm layers=2 kv_heads=2 head_dim=48 cap=4096 B=16 page_bytes=6144 one_layer=24 schema(g5_minimal_one_field)=0
+  run 3.6b/G5 sslm_gpu_seq_restore_into_pool (pooled A, same pool)
+[G5 g1c] 3.6b/G5:restore_into_pool: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6b/G5:restore_into_pool green (28 checks, 0 failed)
+[G5 g1c] 3.6b/G5:resave-decode ...
+  run 3.6b/G5 re-save sslm_decode_step_gpu (pooled A, same pool)
+[G5 g1c] 3.6b/G5:resave-decode: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6b/G5:resave-decode green (28 checks, 0 failed)
+[G5 g1c] 3.6b/G5:resave-batch ...
+  run 3.6b/G5 re-save sslm_decode_step_batch_gpu (pooled A, same pool)
+[G5 g1c] 3.6b/G5:resave-batch: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6b/G5:resave-batch green (36 checks, 0 failed)
+[G5 g1c] 3.6b/G5:resave-prefill ...
+  run 3.6b/G5 re-save SslmGpuSeqPrefillPromptForG5Bridge (pooled A, same pool)
+[G5 g1c] 3.6b/G5:resave-prefill: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6b/G5:resave-prefill green (25 checks, 0 failed)
+[G5 g1c] 3.6b/G5:resave-schema_prefill ...
+  run 3.6b/G5 re-save SslmGpuSeqPrefillSchemaContentForG5Bridge (pooled A, same pool)
+[G5 g1c] 3.6b/G5:resave-schema_prefill: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6b/G5:resave-schema_prefill green (35 checks, 0 failed)
+[G5 g1c] 3.6b/G5:resave-adopt ...
+  run 3.6b/G5 re-save sslm_gpu_seq_adopt_prefix (prefix 1000) (pooled A, same pool)
+[G5 g1c] 3.6b/G5:resave-adopt: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6b/G5:resave-adopt green (34 checks, 0 failed)
+[G5 g1c] 3.6b/G5:resave-adopt-1008 ...
+  run 3.6b/G5 re-save sslm_gpu_seq_adopt_prefix (prefix 1008) (pooled A, same pool)
+[G5 g1c] 3.6b/G5:resave-adopt-1008: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6b/G5:resave-adopt-1008 green (34 checks, 0 failed)
+[G5 g1c] 3.6c/G5:restore_into_pool ...
+  run 3.6c/G5 sslm_gpu_seq_restore_into_pool (dedicated A)
+[G5 g1c] 3.6c/G5:restore_into_pool: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6c/G5:restore_into_pool green (25 checks, 0 failed)
+[G5 g1c] 3.6d/G5:restore_into_pool ...
+  run 3.6d/G5 sslm_gpu_seq_restore_into_pool (pooled A, same pool)
+[G5 g1c] 3.6d/G5:restore_into_pool: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:restore_into_pool green (25 checks, 0 failed)
+[G5 g1c] 3.6d/G5:resave-bridge_decode_not_ready ...
+  run 3.6d/G5 re-save SslmGpuSeqDecodeStepForG5Bridge (not ready: embed, drive) (pooled A, same pool)
+[G5 g1c] 3.6d/G5:resave-bridge_decode_not_ready: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:resave-bridge_decode_not_ready green (25 checks, 0 failed)
+[G5 g1c] 3.6d/G5:resave-bridge_decode_ready ...
+  run 3.6d/G5 re-save SslmGpuSeqDecodeStepForG5Bridge (ready: finish) (pooled A, same pool)
+[G5 g1c] 3.6d/G5:resave-bridge_decode_ready: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:resave-bridge_decode_ready green (28 checks, 0 failed)
+[G5 g1c] 3.6d/G5:resave-finish_device_logits ...
+  run 3.6d/G5 re-save SslmGpuSeqFinishTokenForG5Bridge (device-logits model, B at full depth) (pooled A, same pool)
+[G5 g1c] 3.6d/G5:resave-finish_device_logits: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:resave-finish_device_logits green (27 checks, 0 failed)
+[G5 g1c] 3.6d/G5:resave-decode ...
+  run 3.6d/G5 re-save sslm_decode_step_gpu (pooled A, same pool)
+[G5 g1c] 3.6d/G5:resave-decode: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:resave-decode green (28 checks, 0 failed)
+[G5 g1c] 3.6d/G5:resave-batch ...
+  run 3.6d/G5 re-save sslm_decode_step_batch_gpu (pooled A, same pool)
+[G5 g1c] 3.6d/G5:resave-batch: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:resave-batch green (36 checks, 0 failed)
+[G5 g1c] 3.6d/G5:resave-prompt_prefill ...
+  run 3.6d/G5 re-save SslmGpuSeqPrefillPromptForG5Bridge (pooled A, same pool)
+[G5 g1c] 3.6d/G5:resave-prompt_prefill: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:resave-prompt_prefill green (25 checks, 0 failed)
+[G5 g1c] 3.6d/G5:resave-schema_prefill ...
+  run 3.6d/G5 re-save SslmGpuSeqPrefillSchemaContentForG5Bridge (pooled A, same pool)
+[G5 g1c] 3.6d/G5:resave-schema_prefill: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:resave-schema_prefill green (35 checks, 0 failed)
+[G5 g1c] 3.6d/G5:resave-adopt ...
+  run 3.6d/G5 re-save sslm_gpu_seq_adopt_prefix (prefix 1000) (pooled A, same pool)
+[G5 g1c] 3.6d/G5:resave-adopt: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:resave-adopt green (34 checks, 0 failed)
+[G5 g1c] 3.6d/G5:precedence:restore_into_pool_bad_magic ...
+  precedence 3.6d/G5 restore-into-pool of a bad magic
+[G5 g1c] 3.6d/G5:precedence:restore_into_pool_bad_magic: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G5 g1c] 3.6d/G5:precedence:restore_into_pool_bad_magic green (9 checks, 0 failed)
+g1a: 46 checks, 0 failures, 0 skips
+g1b: 511 checks, 0 failures, 0 skips
+g1c: 517 checks, 0 failures, 0 skips
+24 cells, 0 red; 1074 checks, 0 failures, 0 skips
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+# D3D12 VALIDATION [MESSAGE] category=2: Device Debug Layer Startup Options: GPU-Based Validation is enabled (disabled by default). This results in new validation not possible during API calls on the CPU, by creating patched shaders that have validation added directly to the shader. However, it can slow things down a lot, especially for applications with numerous PSOs. Time to see the first render frame may take several minutes.
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+[2026-10-24T10:14:57] exit 0

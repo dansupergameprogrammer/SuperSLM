@@ -1,0 +1,81 @@
+[2026-10-24T10:14:58] pkvg_g4.exe --pkv-fixtures=D:\kit-f2-xtx\fixtures --pkv-reference=D:\kit-f2-xtx\paged-kv-reference --model05=D:\kit-f2-xtx\models\qwen2.5-0.5b-instruct-dg.sslm --model15=D:\kit-f2-xtx\models\qwen2.5-1.5b-instruct-dg-g5.sslm --adapter=D:\kit-f2-xtx\adapters\pkv_def_zero_adapter.sslm --adapter-other-base=D:\kit-f2-xtx\adapters\pkv_qk_zero_adapter.sslm =1.8/G4 =6.5b/G4 =8.15 =8.16 =2.7/G4 =2.11/G4 =5.8/G4 =9.13/G4 =3.6b/G4:adopt =3.6b/G4:begin_from =3.6b/G4:prefix_prefill =3.6c/G4:adopt =3.6c/G4:begin_from =3.6d/G4:adopt =3.6d/G4:begin_from =3.6d/G4:prefix_prefill =3.6d/G4:precedence:prefix_count0
+[G4 g1a] 1.8/G4 ...
+  fixture pkv_def: L=2 H_kv=2 D=48 cap=4096 B=16 page_bytes=6144 qk=0
+[G4 g1a] 1.8/G4: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1a] 1.8/G4 green (63 checks, 0 failed)
+[G4 g1a] 6.5b/G4 ...
+  fixture pkv_qk: L=2 H_kv=2 D=128 cap=4096 B=16 page_bytes=16384 qk=1
+[G4 g1a] 6.5b/G4: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1a] 6.5b/G4 green (490 checks, 0 failed)
+[G4 g1a] 8.15 ...
+[G4 g1a] 8.15: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1a] 8.15 green (15 checks, 0 failed)
+[G4 g1a] 8.16 ...
+[G4 g1a] 8.16: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1a] 8.16 green (96 checks, 0 failed)
+[G4 g1b] 2.7/G4 ...
+g1b: tiny D:\kit-f2-xtx\fixtures/pkv_def.sslm cap=4096 B=16 page_bytes=6144 cap_pages=256 vocab=256 dispatches/layer=24
+[G4 g1b] 2.7/G4: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1b] 2.7/G4 green (404 checks, 0 failed)
+[G4 g1b] 2.11/G4 ...
+[G4 g1b] 2.11/G4: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1b] 2.11/G4 green (33 checks, 0 failed)
+[G4 g1b] 5.8/G4 ...
+[G4 g1b] 5.8/G4: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1b] 5.8/G4 green (56 checks, 0 failed)
+[G4 g1b] 9.13/G4 ...
+[G4 g1b] 9.13/G4: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1b] 9.13/G4 green (21 checks, 0 failed)
+[G4 g1c] 3.6b/G4:adopt ...
+stack: D:\kit-f2-xtx\fixtures/pkv_def.sslm layers=2 kv_heads=2 head_dim=48 cap=4096 B=16 page_bytes=6144 one_layer=24 schema(g5_minimal_one_field)=0
+  run 3.6b/G4 sslm_gpu_seq_adopt_prefix (prefix 1000) (pooled A, same pool)
+[G4 g1c] 3.6b/G4:adopt: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1c] 3.6b/G4:adopt green (35 checks, 0 failed)
+[G4 g1c] 3.6b/G4:begin_from ...
+  run 3.6b/G4 sslm_gpu_prefix_begin_from (pooled A, same pool)
+[G4 g1c] 3.6b/G4:begin_from: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1c] 3.6b/G4:begin_from green (28 checks, 0 failed)
+[G4 g1c] 3.6b/G4:prefix_prefill ...
+  run 3.6b/G4 sslm_gpu_prefix_prefill (pooled A, same pool)
+[G4 g1c] 3.6b/G4:prefix_prefill: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1c] 3.6b/G4:prefix_prefill green (24 checks, 0 failed)
+[G4 g1c] 3.6c/G4:adopt ...
+  run 3.6c/G4 sslm_gpu_seq_adopt_prefix (prefix 1000) (dedicated A)
+[G4 g1c] 3.6c/G4:adopt: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1c] 3.6c/G4:adopt green (32 checks, 0 failed)
+[G4 g1c] 3.6c/G4:begin_from ...
+  run 3.6c/G4 sslm_gpu_prefix_begin_from (dedicated A)
+[G4 g1c] 3.6c/G4:begin_from: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1c] 3.6c/G4:begin_from green (28 checks, 0 failed)
+[G4 g1c] 3.6d/G4:adopt ...
+  run 3.6d/G4 sslm_gpu_seq_adopt_prefix (prefix 1000) (pooled A, same pool)
+[G4 g1c] 3.6d/G4:adopt: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1c] 3.6d/G4:adopt green (32 checks, 0 failed)
+[G4 g1c] 3.6d/G4:begin_from ...
+  run 3.6d/G4 sslm_gpu_prefix_begin_from (pooled A, same pool)
+[G4 g1c] 3.6d/G4:begin_from: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1c] 3.6d/G4:begin_from green (28 checks, 0 failed)
+[G4 g1c] 3.6d/G4:prefix_prefill ...
+  run 3.6d/G4 sslm_gpu_prefix_prefill (pooled A, same pool)
+[G4 g1c] 3.6d/G4:prefix_prefill: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1c] 3.6d/G4:prefix_prefill green (24 checks, 0 failed)
+[G4 g1c] 3.6d/G4:precedence:prefix_count0 ...
+  precedence 3.6d/G4 prefix prefill, count == 0 (a must-accept: the guard-below mutant is equivalent)
+[G4 g1c] 3.6d/G4:precedence:prefix_count0: 0 WARNING-or-worse debug-layer message(s) or tracker violation(s) during the cell (diagnostic, not graded)
+[G4 g1c] 3.6d/G4:precedence:prefix_count0 green (9 checks, 0 failed)
+g1a: 664 checks, 0 failures, 0 skips
+g1b: 514 checks, 0 failures, 0 skips
+g1c: 240 checks, 0 failures, 0 skips
+17 cells, 0 red; 1418 checks, 0 failures, 0 skips
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+# D3D12 VALIDATION [MESSAGE] category=2: Device Debug Layer Startup Options: GPU-Based Validation is enabled (disabled by default). This results in new validation not possible during API calls on the CPU, by creating patched shaders that have validation added directly to the shader. However, it can slow things down a lot, especially for applications with numerous PSOs. Time to see the first render frame may take several minutes.
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+[2026-10-24T10:22:25] exit 0

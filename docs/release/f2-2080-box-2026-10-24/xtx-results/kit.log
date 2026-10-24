@@ -1,0 +1,25 @@
+[10:08:47] F2 GPU twins kit (SuperSLM main 5599f7e4); drive folder D:\kit-f2-xtx
+[10:08:47] D3D12 hardware adapters (EnumAdapters1 order):
+[10:08:47]     0 1002 744c 24516 AMD Radeon RX 7900 XTX
+[10:08:47]     1 1002 164e 485 AMD Radeon(TM) Graphics
+[10:08:47] using adapter 0 (vendor 1002, device 744c)
+[10:08:47] D3D12 debug layer: present (Graphics Tools); the cells run with it, as on the 2080 SUPER
+[10:08:47] f2: pcg_cell_format
+[10:08:54] f2: pcg_cell_pool
+[10:09:36] f2: pcg_cell_busy
+[10:09:41] f2: pcg_cell_faults
+[10:09:50] f2: pcg_cell_budget_snapshot
+[10:09:56] f2: pcg_cell_restore_derived
+[10:10:02] schema: pcg_cell_schema
+[10:11:19] cross: restore the RTX 2080 SUPER blob (must be refused SSLM_RESTORE_PRODUCER_MISMATCH), save this card's
+[10:11:25] g5: pkvg_g5.exe, 24 [G5] cell(s)
+[10:14:58] g4: pkvg_g4.exe, 17 [G4] cell(s)
+[10:22:25] g19: pkvg_g4.exe, 1 [G4] cell(s)
+[10:44:49] f2 : PASS 2026-10-24T10:10:01 :: pcg_cell_format: checks=258 failures=0 skips=0 -> PASS; pcg_cell_pool: checks=266 failures=0 skips=0 -> PASS; pcg_cell_busy: checks=23 failures=0 skips=0 -> PASS; pcg_cell_faults: checks=135 failures=0 skips=0 -> PASS; pcg_cell_budget_snapshot: checks=75 failures=0 skips=0 -> PASS; pcg_cell_restore_derived: checks=53 failures=0 skips=0 -> PASS
+[10:44:49] schema : PASS 2026-10-24T10:11:19 :: pcg_cell_schema: checks=8 failures=0 skips=0 -> PASS
+[10:44:49] cross : PASS 2026-10-24T10:11:24 :: pcg_cross_card: checks=14 failures=0 skips=0 -> PASS
+[10:44:49] g5 : PASS 2026-10-24T10:14:57 :: 24 cells, 0 red; 1074 checks, 0 failures, 0 skips
+[10:44:49] g4 : PASS 2026-10-24T10:22:25 :: 17 cells, 0 red; 1418 checks, 0 failures, 0 skips
+[10:44:49] g19 : PASS 2026-10-24T10:44:49 :: 1 cells, 0 red; 4125 checks, 0 failures, 0 skips
+[10:44:49] adapter 0 (1002:744c); debug layer on
+[10:44:49] KIT RUN FINISHED: unplug the drive and bring it back to the dev box

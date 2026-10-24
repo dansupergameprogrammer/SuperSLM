@@ -1,0 +1,13 @@
+[2026-10-24T10:22:25] pkvg_g4.exe --pkv-fixtures=D:\kit-f2-xtx\fixtures --pkv-reference=D:\kit-f2-xtx\paged-kv-reference --model05=D:\kit-f2-xtx\models\qwen2.5-0.5b-instruct-dg.sslm --model15=D:\kit-f2-xtx\models\qwen2.5-1.5b-instruct-dg-g5.sslm --adapter=D:\kit-f2-xtx\adapters\pkv_def_zero_adapter.sslm --adapter-other-base=D:\kit-f2-xtx\adapters\pkv_qk_zero_adapter.sslm =1.9
+[G4 g1a] 1.9 ...
+  fixture pkv_def: L=2 H_kv=2 D=48 cap=4096 B=16 page_bytes=6144 qk=0
+  diagnostic 1.9 after teardown: page_count=400 free_pages=400 shared_pages=0 B=16
+  1.9: creates=135 adopts=279 prefills=47 resets=118 releases=125 prefix_rebuilds=118
+[G4 g1a] 1.9 green (4125 checks, 0 failed)
+g1a: 4125 checks, 0 failures, 0 skips
+g1b: 0 checks, 0 failures, 0 skips
+g1c: 0 checks, 0 failures, 0 skips
+1 cells, 0 red; 4125 checks, 0 failures, 0 skips
+# adapter: AMD Radeon RX 7900 XTX
+# adapter: AMD Radeon RX 7900 XTX
+[2026-10-24T10:44:49] exit 0

@@ -1,0 +1,7 @@
+f2 : PASS 2026-10-24T10:10:01 :: pcg_cell_format: checks=258 failures=0 skips=0 -> PASS; pcg_cell_pool: checks=266 failures=0 skips=0 -> PASS; pcg_cell_busy: checks=23 failures=0 skips=0 -> PASS; pcg_cell_faults: checks=135 failures=0 skips=0 -> PASS; pcg_cell_budget_snapshot: checks=75 failures=0 skips=0 -> PASS; pcg_cell_restore_derived: checks=53 failures=0 skips=0 -> PASS
+schema : PASS 2026-10-24T10:11:19 :: pcg_cell_schema: checks=8 failures=0 skips=0 -> PASS
+cross : PASS 2026-10-24T10:11:24 :: pcg_cross_card: checks=14 failures=0 skips=0 -> PASS
+g5 : PASS 2026-10-24T10:14:57 :: 24 cells, 0 red; 1074 checks, 0 failures, 0 skips
+g4 : PASS 2026-10-24T10:22:25 :: 17 cells, 0 red; 1418 checks, 0 failures, 0 skips
+g19 : PASS 2026-10-24T10:44:49 :: 1 cells, 0 red; 4125 checks, 0 failures, 0 skips
+adapter 0 (1002:744c); debug layer on

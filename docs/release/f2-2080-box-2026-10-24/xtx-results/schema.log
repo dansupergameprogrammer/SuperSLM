@@ -1,0 +1,7 @@
+[2026-10-24T10:10:02] pcg_cell_schema.exe 
+2.13 GPU: must-reject-two-name.sslm refused at map with SSLM_DEVICE_LOST
+2.13 GPU: must-reject-zero-hash.sslm refused at map with SSLM_DEVICE_LOST
+pcg_cell_schema: checks=8 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: AMD Radeon RX 7900 XTX
+[2026-10-24T10:11:19] exit 0
