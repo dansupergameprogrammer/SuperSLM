@@ -108,7 +108,7 @@ struct Fields {
 // Validates the n-byte blob in the order above and, on kOk, fills *out. Reads nothing else and changes nothing.
 Verdict Read(const uint8_t* blob, size_t n, const Expect& expect, Fields* out);
 
-// ---- 'SPD1', the delta of a nested prefix (SuperSLM 1.18.0) -----------------------------------------------------
+// ---- 'SPD1', the delta of a nested prefix (SuperSLM 1.19.0) -----------------------------------------------------
 //
 // Offsets 0..183 are SPX1's, written by WriteHeader, with the magic 'SPD1'; then
 //

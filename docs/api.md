@@ -1101,7 +1101,7 @@ one version line may accept one another's blobs, outside that fidelity promise.
 Model mapping refuses two schema names with the same nonzero FNV-1a 64-bit
 hash, or a name hashing to zero, so a saved schema hash resolves uniquely.
 
-### Delta prefix saves (1.18.0 CPU ABI)
+### Delta prefix saves (1.19.0 CPU ABI)
 
 `SSLM_HAS_PREFIX_DELTA_ABI` marks `sslm_prefix_save_delta`, `sslm_prefix_assemble`, and
 `sslm_prefix_restore`'s reading of `SPD1`. A nested prefix's full `SPX1` repeats every row of its

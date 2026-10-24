@@ -1,4 +1,4 @@
-"""Independent struct/hashlib reader for the 1.18.0 delta prefix blob 'SPD1' (cell D15/E6).
+"""Independent struct/hashlib reader for the 1.19.0 delta prefix blob 'SPD1' (cell D15/E6).
 
 Given a parent SPX1, its child's full SPX1 and the child's SPD1 (as cell D15/E6 writes them), it checks the
 delta's layout against the plan's table (superslm-prefix-delta-1p18 §3) and rebuilds the child's SPX1 from the

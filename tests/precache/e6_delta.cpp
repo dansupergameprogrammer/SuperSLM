@@ -1,4 +1,4 @@
-// SuperSLM 1.18.0 delta prefix saves (plan: superslm-prefix-delta-1p18, §3-§7): the SPD1 blob, its
+// SuperSLM 1.19.0 delta prefix saves (plan: superslm-prefix-delta-1p18, §3-§7): the SPD1 blob, its
 // restore onto a live parent, and the model-free assemble. Cells D<n>/E6, all on the generated paged-KV
 // fixtures (pkv_def at the E1 target's pinned B = 16, pkv_qk as the other model).
 //

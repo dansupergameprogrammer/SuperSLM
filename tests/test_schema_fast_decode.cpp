@@ -3750,14 +3750,14 @@ void Cell_9_2() {
 	}
 	// No new status from schema fast-decode (§5.3; rev 1.2.2, audit M-2): the status list's entry count equals
 	// the base this line builds on, and the existing ordinals are unchanged. That base is main's 30, plus the
-	// precached-prefixes line's SSLM_RESTORE_PRODUCER_MISMATCH (ordinal 30), plus 1.18.0's delta saves'
+	// precached-prefixes line's SSLM_RESTORE_PRODUCER_MISMATCH (ordinal 30), plus 1.19.0's delta saves'
 	// SSLM_RESTORE_PARENT_MISMATCH (ordinal 31): 32. Schema fast-decode itself still adds none.
 	{
 		int n = 0;
 #define SFD_COUNT_STATUS(name) ++n;
 		SSLM_STATUS_ENUM_LIST(SFD_COUNT_STATUS)
 #undef SFD_COUNT_STATUS
-		// 1.18.0 appends SSLM_RESTORE_PARENT_MISMATCH (delta prefix saves): 32. Schema fast-decode still adds none.
+		// 1.19.0 appends SSLM_RESTORE_PARENT_MISMATCH (delta prefix saves): 32. Schema fast-decode still adds none.
 		CHECK_MSG(n == 32, "[9.2] the status list has %d entries; main plus precached prefixes and delta saves has 32", n);
 	}
 	CHECK_MSG(static_cast<int>(SSLM_RESTORE_PRODUCER_MISMATCH) == 30, "[9.2] the precache status ordinal moved");

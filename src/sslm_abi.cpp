@@ -368,7 +368,7 @@ struct sslm_prefix_s {
 	// sslm_seq_adopt_prefix, below, is where this reasoning is applied).
 	sslm_schema bound_schema = nullptr;
 	uint32_t dfa_walk_state = kDfaWalkStateUnused;
-	// SuperSLM 1.18.0 (delta saves): the SHA-256 of rows [0, context_length) of every run, in SPX1's row
+	// SuperSLM 1.19.0 (delta saves): the SHA-256 of rows [0, context_length) of every run, in SPX1's row
 	// order, computed the first time this frozen prefix is a delta's parent and kept, since a frozen
 	// prefix's rows never change. Concurrent restores onto one parent take rows_digest_mu.
 	std::mutex rows_digest_mu;
@@ -5468,7 +5468,7 @@ extern "C" sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t* n
 	return SSLM_OK;
 }
 
-// SuperSLM 1.18.0: the SPD1 delta of a frozen nested prefix (spx1_format.h). The parent rows digest is taken from
+// SuperSLM 1.19.0: the SPD1 delta of a frozen nested prefix (spx1_format.h). The parent rows digest is taken from
 // this prefix's own rows [0, origin), so no parent handle is needed.
 static sslm_status PrefixSaveDeltaImpl(sslm_prefix prefix, void* buf, size_t* n) {
 	if (!n || !prefix || !prefix->frozen || prefix->state.layer_index != 0) return SSLM_INVALID_ARGUMENT;
@@ -5671,7 +5671,7 @@ superslm::spx1::Expect CpuPrefixExpect(sslm_model model, const std::array<uint8_
 	return expect;
 }
 
-// SuperSLM 1.18.0: an SPD1 restore. The parent is required and is checked after every field of the delta and
+// SuperSLM 1.19.0: an SPD1 restore. The parent is required and is checked after every field of the delta and
 // before any draw: frozen, of `model`, holding exactly origin positions, and its rows [0, origin) hash to the
 // delta's parent rows digest; any failure is SSLM_RESTORE_PARENT_MISMATCH. In the restore pool the parent's
 // leading floor(origin/B) pages are shared; a parent in another pool of the model is a row source only.

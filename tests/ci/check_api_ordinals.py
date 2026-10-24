@@ -5,7 +5,7 @@ following the word "ordinal" ("ordinals 24 to 29" is a range, not a statement, a
 pairs with the one backticked status name of the SSLM_STATUS_ENUM_LIST X-macro on its own line; a line
 with no such name pairs with the first one on the next line of the same paragraph; with none on either
 line the statement is unpaired and the check refuses. Each stated integer must equal the name's
-position in the X-macro. SSLM_RESTORE_PRODUCER_MISMATCH must be stated, at 30, and (1.18.0)
+position in the X-macro. SSLM_RESTORE_PRODUCER_MISMATCH must be stated, at 30, and (1.19.0)
 SSLM_RESTORE_PARENT_MISMATCH at 31. A name with
 fewer statements than its recorded floor refuses, so a statement reworded past the locator drops out
 loudly instead of letting the check pass on fewer statements.
@@ -23,7 +23,7 @@ import sys
 FLOORS = {"SSLM_KV_BUDGET_EXCEEDED": 2, "SSLM_RESTORE_PRODUCER_MISMATCH": 2,
           "SSLM_RESTORE_PARENT_MISMATCH": 2}
 # The new status and the ordinal the release states it at.
-# 1.18.0 (delta prefix saves) appends SSLM_RESTORE_PARENT_MISMATCH at 31.
+# 1.19.0 (delta prefix saves) appends SSLM_RESTORE_PARENT_MISMATCH at 31.
 REQUIRED = {"SSLM_RESTORE_PRODUCER_MISMATCH": 30, "SSLM_RESTORE_PARENT_MISMATCH": 31}
 
 _ORDINAL = re.compile(r"\bordinal\s+(\d+)\b", re.I)

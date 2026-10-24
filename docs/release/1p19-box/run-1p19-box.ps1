@@ -1,14 +1,14 @@
-# Engine 1.18.0 box sitting (delta prefix saves, plan superslm-prefix-delta-1p18 §8 S3): the C verb inventory, MSVC
+# Engine 1.19.0 box sitting (delta prefix saves, plan superslm-prefix-delta-1p18 §8 S3): the C verb inventory, MSVC
 # and clang-cl builds, the X2 export check, the E6 cells, and the full precache E1 target (E2/E3/E6, D12 included)
 # under the E4 box environment. The run sheet is README.md beside this file.
 # Resumable: each step writes <Scratch>\out\<step>.done and is skipped when that file exists; delete it to re-run.
 # Run under Windows PowerShell 5.1 from any directory:
-#   powershell -ExecutionPolicy Bypass -File D:\_scratch\delta-1p18\src\docs\release\1p18-box\run-1p18-box.ps1
+#   powershell -ExecutionPolicy Bypass -File D:\_scratch\delta-1p19\src\docs\release\1p19-box\run-1p19-box.ps1
 # Steps: verbs, build-msvc, e6-msvc, x2, e1-msvc, build-clangcl, e6-clangcl (default: all, in that order).
 # Exit 0 only when every step passed. It never commits, pushes or deletes anything outside <Scratch>\out.
 param(
     [string[]]$Steps = @('verbs', 'build-msvc', 'e6-msvc', 'x2', 'e1-msvc', 'build-clangcl', 'e6-clangcl'),
-    [string]$Scratch = 'D:\_scratch\delta-1p18',
+    [string]$Scratch = 'D:\_scratch\delta-1p19',
     # The E4 box environment (MSVC 14.34 dev shell and the SUPERSLM_PRECACHE_* paths), from the 1.14 post-M1 line.
     [string]$E4Env = 'D:\_scratch\e4\src\tests\precache\e4_box_env.ps1',
     [string]$ClangCl = 'clang-cl'
@@ -67,7 +67,7 @@ try {
             $added = @($new | Where-Object { $old -notcontains $_ }); $gone = @($old | Where-Object { $new -notcontains $_ })
             Say "verbs: $($new.Count) (was $($old.Count)); added $($added -join ', '); removed $($gone -join ', ')"
             if (($added -join ',') -ne 'sslm_prefix_assemble,sslm_prefix_save_delta' -or $gone.Count -ne 0) {
-                throw 'STOP: the verb change is not exactly the two 1.18.0 verbs'
+                throw 'STOP: the verb change is not exactly the two 1.19.0 verbs'
             }
             $line = [array]::IndexOf($new, 'sslm_seq_jump_forward') + 1
             Say "verbs: sslm_seq_jump_forward is at line $line of the list's names (cell 9.X2 expects 48 after this change)"
