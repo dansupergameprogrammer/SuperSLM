@@ -189,6 +189,23 @@ SUPERSLM_API sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* poo
 /* Page counts of a pool (either create verb): page_count, free_pages, shared_pages and B. The
  * caller sets out->struct_size. A diagnostic for sizing admissions, read under the pool lock. */
 SUPERSLM_API sslm_status sslm_kv_pool_stats(sslm_kv_pool pool, sslm_kv_pool_stats_out* out);
+/* Streamed adapters (plan rev 1.2 §3.1). What a mapped adapter is and holds: its ADP1 fields, its
+ * base and own integrity hashes, the base layers it covers, and host_resident_bytes, every heap byte
+ * the handle owns (the artifact copy, its parsed tables, the per-layer table and the handle itself).
+ * device_resident_bytes and upload_staging_bytes are 0 on the CPU. The caller sets out->struct_size
+ * (adapter_info.h); a size below SSLM_ADAPTER_INFO_V1_SIZE, or a null argument, is
+ * SSLM_INVALID_ARGUMENT. Any thread, while the handle is live. */
+SUPERSLM_API sslm_status sslm_adapter_info_get(sslm_adapter adapter, sslm_adapter_info* out);
+/* The most host heap bytes sslm_adapter_map(data, artifact_bytes, base, ...) holds at any moment
+ * between its entry and its return, for every input of that size, accepted or refused (the caller's
+ * own buffer not included). From the base's layer count and the size alone: it reads nothing,
+ * allocates nothing, and is callable on any thread. It over-approximates (docs/api.md states the
+ * slack); it never under-approximates. SSLM_INVALID_ARGUMENT for a null argument.
+ * sslm_adapter_map refuses (SSLM_ARTIFACT_REJECTED), before parsing, an artifact with more than six
+ * sections, a section other than the six an adapter carries (Config, SigmoidLut, Provenance,
+ * Weights, DeltaFoldScales, UFoldScales), more Weights entries than 14 per base layer or more
+ * DeltaFoldScales or UFoldScales entries than 7, or an ADP1 name over 4096 bytes. */
+SUPERSLM_API sslm_status sslm_adapter_map_peak_bound(sslm_model base, uint64_t artifact_bytes, uint64_t* out_bytes);
 /* A sequence's mode, origin, budget, limit, context length and pages; the caller sets
  * out->struct_size. Takes the sequence's lifecycle lock; must not race a prefill of the same
  * sequence (one caller per sequence at a time). A sequence restored from SSB5 or older reads

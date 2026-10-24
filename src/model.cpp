@@ -284,6 +284,7 @@ SslmModelStatus SslmAmplifyingFoldScaleViewAccess<Kind>::ParseImpl(const SslmSec
 	// This section's own dtype is always Int32 (ExpectedDtype, artifact.cpp) -- 4 bytes/elem.
 	constexpr uint32_t kElementSize = 4;
 
+	// PEAK-BOUND manifests
 	std::vector<SslmAmplifyingFoldEntry> entries;
 	entries.reserve(tensor_count);
 	std::vector<std::pair<uint64_t, uint64_t>> ranges;
@@ -541,6 +542,7 @@ SslmModelStatus SslmTensorManifestAccess::ParseImpl(const SslmSectionView& secti
 		return Reject(SslmModelStatus::BadManifestMagic, err, "section carries an unknown element dtype");
 
 	// --- Descriptors (all descriptor bytes are now known in-bounds) ---
+	// PEAK-BOUND manifests
 	std::vector<SslmTensorView> tensors;
 	tensors.reserve(tensor_count);
 	// Accepted tensors' byte ranges [start, end), for the post-loop overlap check.
@@ -1332,6 +1334,7 @@ SslmModelStatus ValidateQkChannelTableAdditive(const SslmModelView& view, std::s
 	}
 	if (!flag) {
 		for (uint32_t l = 0; l < view.config.num_hidden_layers; ++l) {
+			// PEAK-BOUND messages: the per-layer probe names, two short strings at once.
 			const std::string prefix = "layer" + std::to_string(l);
 			if (view.weights.Tensor(prefix + ".q_norm.gain") != nullptr ||
 			    view.weights.Tensor(prefix + ".k_norm.gain") != nullptr) {

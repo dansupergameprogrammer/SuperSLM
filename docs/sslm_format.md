@@ -492,6 +492,39 @@ available. The section is optional because greedy remains the artifact and
 runtime default; a caller selecting damped greedy on an artifact without both
 the section and its flag receives a defined rejection.
 
+## Adapter artifacts (ADP1)
+
+A LoRA adapter is an ordinary `.sslm` container that `tools/sslm_convert_adapter.py` writes with
+exactly six sections, in this order: `Config` (the base model's own CFG1 bytes), `SigmoidLut`,
+`Provenance` (the ADP1 payload below), `Weights` (a `WGT1` int8 manifest: `layer<N>.<proj>.lora_A`
+of shape `[rank, in]` and `layer<N>.<proj>.lora_B` of shape `[out, rank]`), `DeltaFoldScales`
+(`DFS1`: one `layer<N>.<proj>` entry of `out` (identity, mult, exponent) triples) and `UFoldScales`
+(`UFS1`: one entry of `rank` triples for the same name). `<proj>` is one of the seven adaptable
+projections; `in` and `out` are that projection's channel counts in the base (q_proj outputs
+`num_attention_heads × head_dim`; o_proj reads it).
+
+The ADP1 payload (little-endian, 68 fixed bytes, then the name):
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 4 | magic `ADP1` |
+| 4 | 4 | version, 1 |
+| 8 | 4 | rank |
+| 12 | 4 | target-module mask: bit 0 q_proj, 1 o_proj, 2 gate_proj, 3 up_proj, 4 down_proj, 5 k_proj, 6 v_proj; any higher bit is refused |
+| 16 | 32 | base artifact integrity hash (the base `.sslm` header's) |
+| 48 | 8 | lora_alpha, IEEE-754 binary64 |
+| 56 | 4 | use_rslora, 0 or 1 |
+| 60 | 4 | reserved, 0 |
+| 64 | 4 | name length in bytes |
+| 68 | n | name (UTF-8, not terminated) |
+
+An adapter loads only against the base whose integrity hash it names. Every `DeltaFoldScales`
+entry needs its `UFoldScales` entry and both `Weights` tensors at exactly those shapes, and names
+a projection its mask claims. Since streamed adapters (`SSLM_HAS_ADAPTER_INFO_ABI`), the CPU map and
+the GPU prepare refuse, before parsing, an artifact with a section outside these six, more entries
+than an adapter for its base can use (14 `Weights` and 7 of each fold kind per base layer), or a
+name over 4,096 bytes (docs/api.md).
+
 ## Versioning
 
 `format_version` is a single integer. A reader that does not recognize the version

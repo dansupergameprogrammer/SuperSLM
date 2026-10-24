@@ -20,6 +20,7 @@
 #include <stddef.h>
 
 #include "superslm/parallel_for.h" /* sslm_parallel_for (sslm_workspace_set_parallel_for) */
+#include "superslm/adapter_info.h" /* sslm_adapter_info (sslm_adapter_info_get) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -300,6 +301,9 @@ typedef struct sslm_stats_out {
  * SSLM_KV_BUDGET_EXCEEDED, so a consumer can test for the whole surface at once. */
 #define SSLM_HAS_PAGED_KV_ABI 1
 #define SSLM_HAS_PREFIX_SAVE_ABI 1
+/* Streamed adapters (plan rev 1.2 §3.1-3.2): sslm_adapter_info_get, sslm_adapter_map_peak_bound, and
+ * sslm_seq_set_adapter under the sequence lock. */
+#define SSLM_HAS_ADAPTER_INFO_ABI 1
 
 /* sslm_kv_pool_stats' output. The caller sets struct_size = sizeof(sslm_kv_pool_stats_out); any
  * other value is SSLM_INVALID_ARGUMENT. shared_pages is the number of distinct pages that at least

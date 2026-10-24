@@ -166,6 +166,7 @@ uint64_t RdU64(const uint8_t* p) noexcept {
 
 bool IsPowerOfTwo(uint32_t v) noexcept { return v != 0 && (v & (v - 1)) == 0; }
 
+// PEAK-BOUND messages: every message built for this helper is fixed text and numbers.
 SslmStatus Reject(SslmError* err, SslmStatus code, uint32_t section, std::string msg) {
 	if (err) {
 		err->code = code;
@@ -344,6 +345,7 @@ SslmStatus SslmArtifactAccess::OpenFromMemoryImpl(const uint8_t* data, size_t si
 	}
 
 	// --- Per-section descriptors ---
+	// PEAK-BOUND sections
 	std::vector<Placed> placed;
 	placed.reserve(section_count);
 	for (uint32_t i = 0; i < section_count; ++i) {
@@ -467,6 +469,7 @@ SslmStatus SslmArtifactAccess::OpenFromMemoryImpl(const uint8_t* data, size_t si
 
 	// --- Accepted: take ownership of the bytes and build views into them. bytes_
 	//     is assigned once and never resized, so the view pointers stay valid. ---
+	// PEAK-BOUND copy
 	out.bytes_.assign(data, data + size);
 	out.format_version_ = version;
 	out.file_bytes_ = file_bytes;
@@ -478,6 +481,7 @@ SslmStatus SslmArtifactAccess::OpenFromMemoryImpl(const uint8_t* data, size_t si
 	// implicitly was).
 	out.flags_ = flags;
 	std::memcpy(out.integrity_, data + kIntegrityHashOffset, kIntegrityHashBytes);
+	// PEAK-BOUND sections
 	out.sections_.reserve(placed.size());
 	for (const Placed& p : placed) {
 		SslmSectionView v;

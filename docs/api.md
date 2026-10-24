@@ -623,6 +623,38 @@ silently accepted.
 - **Adapter**: `sslm_adapter_map` / `sslm_adapter_release`, rejecting a
   base-model mismatch; `sslm_adapter_residency` reports its resident byte
   size.
+- **Adapter info and peak bound** (streamed adapters, `SSLM_HAS_ADAPTER_INFO_ABI`):
+  `sslm_adapter_info_get` fills an `sslm_adapter_info` (`superslm/adapter_info.h`) with the
+  adapter's ADP1 fields (version, rank, target-module mask, alpha, rsLoRA flag, name truncated to
+  63 bytes), its base and own integrity hashes, the base layers it covers, and
+  `host_resident_bytes`, every heap byte the handle owns: the artifact copy, its section and
+  manifest tables, the per-layer table, the name and the handle. `sslm_adapter_residency` still
+  returns the artifact's size. The caller sets `struct_size`; a size below
+  `SSLM_ADAPTER_INFO_V1_SIZE` or a null argument is `SSLM_INVALID_ARGUMENT`, and a larger size
+  is accepted with the bytes past v1 left untouched. Any thread, while the handle is live.
+
+  `sslm_adapter_map_peak_bound(base, artifact_bytes, &bytes)` gives, before a byte is read, the
+  most host heap bytes `sslm_adapter_map` holds at once for **any** input of that size, accepted
+  or refused, the caller's own buffer excluded. It reads only the base's layer count, allocates
+  nothing and runs on any thread. It is an upper bound, never an estimate: artifact_bytes plus a
+  fixed term per base layer (the section, manifest and per-layer tables at the most entries the
+  map admits) plus about 8 KiB of name, message and handle terms. At pkv_def's 2 layers the slack
+  over the measured peak is 10 to 17 KiB; per layer the bound adds about 4.6 KiB, which an
+  adapter of real size dwarfs. `docs/lora-residency/peak-bound-census.md` lists every allocation
+  site and the term that covers it.
+
+  To keep that bound finite, `sslm_adapter_map` refuses (`SSLM_ARTIFACT_REJECTED`), before
+  parsing anything, an artifact no adapter is shaped like: more than six sections; a section
+  other than `Config`, `SigmoidLut`, `Provenance`, `Weights`, `DeltaFoldScales` and
+  `UFoldScales` (the six the converter writes); more `Weights` entries than 14 per base layer, or
+  more `DeltaFoldScales` or `UFoldScales` entries than 7 per base layer; an ADP1 name over 4,096
+  bytes. Every adapter `tools/sslm_convert_adapter.py` writes passes, and every other refusal
+  is unchanged.
+- **Binding is serialized with decode.** `sslm_seq_set_adapter` takes the sequence's lock for
+  its whole body, as `sslm_seq_reset` does. A bind issued while a decode or prefill call is
+  running that sequence waits for the call to finish; two binds of one sequence from two threads
+  are serialized. Releasing an adapter (`sslm_adapter_release`) concurrently with a bind of that
+  same adapter is caller undefined behaviour: release only an adapter no thread is binding.
 
 ### Decoding
 

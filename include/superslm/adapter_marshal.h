@@ -157,7 +157,7 @@ inline bool TargetModulesMaskHasUnknownBit(uint32_t mask) noexcept {
 // `name = f"layer{layer}.{proj}"`) into a numeric layer index and the projection substring.
 // Returns false (leaving `layer`/`proj` unspecified) if the name does not match that shape --
 // no leading "layer", no digits, no ".", or a proj substring containing another '.'.
-inline bool ParseLayerProjName(std::string_view name, uint32_t& layer, std::string& proj) {
+inline bool ParseLayerProjName(std::string_view name, uint32_t& layer, std::string_view& proj) {
 	constexpr std::string_view kPrefix = "layer";
 	if (name.size() <= kPrefix.size() || name.substr(0, kPrefix.size()) != kPrefix) return false;
 	size_t i = kPrefix.size();
@@ -174,8 +174,30 @@ inline bool ParseLayerProjName(std::string_view name, uint32_t& layer, std::stri
 	std::string_view rest = name.substr(i + 1);
 	if (rest.empty() || rest.find('.') != std::string_view::npos) return false;
 	layer = static_cast<uint32_t>(v);
-	proj = std::string(rest);
+	proj = rest;
 	return true;
+}
+
+// The same parse into an owned string, for callers that keep the projection past the name's
+// bytes. PopulateAdapterFromView uses the view form above, which allocates nothing.
+inline bool ParseLayerProjName(std::string_view name, uint32_t& layer, std::string& proj) {
+	std::string_view view;
+	if (!ParseLayerProjName(name, layer, view)) return false;
+	proj = std::string(view);
+	return true;
+}
+
+// The Weights tensor named "<base_name><suffix>" ("layer3.q_proj" + ".lora_A"), found by comparing
+// the two parts in place rather than building the joined name, so the lookup allocates nothing.
+inline const superslm::SslmTensorView* FindTensorWithSuffix(const superslm::SslmTensorManifest& manifest,
+                                                            std::string_view base_name,
+                                                            std::string_view suffix) noexcept {
+	for (const superslm::SslmTensorView& t : manifest.Tensors()) {
+		if (t.name.size() == base_name.size() + suffix.size() &&
+		    t.name.substr(0, base_name.size()) == base_name && t.name.substr(base_name.size()) == suffix)
+			return &t;
+	}
+	return nullptr;
 }
 
 // This projection's own out_channels, the SAME per-projection channel-count convention
@@ -191,7 +213,7 @@ inline bool ParseLayerProjName(std::string_view name, uint32_t& layer, std::stri
 // A caller with no real q_width to thread (none exists today; kept for the identical
 // "not-yet-widened caller" fallback GS-04's own guard uses) passes hidden_size, which is exactly
 // this parameter's own pre-T-2509 value everywhere it coincided with q_width.
-inline uint64_t AdapterOutChannelsFor(const std::string& proj, uint64_t hidden_size,
+inline uint64_t AdapterOutChannelsFor(std::string_view proj, uint64_t hidden_size,
                                        uint64_t intermediate_size, uint64_t kv_hidden_size,
                                        uint64_t q_width) {
 	// SSLM-GEOMETRY-SITE: GS-29
@@ -221,7 +243,7 @@ inline uint64_t AdapterOutChannelsFor(const std::string& proj, uint64_t hidden_s
 //
 // T-2509 (fact sheet §3.1): `q_width`, the identical required parameter
 // `AdapterOutChannelsFor` above now takes, for the identical reason.
-inline uint64_t AdapterInChannelsFor(const std::string& proj, uint64_t hidden_size,
+inline uint64_t AdapterInChannelsFor(std::string_view proj, uint64_t hidden_size,
                                       uint64_t intermediate_size, uint64_t q_width) {
 	if (proj == "down_proj") return intermediate_size;
 	// SSLM-GEOMETRY-SITE: GS-28
@@ -336,6 +358,7 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 		if (err) *err = "ADP1's declared source_adapter_name_len overruns the Provenance section";
 		return AdapterLoadStatus::BadAdp1Size;
 	}
+	// PEAK-BOUND name
 	meta.source_adapter_name.assign(reinterpret_cast<const char*>(prov->data + kAdp1FixedBytes),
 	                                     name_len);
 
@@ -350,9 +373,12 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 	}
 
 	// --- base-hash (design Sec9 item (d), ValidateAmplifyingFoldBaseHash) --
+	// Streamed adapters (1.16.0 plan §3.1): every validator below is handed a message string only
+	// when the caller asked for one, so a null `err` builds no message (none of them holds an
+	// artifact name), which keeps the adapter peak bounds free of name-sized terms.
 	std::string hash_err;
 	if (superslm::ValidateAmplifyingFoldBaseHash(meta.base_artifact_hash, base.base_artifact_hash,
-	                                              &hash_err) != superslm::SslmModelStatus::Ok) {
+	                                              err ? &hash_err : nullptr) != superslm::SslmModelStatus::Ok) {
 		if (err) *err = "adapter base-hash mismatch: " + hash_err;
 		return AdapterLoadStatus::BaseHashMismatch;
 	}
@@ -371,14 +397,16 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 		return AdapterLoadStatus::MissingUFoldSection;
 	}
 
+	// PEAK-BOUND layers
 	layer_adapters.assign(base.num_hidden_layers, superslm::LayerAdapter{});
 	for (auto& la : layer_adapters) la.rank = meta.rank;
 
+	// PEAK-BOUND modules
 	const std::vector<std::string_view> claimed = TargetModulesFromMask(meta.target_modules_mask);
 
 	for (const auto& dentry : view.delta_fold_scales.Entries()) {
 		uint32_t layer = 0;
-		std::string proj;
+		std::string_view proj;
 		if (!ParseLayerProjName(dentry.name, layer, proj)) {
 			if (err) *err = "unparsable DeltaFoldScales entry name: " + std::string(dentry.name);
 			return AdapterLoadStatus::UnparsableEntryName;
@@ -391,7 +419,7 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 		}
 
 		std::string proj_err;
-		if (superslm::ValidateAmplifyingFoldProjection(proj, claimed, &proj_err) !=
+		if (superslm::ValidateAmplifyingFoldProjection(proj, claimed, err ? &proj_err : nullptr) !=
 		    superslm::SslmModelStatus::Ok) {
 			if (err) *err = "adapter projection invalid for \"" + std::string(dentry.name) +
 			                 "\": " + proj_err;
@@ -404,7 +432,7 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 		const uint64_t expected_out = AdapterOutChannelsFor(
 		    proj, base.hidden_size, base.intermediate_size, base.kv_hidden_size, base.q_width);
 		std::string dim_err;
-		if (superslm::ValidateAmplifyingFoldDimension(dentry, expected_out, &dim_err) !=
+		if (superslm::ValidateAmplifyingFoldDimension(dentry, expected_out, err ? &dim_err : nullptr) !=
 		    superslm::SslmModelStatus::Ok) {
 			if (err) *err = "DeltaFoldScales dimension mismatch for \"" + std::string(dentry.name) +
 			                 "\": " + dim_err;
@@ -418,17 +446,15 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 			return AdapterLoadStatus::MissingUFoldEntry;
 		}
 		std::string udim_err;
-		if (superslm::ValidateAmplifyingFoldDimension(*uentry, meta.rank, &udim_err) !=
+		if (superslm::ValidateAmplifyingFoldDimension(*uentry, meta.rank, err ? &udim_err : nullptr) !=
 		    superslm::SslmModelStatus::Ok) {
 			if (err) *err = "UFoldScales dimension mismatch for \"" + std::string(dentry.name) +
 			                 "\": " + udim_err;
 			return AdapterLoadStatus::UFoldDimensionMismatch;
 		}
 
-		const superslm::SslmTensorView* a_t =
-		    view.weights.Tensor(std::string(dentry.name) + ".lora_A");
-		const superslm::SslmTensorView* b_t =
-		    view.weights.Tensor(std::string(dentry.name) + ".lora_B");
+		const superslm::SslmTensorView* a_t = FindTensorWithSuffix(view.weights, dentry.name, ".lora_A");
+		const superslm::SslmTensorView* b_t = FindTensorWithSuffix(view.weights, dentry.name, ".lora_B");
 		if (!a_t || !b_t) {
 			if (err) *err = "adapter Weights section carries no lora_A/lora_B tensor for \"" +
 			                 std::string(dentry.name) + "\"";

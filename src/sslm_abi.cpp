@@ -93,6 +93,7 @@
 #endif
 
 #include "superslm/adapter_marshal.h"
+#include "adapter_core.h"  // streamed adapters (1.16.0 plan §3.1): prescreen, peak bounds, info
 #include "superslm/forward_sites.h"
 #include "superslm/layer_marshal.h"
 #include "superslm/model.h"
@@ -251,11 +252,18 @@ extern "C" sslm_status sslm_t2700_set_fused_k_capture_sink(
 // by sslm_seq_set_adapter's own bind/unbind. `artifact_bytes` is this handle's own reported
 // residency (sslm_adapter_residency) -- the mapped artifact's own byte size, a real footprint
 // answer rather than an estimate.
+//
+// Streamed adapters (1.16.0 plan §3.1): `host_resident_bytes` is every heap byte the handle owns once
+// the map returns (sslm_adapter_info_get), and `artifact_hash` the adapter's own integrity hash,
+// both taken at map. `covered_layers` likewise.
 struct sslm_adapter_s {
 	sslm_model_s* base = nullptr;
 	superslm_adapter::AdapterHandle handle;
 	size_t artifact_bytes = 0;
 	std::atomic<uint32_t> live_refs{0};
+	uint64_t host_resident_bytes = 0;
+	uint32_t covered_layers = 0;
+	std::array<uint8_t, superslm::kIntegrityHashBytes> artifact_hash{};
 };
 
 // C1. A caller-owned batch-orchestration scratch region (design Sec7.1, RULED design commit
@@ -6018,15 +6026,25 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 	*out = nullptr;
 	if (!data || !base) return SSLM_INVALID_ARGUMENT;
 
+	// Streamed adapters (1.16.0 plan §3.1, the peak bound): refuse, before any parse, an artifact no
+	// adapter is shaped like (superslm_adapter::PrescreenAdapterArtifact names the rules). Every
+	// artifact the converter writes passes; so does every input the container itself would refuse,
+	// which Load below refuses as before.
+	if (!superslm_adapter::PrescreenAdapterArtifact(static_cast<const uint8_t*>(data), size,
+	                                                base->view.config.num_hidden_layers)) {
+		return SSLM_ARTIFACT_REJECTED;
+	}
+
 	superslm::SslmModelView adapter_view;
-	std::string err;
 	// N3 -- see sslm_model_map's own identical comment (Claude/Poirot/
 	// 2c18dab-t2139-abi-build-review.md Sec6.3): SslmModel::Load caught explicitly rather than
 	// left to cross this extern "C" boundary as an exception.
 	superslm::SslmModelStatus load_st;
 	try {
+		// No message string: this verb returns a status only, and a null `err` keeps every
+		// name-carrying message unbuilt (the peak bound's `messages` term).
 		load_st = superslm::SslmModel::Load(static_cast<const uint8_t*>(data), size, adapter_view,
-		                                     &err);
+		                                     nullptr);
 	} catch (const std::bad_alloc&) {
 		// FOLD RULING on F2 -- see sslm_model_map's own identical comment and
 		// CatchAllocationFailure's own comment for the full reasoning.
@@ -6058,6 +6076,7 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 	base_geom.q_width = static_cast<uint64_t>(bc.num_attention_heads) * bc.head_dim;
 	base_geom.base_artifact_hash = base->view.RawIntegrityHash();
 
+	// PEAK-BOUND handle
 	auto* h = new (std::nothrow) sslm_adapter_s();
 	// N3 -- see sslm_workspace_create's own identical comment.
 	if (!h) return SSLM_ALLOCATION_FAILED;
@@ -6084,7 +6103,7 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 		// tools/t2139_d3466_postload_region_pin.cpp.
 		superslm::internal::MaybeThrowInjectedBadAllocFaultPostLoadRegion();
 		populate_st = superslm_adapter::PopulateAdapterFromView(
-		    h->handle.view_, base_geom, h->handle.meta, h->handle.layer_adapters, &err);
+		    h->handle.view_, base_geom, h->handle.meta, h->handle.layer_adapters, nullptr);
 		return SSLM_OK;
 	});
 	if (populate_alloc_st != SSLM_OK) {
@@ -6105,8 +6124,42 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 		return SSLM_ARTIFACT_REJECTED;
 	}
 
+	// The section count the container held, read from the header Load accepted (its section table is
+	// reserved to exactly that many rows).
+	const auto* hdr = static_cast<const uint8_t*>(data);
+	const uint32_t section_count = uint32_t(hdr[12]) | (uint32_t(hdr[13]) << 8) | (uint32_t(hdr[14]) << 16) |
+	                               (uint32_t(hdr[15]) << 24);
+	h->host_resident_bytes =
+	    sizeof(sslm_adapter_s) + superslm_adapter::AdapterViewHeapBytes(size, section_count, h->handle.view_,
+	                                                                    h->handle.meta, h->handle.layer_adapters);
+	h->covered_layers = superslm_adapter::CoveredLayers(h->handle.layer_adapters);
+	h->artifact_hash = h->handle.view_.RawIntegrityHash();
+
 	base->live_refs.fetch_add(1, std::memory_order_acq_rel);
 	*out = h;
+	return SSLM_OK;
+}
+
+// Streamed adapters (1.16.0 plan §3.1). Reads only what the map recorded; any thread, any time the
+// handle is live.
+extern "C" sslm_status sslm_adapter_info_get(sslm_adapter adapter, sslm_adapter_info* out) {
+	if (!adapter || !out || out->struct_size < SSLM_ADAPTER_INFO_V1_SIZE) return SSLM_INVALID_ARGUMENT;
+	superslm_adapter::FillAdapterInfoCommon(adapter->handle.meta, adapter->covered_layers, adapter->artifact_hash,
+	                                        out);
+	out->host_resident_bytes = adapter->host_resident_bytes;
+	out->device_resident_bytes = 0;
+	out->upload_staging_bytes = 0;
+	return SSLM_OK;
+}
+
+// Streamed adapters (1.16.0 plan §3.1): the most host heap bytes sslm_adapter_map(data,
+// artifact_bytes, base, ...) can hold at once, for any `data` of that size, accepted or refused.
+// Computed from the base's layer count and the size alone; reads nothing else and allocates nothing.
+extern "C" sslm_status sslm_adapter_map_peak_bound(sslm_model base, uint64_t artifact_bytes, uint64_t* out_bytes) {
+	if (!base || !out_bytes) return SSLM_INVALID_ARGUMENT;
+	*out_bytes = superslm_adapter::AdapterPeakTermsFor(base->view.config.num_hidden_layers, artifact_bytes,
+	                                                   sizeof(sslm_adapter_s), /*gpu_prepare=*/false)
+	                 .Sum();
 	return SSLM_OK;
 }
 
@@ -6130,8 +6183,14 @@ extern "C" size_t sslm_adapter_residency(sslm_adapter adapter) {
 // two different adapters' deltas across one token's own layer range, an undefined mixture this
 // design forecloses by rejecting outright rather than defining. `adapter == nullptr` unbinds
 // (LayerWeights::adapter's own existing NULL-adapter convention, forward_sites.h).
+//
+// Streamed adapters (1.16.0 plan §3.2): the whole body runs under the sequence's lifecycle_mutex, as
+// sslm_seq_reset does, so a bind and a decode of the same sequence never overlap: a bind issued while
+// a step runs that sequence waits for the step (decode holds the lock for its whole per-sequence
+// body). Two binds of one sequence from two threads are serialized the same way.
 extern "C" sslm_status sslm_seq_set_adapter(sslm_seq seq, sslm_adapter adapter) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
+	std::lock_guard<std::mutex> lifecycle_lock(seq->lifecycle_mutex);
 	if (seq->state.layer_index != 0) return SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED;
 	if (adapter && adapter->base != seq->model) return SSLM_ADAPTER_MODEL_MISMATCH;
 
