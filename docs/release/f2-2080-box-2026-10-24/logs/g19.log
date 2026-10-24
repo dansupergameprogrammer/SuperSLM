@@ -1,0 +1,15 @@
+selected 1 [G4] cells: =1.9
+[2026-10-24T07:54:37] D:\_scratch\f2-2080\pkvg\bin\pkvg_g4.exe --pkv-fixtures=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures --pkv-reference=D:\SuperSLM\.worktrees\f2-2080\tests\paged-kv\reference --gpu-ref=D:\_artifacts\pkv-gpu-refs --model05=D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm --model15=D:\_artifacts\SuperSLM\t2901-qwen2.5-1.5b-dg\qwen2.5-1.5b-instruct-dg-g5.sslm --adapter=D:\_scratch\pkv-gpu-113\adapters\pkv_def_zero_adapter.sslm --adapter-other-base=D:\_scratch\pkv-gpu-113\adapters\pkv_qk_zero_adapter.sslm =1.9
+[G4 g1a] 1.9 ...
+  fixture pkv_def: L=2 H_kv=2 D=48 cap=4096 B=16 page_bytes=6144 qk=0
+  diagnostic 1.9 after teardown: page_count=400 free_pages=400 shared_pages=0 B=16
+  1.9: creates=135 adopts=279 prefills=47 resets=118 releases=125 prefix_rebuilds=118
+[G4 g1a] 1.9 green (4125 checks, 0 failed)
+g1a: 4125 checks, 0 failures, 0 skips
+g1b: 0 checks, 0 failures, 0 skips
+g1c: 0 checks, 0 failures, 0 skips
+1 cells, 0 red; 4125 checks, 0 failures, 0 skips
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T08:05:43] exit 0
+SUMMARY pkvg_g19 exit 0

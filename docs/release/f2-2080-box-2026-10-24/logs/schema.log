@@ -1,0 +1,8 @@
+[2026-10-23T23:49:35] D:\_scratch\f2-2080\pkvg\bin\pcg_cell_schema.exe 
+2.13 GPU: must-reject-two-name.sslm refused at map with SSLM_DEVICE_LOST
+2.13 GPU: must-reject-zero-hash.sslm refused at map with SSLM_DEVICE_LOST
+pcg_cell_schema: checks=8 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-23T23:49:41] exit 0
+SUMMARY pcg_cell_schema exit 0

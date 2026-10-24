@@ -1,0 +1,77 @@
+[2026-10-23T23:46:19] D:\_scratch\f2-2080\pkvg\bin\pcg_cell_format.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+2.7/2.1 L = 1, every offset: 761 truncations/extensions, 0 not refused
+2.7/2.1 L = 40, header offsets and every 4096th byte: 189 truncations/extensions, 0 not refused
+2.7/2.2: 760 flips, 0 not refused
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+smoke: the GPU blob relabelled backend 0 restores on the CPU: 0
+smoke 4.6-shape: CPU blob 15736 bytes, GPU blob 15736 bytes, 0 bytes differ outside [4, 60) (first at 0)
+pcg_cell_format: checks=258 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-23T23:46:41] exit 0
+[2026-10-23T23:46:41] D:\_scratch\f2-2080\pkvg\bin\pcg_cell_pool.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_pool: checks=266 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-23T23:47:42] exit 0
+[2026-10-23T23:47:42] D:\_scratch\f2-2080\pkvg\bin\pcg_cell_busy.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_busy: checks=23 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-23T23:48:02] exit 0
+[2026-10-23T23:48:02] D:\_scratch\f2-2080\pkvg\bin\pcg_cell_faults.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_faults: checks=135 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+superslm_gpu: HR FAIL 0x8007000e at D:\SuperSLM\.worktrees\f2-2080\src\gpu\d3d12_harness.h:636
+superslm_gpu: HR FAIL 0x8007000e at D:\SuperSLM\.worktrees\f2-2080\src\gpu\d3d12_harness.h:636
+superslm_gpu: HR FAIL 0x80070057 at D:\SuperSLM\.worktrees\f2-2080\src\gpu\d3d12_harness.h:636
+[2026-10-23T23:48:26] exit 0
+[2026-10-23T23:48:26] D:\_scratch\f2-2080\pkvg\bin\pcg_cell_budget_snapshot.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+budget snapshot: landed 20 of 30; original adopter read SSLM_OK, restored adopter read SSLM_OK
+schema-reject snapshot: landed 1 of 2; original adopter read SSLM_OK, restored adopter read SSLM_OK
+A budget retry: L=20; original adopter read SSLM_OK, restored adopter read SSLM_OK
+B embed reject: call 2 (token 256) SSLM_TOKEN_ID_OUT_OF_RANGE
+B embed reject: L=10; original adopter read SSLM_OK, restored adopter read SSLM_OK
+D bind permission: child of original set_schema SSLM_OK, child of restored set_schema SSLM_OK
+pcg_cell_budget_snapshot: checks=75 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-23T23:48:50] exit 0
+[2026-10-23T23:48:50] D:\_scratch\f2-2080\pkvg\bin\pcg_cell_restore_derived.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+L = 0, twin: begin_from SSLM_OK, child set_schema SSLM_OK, adopt SSLM_OK, ready 0, snapshot SSLM_PREFILL_HIDDEN_UNAVAILABLE, prefill (frozen) SSLM_GPU_PREFIX_REJECTED, freeze again SSLM_OK, set_schema (frozen) SSLM_GPU_PREFIX_REJECTED
+L = 0, restored: begin_from SSLM_OK, child set_schema SSLM_OK, adopt SSLM_OK, ready 0, snapshot SSLM_PREFILL_HIDDEN_UNAVAILABLE, prefill (frozen) SSLM_GPU_PREFIX_REJECTED, freeze again SSLM_OK, set_schema (frozen) SSLM_GPU_PREFIX_REJECTED
+L = 10, twin: begin_from SSLM_OK, child set_schema SSLM_GPU_PREFIX_REJECTED, adopt SSLM_OK, ready 1, snapshot SSLM_OK, prefill (frozen) SSLM_GPU_PREFIX_REJECTED, freeze again SSLM_OK, set_schema (frozen) SSLM_GPU_PREFIX_REJECTED
+L = 10, restored: begin_from SSLM_OK, child set_schema SSLM_GPU_PREFIX_REJECTED, adopt SSLM_OK, ready 1, snapshot SSLM_OK, prefill (frozen) SSLM_GPU_PREFIX_REJECTED, freeze again SSLM_OK, set_schema (frozen) SSLM_GPU_PREFIX_REJECTED
+pcg_cell_restore_derived: checks=53 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-23T23:49:12] exit 0
+SUMMARY pcg_cell_format exit 0; pcg_cell_pool exit 0; pcg_cell_busy exit 0; pcg_cell_faults exit 0; pcg_cell_budget_snapshot exit 0; pcg_cell_restore_derived exit 0

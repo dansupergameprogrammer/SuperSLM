@@ -1,0 +1,28 @@
+[2026-10-24T07:07:46] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\SuperSLM\.worktrees\f2-2080\tests\precache-gpu\apply_gpu_mutant.py D:\_scratch\f2-2080\mutant\src\gpu\gpu_1p0.cpp no-entry-guard
+apply_gpu_mutant: no-entry-guard applied to D:\_scratch\f2-2080\mutant\src\gpu\gpu_1p0.cpp
+[2026-10-24T07:07:46] exit 0
+[2026-10-24T07:07:46] cmd /c D:\SuperSLM\.worktrees\f2-2080\tests\paged-kv-gpu\build_paged_kv_gpu.bat "--out=D:\_scratch\f2-2080\mutant\pkvg" "--gpu-dir=D:\_scratch\f2-2080\mutant\src\gpu" pcg_cell_busy
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+===== engine: CPU sources (build.bat's list) =====
+===== engine: GPU sources, configuration plain =====
+===== engine: GPU sources, configuration alloc =====
+===== engine: GPU sources, configuration t2169 =====
+===== engine: GPU sources, configuration bench =====
+===== te425 hooks (InstallHooks), main renamed, allocation-fault definitions =====
+===== host: the suite's process runner =====
+[F2] pcg_cell_busy: LINKED (plain) 
+PKVG BUILD: 1 linked, 0 red by link, 0 red by compile or unexpected link failure
+[2026-10-24T07:08:32] exit 0
+[2026-10-24T07:08:32] D:\_scratch\f2-2080\mutant\pkvg\bin\pcg_cell_busy.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+FAIL D:\SuperSLM\.worktrees\f2-2080\tests\precache-gpu\pcg_helpers.h:236: ok -- 3.4: restore while a sequence is Submitted: restore returned SSLM_DEVICE_LOST (want SSLM_BUSY), out-handle null
+FAIL D:\SuperSLM\.worktrees\f2-2080\tests\precache-gpu\pcg_helpers.h:236: ok -- 3.4: restore with a hint while a sequence is Submitted: restore returned SSLM_DEVICE_LOST (want SSLM_BUSY), out-handle null
+FAIL D:\SuperSLM\.worktrees\f2-2080\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_busy.cpp:51: ok.status == GS::SSLM_OK && ok.p -- 3.4: after sslm_gpu_ready the restore returns SSLM_DEVICE_LOST
+pcg_cell_busy: checks=21 failures=3 skips=0 -> FAIL
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T07:08:35] exit 1
+SUMMARY mutant no-entry-guard: pcg_cell_busy exit 1 (must be non-zero: the mutant is killed); 3.4 named in the output: True
