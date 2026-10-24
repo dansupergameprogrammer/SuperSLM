@@ -94,6 +94,7 @@ pcg_cell_faults|alloc|F2|../precache-gpu/pcg_cell_faults|
 pcg_cell_schema|plain|F2|../precache-gpu/pcg_cell_schema|
 pcg_cell_budget_snapshot|plain|F2|../precache-gpu/pcg_cell_budget_snapshot|
 pcg_cell_restore_derived|plain|F2|../precache-gpu/pcg_cell_restore_derived|
+pcg_cross_card|plain|F2|../precache-gpu/pcg_cross_card|
 pcg_cell_9_10|plain|E5|../precache-gpu/pcg_cell_9_10|
 '
 # Host-only programs (no engine): the suite's process runner.

@@ -162,6 +162,7 @@ call :exe pcg_cell_faults alloc F2 "..\precache-gpu\pcg_cell_faults" ""
 call :exe pcg_cell_schema plain F2 "..\precache-gpu\pcg_cell_schema" ""
 call :exe pcg_cell_budget_snapshot plain F2 "..\precache-gpu\pcg_cell_budget_snapshot" ""
 call :exe pcg_cell_restore_derived plain F2 "..\precache-gpu\pcg_cell_restore_derived" ""
+call :exe pcg_cross_card plain F2 "..\precache-gpu\pcg_cross_card" ""
 call :exe pcg_cell_9_10 plain E5 "..\precache-gpu\pcg_cell_9_10" ""
 :only_old
 if defined OLDTREE call :oldreader

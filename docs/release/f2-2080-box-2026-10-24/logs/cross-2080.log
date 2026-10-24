@@ -1,0 +1,24 @@
+[2026-10-24T09:21:02] cmd /c D:\SuperSLM\.worktrees\f2-2080\tests\paged-kv-gpu\build_paged_kv_gpu.bat "--out=D:\_scratch\f2-2080\pkvg" pcg_cross_card
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+===== engine: CPU sources (build.bat's list) =====
+===== engine: GPU sources, configuration plain =====
+===== engine: GPU sources, configuration alloc =====
+===== engine: GPU sources, configuration t2169 =====
+===== engine: GPU sources, configuration bench =====
+===== te425 hooks (InstallHooks), main renamed, allocation-fault definitions =====
+===== host: the suite's process runner =====
+[F2] pcg_cross_card: LINKED (plain) 
+PKVG BUILD: 1 linked, 0 red by link, 0 red by compile or unexpected link failure
+[2026-10-24T09:21:47] exit 0
+[2026-10-24T09:21:47] D:\_scratch\f2-2080\pkvg\bin\pcg_cross_card.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures --save=D:\_scratch\f2-2080\blob-10de_1e81.spx1 --restore=D:\_scratch\f2-2080\blob-10de_1e81.spx1
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+saved 15736 bytes to D:\_scratch\f2-2080\blob-10de_1e81.spx1: producer vendor 10de device 1e81, engine 1.15.0
+restore: blob from this card (vendor 10de device 1e81)
+pcg_cross_card: checks=14 failures=0 skips=0 -> PASS
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer + GPU-based validation enabled
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T09:22:06] exit 0
+SUMMARY pcg_cross_card (2080 SUPER, save + own restore) exit 0
