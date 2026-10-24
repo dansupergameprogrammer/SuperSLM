@@ -165,6 +165,7 @@ include(tests/paged-kv/paged_kv.cmake)
 # GPU paged-KV plan (rev 16) step G3: the D3D12-free core's host-only cells.
 include(tests/gpu-g3-core/g3_core.cmake)
 include(tests/precache/precache.cmake)
+include(tests/lora-residency/lora_residency.cmake)
 
 # T-2152 (outside strike item 1): tests/test_main.cpp's own T-2019/T-2024 GPU-serial-port
 # section calls `superslm_gpu::*` directly (#ifdef _WIN32-guarded in that file so the same
