@@ -5546,8 +5546,17 @@ SslmGpuStatus sslm_gpu_prefix_set_schemaImpl(SslmGpuContext* ctx, SslmGpuPrefixH
 // the tokens that landed (the schema bridge's own count, or the prompt bridge's context-length advance).
 // A call that admitted n < count tokens and landed all n returns SSLM_OK with `*consumed` = n, resumable,
 // as the CPU twin's chunk_budget (cell 5.8). Repeated calls of any count are allowed (gap 4c).
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+namespace {
+// Precached prefixes F3 (cell 10.4's 10.1 and 10.2): every prefill call, so a restore phase proves it ran none.
+std::atomic<uint64_t> g_gpu_prefix_prefill_calls{0};
+}  // namespace
+#endif
 SslmGpuStatus sslm_gpu_prefix_prefillImpl(SslmGpuContext* ctx, SslmGpuPrefixHandle* prefix, const int32_t* tokens,
                                           int32_t count, int32_t kind, uint32_t dispatch_budget, int32_t* consumed) {
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+	g_gpu_prefix_prefill_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
 	if (!consumed) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	*consumed = 0;
 	if (!ctx || !prefix || prefix->ctx != ctx || prefix->seq == nullptr) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
@@ -5924,6 +5933,18 @@ bool FireGpuPrefixRestoreFault(int position, const superslm::kv_pages::PageHolde
 	g_gpu_prefix_restore_fault.shared_at_fire = holder->shared;
 	return true;
 }
+// Precached prefixes F3 (cell 4.6(c)): when set on the calling thread, the restore's producer check reads the
+// blob's own adapter vendor and device (header bytes 20 and 24) instead of the context's, so a blob written on
+// the other card restores and its adopters can be compared. Every other check (engine version, digest, model,
+// schema, domains) still runs. Never compiled into the shipping engine.
+thread_local bool g_gpu_prefix_restore_skip_adapter = false;
+bool BlobAdapterIdsForReader(void* user, uint32_t* vendor, uint32_t* device) {
+	// The reader calls the producer callback after the size, magic, digest and backend checks: the header is whole.
+	const uint8_t* h = static_cast<const uint8_t*>(user);
+	std::memcpy(vendor, h + 20, sizeof *vendor);
+	std::memcpy(device, h + 24, sizeof *device);
+	return true;
+}
 #endif
 
 }  // namespace
@@ -6038,6 +6059,12 @@ SslmGpuStatus sslm_gpu_prefix_restoreImpl(SslmGpuContext* ctx, SslmGpuModelHandl
 	expect.backend = superslm::spx1::kBackendGpu;
 	expect.adapter_ids = &ContextAdapterIdsForReader;
 	expect.adapter_user = ctx;
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+	if (g_gpu_prefix_restore_skip_adapter) {
+		expect.adapter_ids = &BlobAdapterIdsForReader;
+		expect.adapter_user = const_cast<void*>(blob);
+	}
+#endif
 	expect.model_hash = model->content_hash.data();
 	expect.kv_precision = model->kv_precision;
 	expect.schemas = &model->schemas;
@@ -6621,6 +6648,10 @@ bool GpuPrefixRestoreFaultFiredForTest(uint32_t* out_shared_at_fire) noexcept {
 	if (out_shared_at_fire) *out_shared_at_fire = g_gpu_prefix_restore_fault.shared_at_fire;
 	return g_gpu_prefix_restore_fault.fired;
 }
+// Precached prefixes F3 (cell 4.6(c)): the calling thread's restores skip the adapter half of the producer check.
+void SetGpuPrefixRestoreSkipAdapterCheckForTest(bool on) noexcept { g_gpu_prefix_restore_skip_adapter = on; }
+// Precached prefixes F3 (cell 10.4): the prefill calls so far, process-wide.
+uint64_t GpuPrefixPrefillCallsForTest() noexcept { return g_gpu_prefix_prefill_calls.load(std::memory_order_relaxed); }
 // review-g23 F2's pin: a refcount underflow at the pooled sequence's release.
 bool ZeroGpuPooledSeqReservePageRefcountForTest(SslmGpuSequenceHandle* seq) noexcept {
 	if (seq == nullptr || seq->pool == nullptr || seq->holder == nullptr || seq->holder->reserve.empty()) return false;
