@@ -15,6 +15,7 @@ rem              (default <old-tree>\build\Release\superslm.lib)
 rem   --capture910-tree  the v1.13.1 checkout (d697927) for precache cell 9.10's capture leg (pcg_cell_9_10_capture.exe,
 rem              built against that tree); --capture910-cpu-lib its CPU library (default <tree>\build\Release\superslm.lib)
 rem   TARGET e5  the precached-prefixes E5 GPU cell (pcg_cell_9_10); capture910: 9.10's capture leg only
+rem   TARGET f3  the precached-prefixes F3 certification cells (pcg_cell_4_6, _6_5, _10_4_real, _10_4_timing)
 rem   --state-tracking  build engine and cells with /DSUPERSLM_GPU_STATE_TRACKING (src\gpu\gpu_resource_state_tracker.h,
 rem              as build_paged_kv_gpu_mingw.sh --state-tracking): "# GPU STATE VIOLATION" lines and an exit summary.
 rem              Default --out becomes <repo>\build\pkvg-track, so tracking and plain objects never mix.
@@ -163,6 +164,12 @@ call :exe pcg_cell_schema plain F2 "..\precache-gpu\pcg_cell_schema" ""
 call :exe pcg_cell_budget_snapshot plain F2 "..\precache-gpu\pcg_cell_budget_snapshot" ""
 call :exe pcg_cell_restore_derived plain F2 "..\precache-gpu\pcg_cell_restore_derived" ""
 call :exe pcg_cell_9_10 plain E5 "..\precache-gpu\pcg_cell_9_10" ""
+rem Precached prefixes F3 (plan §9 F3): the certification cells. 4.6 and 10.4's real leg need the alloc engine's seams
+rem (the adapter-check skip and the prefix-prefill counter); 10.4's timing instrument refuses them (plain only).
+call :exe pcg_cell_4_6 alloc F3 "..\precache-gpu\pcg_cell_4_6" ""
+call :exe pcg_cell_6_5 plain F3 "..\precache-gpu\pcg_cell_6_5" ""
+call :exe pcg_cell_10_4_real alloc F3 "..\precache-gpu\pcg_cell_10_4_real" ""
+call :exe pcg_cell_10_4_timing plain F3 "..\precache-gpu\pcg_cell_10_4_timing" ""
 :only_old
 if defined OLDTREE call :oldreader
 if defined CAP910TREE call :capture910

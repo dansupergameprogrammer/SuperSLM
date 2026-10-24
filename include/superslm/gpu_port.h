@@ -1133,6 +1133,14 @@ bool ZeroGpuPooledSeqReservePageRefcountForTest(SslmGpuSequenceHandle* seq) noex
 // the holder's shared-entry count when it fired.
 void ArmGpuPrefixRestoreFaultForTest(int position, int share_refusal) noexcept;
 bool GpuPrefixRestoreFaultFiredForTest(uint32_t* out_shared_at_fire) noexcept;
+// Precached prefixes, cell 4.6 (c) [F3]: while set on the calling thread, the GPU prefix restore takes the blob's
+// own adapter vendor and device as the ones it expects, so a blob saved on another card passes the producer step's
+// adapter comparison. The engine-version comparison and every other check still run. Off by default; a test sets it
+// around one restore and clears it.
+void SetGpuPrefixRestoreSkipAdapterCheckForTest(bool on) noexcept;
+// Precached prefixes, cell 10.4's 10.1 leg [F3]: how many sslm_gpu_prefix_prefill calls this process has made (the
+// GPU twin of the CPU's sslm_pc_test_only_prefix_prefill_calls), so a restoring process shows it built nothing.
+uint64_t GpuPrefixPrefillCallsForTest() noexcept;
 // The model handle's host lm_head copy, in bytes: 0 for a tied head or a device-resident head,
 // vocab_size x hidden_size for an untied head mapped without the flag.
 size_t SslmGpuHeadWeightCopySizeForTest(const SslmGpuModelHandle* model) noexcept;

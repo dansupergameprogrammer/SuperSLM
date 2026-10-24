@@ -7,11 +7,14 @@
 #   TARGET   g2 | g3 | g4 | g5 | g6   every executable whose bracket is that step (default: all five)
 #            f2                  the precached-prefixes GPU cells (tests/precache-gpu, plan step F1/F2)
 #            e5                  the precached-prefixes E5 GPU cell (pcg_cell_9_10; its capture leg is box-only)
+#            f3                  the precached-prefixes F3 certification cells (4.6, 6.5, 10.4's real and timing legs)
 #            <exe name>          one executable from the table below (e.g. pkvg_g2, g1d_cell_3_6f)
 #   --out    default <repo>/out/pkvg (the exes must sit under the repo: the shader staleness check walks up
 #            from the exe to src/gpu/shaders)
 #   --jobs   parallel compiles (default 2; the container is shared)
 #   --list   print the table and exit
+#   --no-shaders  compile and link only: skip the DXC shader build and the vkd3d-proton DLL copy (a compile check
+#            where neither DXC nor vkd3d-proton is installed; the executables cannot run without the shaders)
 #   --state-tracking  build engine and cells with SUPERSLM_GPU_STATE_TRACKING (src/gpu/gpu_resource_state_tracker.h):
 #            the host-side resource-state tracker checks every barrier, copy and dispatch and prints
 #            "# GPU STATE VIOLATION" lines and an exit summary. Default --out becomes <repo>/out/pkvg-track and the
@@ -41,6 +44,7 @@ WINE_GPU_SOURCED=1 . "$REPO/tools/cloud_gpu/wine_gpu.sh"
 OUT=""
 JOBS=2
 LIST=0
+NOSHADERS=0
 TRACK=0
 TARGETS=()
 for a in "$@"; do
@@ -48,6 +52,7 @@ for a in "$@"; do
 		--out=*) OUT="${a#--out=}" ;;
 		--jobs=*) JOBS="${a#--jobs=}" ;;
 		--list) LIST=1 ;;
+		--no-shaders) NOSHADERS=1 ;;
 		--state-tracking) TRACK=1 ;;
 		-*) echo "unknown flag $a" >&2; exit 2 ;;
 		*) TARGETS+=("$a") ;;
@@ -95,6 +100,10 @@ pcg_cell_schema|plain|F2|../precache-gpu/pcg_cell_schema|
 pcg_cell_budget_snapshot|plain|F2|../precache-gpu/pcg_cell_budget_snapshot|
 pcg_cell_restore_derived|plain|F2|../precache-gpu/pcg_cell_restore_derived|
 pcg_cell_9_10|plain|E5|../precache-gpu/pcg_cell_9_10|
+pcg_cell_4_6|alloc|F3|../precache-gpu/pcg_cell_4_6|
+pcg_cell_6_5|plain|F3|../precache-gpu/pcg_cell_6_5|
+pcg_cell_10_4_real|alloc|F3|../precache-gpu/pcg_cell_10_4_real|
+pcg_cell_10_4_timing|plain|F3|../precache-gpu/pcg_cell_10_4_timing|
 '
 # Host-only programs (no engine): the suite's process runner.
 HOST_TABLE="pkvg_suite"
@@ -239,7 +248,7 @@ build_host() {  # programs with no engine
 		&& echo "[host] $name: LINKED" || { echo "[host] $name: RED BY COMPILE"; REDCOMPILE+=("$name"); }
 }
 
-shaders
+if [ "$NOSHADERS" = 1 ]; then echo "== shaders: skipped (--no-shaders: a compile and link check)"; else shaders; fi
 for h in $HOST_TABLE; do build_host "$h"; done
 while IFS= read -r row; do
 	[ -z "$row" ] && continue
