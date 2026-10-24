@@ -280,6 +280,10 @@ def summary(args):
     print("4.6 (a finding either way, not a 4.4 gate):")
     for f in findings or ["no difference recorded"]:
         print(f"  {f}")
+    if not (args.box and args.kit):
+        # 4.4 is "on both certified GPUs": one machine's table is not a verdict.
+        print("4.4: INCOMPLETE (pass both --box and --kit for a 4.4 verdict)")
+        return max(worst, 1)
     print(f"4.4: {'PASS' if worst == 0 else 'NOT PASSED'}")
     return worst
 

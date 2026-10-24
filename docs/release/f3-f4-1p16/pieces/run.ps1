@@ -38,6 +38,7 @@ if ($Piece -eq 'all') {
         & pwsh @args2
         $code = $LASTEXITCODE
         if ($code -ne 0 -and $p -in 'build', 'build-mut') { "stopping: $p failed"; exit 1 }
+        if ($code -eq 4) { "stopping: $p could not kill a cell that overran its bound"; exit 1 }
         if ($code -eq 3) { "stopping: $p refused to start (box busy or lock not taken); rerun -Piece all to resume"; exit 1 }
     }
     'all pieces before the kit trip are done; next: -Piece kit'

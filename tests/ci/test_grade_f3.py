@@ -141,6 +141,11 @@ def main():
         rc, out = run(["summary", "--box", box, "--kit", kit])
         expect(rc == 0 and "-> FAIL" in out and "4.4: PASS" in out and "box real15: pcg_cell_4_6 1p5 differs" in out,
                "summary: every step done; a killed mutant's FAIL suite and a 4.6 finding do not fail 4.4")
+        rc, out = run(["summary", "--box", box])
+        expect(rc == 1 and "4.4: INCOMPLETE" in out and "4.4: PASS" not in out,
+               "summary: one machine alone gives no 4.4 verdict (INCOMPLETE, non-zero)")
+        rc, out = run(["summary", "--kit", kit])
+        expect(rc == 1 and "4.4: INCOMPLETE" in out, "summary: the kit alone is INCOMPLETE too")
         os.remove(os.path.join(kit, "t-grade-15.done"))
         os.remove(os.path.join(box, "cross.done"))
         os.remove(os.path.join(box, "cross.log"))

@@ -88,7 +88,17 @@ function global:F3-Cell([string]$Log, [string]$Exe, [string[]]$Arguments, [int]$
     $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -WorkingDirectory $F3Src -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError $e
     $null = $p.Handle
     $code = 0
-    if (-not $p.WaitForExit($ms)) { $p.Kill($true); $code = 124 } else { $code = $p.ExitCode }
+    if (-not $p.WaitForExit($ms)) {
+        try { $p.Kill($true); $null = $p.WaitForExit(30000) } catch {}
+        if (-not $p.HasExited) {
+            # A cell that cannot be stopped would share the GPU with the next piece: stop the whole run (exit 4; the
+            # piece leaves no .done, so a rerun rests the full five minutes first). run.ps1 -Piece all stops on 4.
+            E4-Append $Log "KILL FAILED: $Exe (pid $($p.Id)) is still running; the run stops here"
+            Write-Host "KILL FAILED: $Exe is still running. The run stops; end it or restart the box, then rerun."
+            exit 4
+        }
+        $code = 124
+    } else { $code = $p.ExitCode }
     foreach ($f in @($o, $e)) { if (Test-Path $f) { Get-Content $f | ForEach-Object { E4-Append $Log "$_" }; Remove-Item $f } }
     if ($code -eq 124) { E4-Append $Log ('TIMEOUT after {0:N1} min: killed' -f ($ms / 60000)) }
     E4-Append $Log ('[{0}] exit {1}' -f (Get-Date -Format 's'), $code)
