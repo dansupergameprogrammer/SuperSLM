@@ -298,4 +298,8 @@ SslmGpuStatus sslm_gpu_test_only_mr2_device_kv(SslmGpuContext* ctx, SslmGpuKvPoo
 
 SslmGpuStatus sslm_gpu_test_only_mr2_arm_slice_alloc_failure(SslmGpuContext* ctx, int32_t slice_k) noexcept;
 
+// 1.1r (MX8): the pages `seq`'s holder has mapped now (kv_pages::HolderMapped); 0 for a dedicated sequence.
+// A rollback that skips HolderUnmapTail leaves this above the entry's count while pool stats stay equal.
+SslmGpuStatus sslm_gpu_test_only_mr2_holder_mapped(const SslmGpuSequenceHandle* seq, uint32_t* out_pages) noexcept;
+
 #endif  // SUPERSLM_MULTIROW_WIDE

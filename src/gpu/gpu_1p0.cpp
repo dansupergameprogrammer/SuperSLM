@@ -8100,6 +8100,12 @@ SslmGpuStatus sslm_gpu_test_only_mr2_chunk_stateImpl(const SslmGpuSequenceHandle
 	return SSLM_OK;
 }
 
+SslmGpuStatus sslm_gpu_test_only_mr2_holder_mappedImpl(const SslmGpuSequenceHandle* seq, uint32_t* out_pages) {
+	if (!seq || !out_pages) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	*out_pages = seq->holder != nullptr ? superslm::kv_pages::HolderMapped(seq->holder) : 0u;
+	return SSLM_OK;
+}
+
 SslmGpuStatus sslm_gpu_test_only_mr2_device_kvImpl(SslmGpuContext* ctx, SslmGpuKvPoolHandle* pool,
                                                    SslmGpuSequenceHandle* seq, std::vector<uint8_t>* out) {
 	if (!ctx || !out || (pool == nullptr) == (seq == nullptr)) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
@@ -8178,6 +8184,9 @@ SslmGpuStatus sslm_gpu_test_only_mr2_device_kv(SslmGpuContext* ctx, SslmGpuKvPoo
 }
 SslmGpuStatus sslm_gpu_test_only_mr2_arm_slice_alloc_failure(SslmGpuContext* ctx, int32_t slice_k) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_test_only_mr2_arm_slice_alloc_failureImpl(ctx, slice_k); });
+}
+SslmGpuStatus sslm_gpu_test_only_mr2_holder_mapped(const SslmGpuSequenceHandle* seq, uint32_t* out_pages) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_test_only_mr2_holder_mappedImpl(seq, out_pages); });
 }
 
 #endif  // SUPERSLM_MULTIROW_WIDE
