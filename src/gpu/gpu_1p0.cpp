@@ -60,6 +60,7 @@ static_assert(sizeof(GpuResidencyConfig) == 4 && offsetof(GpuResidencyConfig, fl
 #include <vector>
 
 #include "d3d12_harness.h"
+#include "multirow_wide.h"  // MR1 test-only declarations; empty unless SUPERSLM_MULTIROW_WIDE
 #include "../kv_pages.h"           // paged KV (G3): the page allocator, one module for both backends
 #include "gpu_kv_pool_geometry.h"  // paged KV (G3): the GPU pool's host-only arithmetic
 #include "superslm/adapter_marshal.h"  // T-2113 B6: LoadAdapterArtifact (relocated, tools/sslm_adapter_loader.h)
@@ -7242,3 +7243,224 @@ void SslmGpuDeviceLogitsBundleDestroyForTest(SslmGpuDeviceLogitsBundleForTest* b
 }
 
 #endif  // SUPERSLM_GPU_ALLOC_FAULT_INJECTION
+
+// -------------------------------------------------------------------------------------------------
+// Multi-row GPU plan (rev 1.3.2), slice MR1: the one-layer smoke (multirow_wide.h). Test-only: compiled
+// only under SUPERSLM_MULTIROW_WIDE, which no shipped target defines.
+// -------------------------------------------------------------------------------------------------
+#if defined(SUPERSLM_MULTIROW_WIDE)
+#include "shaders/kv_page_addr_model.h"
+
+namespace {
+
+// The K/V view a submission of `seq` binds (SubmitOneSequenceDecode's: the holder's table over the pool's
+// mirror for a pooled handle, the one-page view of the dedicated mirror otherwise).
+superslm::KvPageView Mr1KvViewOf(SslmGpuSequenceHandle* seq) {
+	if (seq->pool != nullptr) {
+		return superslm::KvPageView{seq->pool->host_mirror.data(), seq->holder->table.get(),
+		                            superslm::kv_pages::HolderMapped(seq->holder), seq->pool->geo.page_positions,
+		                            seq->pool->geo.page_bytes};
+	}
+	return superslm_gpu::GpuOnePageView(KvHostBase(seq), KvHostBytes(seq), seq->context_cap);
+}
+
+size_t Mr1KvRowOffset(const superslm::KvPageView& v, uint32_t layer, size_t half, size_t nh, size_t hd, size_t head,
+                      int64_t position) {
+	return superslm_gpu::kv_page_addr_model::KvRowAddrGpu<size_t>(v.page_table, v.page_bytes, static_cast<size_t>(v.page_positions),
+	                                                static_cast<size_t>(layer), half, nh, hd, head,
+	                                                static_cast<size_t>(position));
+}
+
+// The handle's state as a submission sees it (SubmitOneSequenceDecode syncs these four fields into
+// live_state first), with its hidden codes copied into `codes`.
+superslm::SequenceLayerState Mr1SnapshotState(SslmGpuSequenceHandle* seq, std::vector<int8_t>* codes) {
+	superslm::SequenceLayerState st = seq->live_state;
+	st.hidden_scale = seq->hidden_scale;
+	st.layer_index = seq->layer_index;
+	st.kv_saturation_count = seq->kv_saturation_count;
+	st.context_length = seq->context_length;
+	codes->assign(seq->live_state.hidden_codes, seq->live_state.hidden_codes + seq->model->hidden_size);
+	st.hidden_codes = codes->data();
+	return st;
+}
+
+SslmGpuStatus Mr1DecodeAndDrain(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, const SslmGpuAdapterHandle* adapter,
+                                uint32_t budget) {
+	const SslmGpuStatus st = sslm_decode_step_gpuImpl(ctx, seq, adapter, budget);
+	if (st != SSLM_OK) return st;
+	int32_t ready = 0;
+	SslmGpuStatus slice = SSLM_OK;
+	const SslmGpuStatus rd = sslm_gpu_readyImpl(ctx, seq, /*block=*/1, &ready, &slice);
+	if (rd != SSLM_OK) return rd;
+	if (!ready) return SSLM_DEVICE_LOST;
+	return slice;
+}
+
+}  // namespace
+
+SslmGpuStatus sslm_gpu_test_only_mr1_wide_one_layer_smokeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* ref,
+                                                              SslmGpuSequenceHandle* wide,
+                                                              const SslmGpuAdapterHandle* adapter,
+                                                              const int32_t* row_tokens, uint32_t real_rows,
+                                                              uint32_t variant_h, SslmGpuMr1WideSmokeReport* out) {
+	if (!ctx || !ref || !wide || !out || !row_tokens || ref == wide || ref->ctx != ctx || wide->ctx != ctx ||
+	    !ref->model || ref->model != wide->model) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	if (!(variant_h == 2 || variant_h == 4 || variant_h == 8) || real_rows == 0 || real_rows > variant_h) {
+		return SSLM_DISPATCH_BUDGET_TOO_SMALL;  // a malformed test call; nothing touched
+	}
+	*out = SslmGpuMr1WideSmokeReport{};
+	SslmGpuModelHandle* model = ref->model;
+	const uint32_t L = model->num_hidden_layers;
+	const size_t H = model->hidden_size, HD = model->head_dim, NH = model->num_key_value_heads;
+	const uint32_t dpl = model->dispatches_per_layer;
+	const int64_t p0 = ref->context_length;
+	// A token boundary: no layer of a token in progress (0 before the first token, num_hidden_layers after one).
+	auto at_boundary = [&](const SslmGpuSequenceHandle* s) { return s->layer_index == 0 || s->layer_index == L; };
+	if (wide->context_length != p0 || !at_boundary(ref) || !at_boundary(wide) ||
+	    ref->state() == superslm_gpu::SslmSequenceGpuState::Submitted ||
+	    wide->state() == superslm_gpu::SslmSequenceGpuState::Submitted) {
+		return SSLM_BUSY;
+	}
+	out->real_rows = real_rows;
+	out->variant_h = variant_h;
+	out->p0 = p0;
+
+	// One-row: each row's entry state, its state after the first layer, and its first-layer K/V rows.
+	std::vector<std::vector<int8_t>> entry_codes(real_rows), after_codes(real_rows);
+	std::vector<superslm::SequenceLayerState> entry(real_rows);
+	std::vector<std::vector<uint8_t>> after_bytes(real_rows), ref_kv(real_rows);
+	for (uint32_t r = 0; r < real_rows; ++r) {
+		SslmGpuStatus st = sslm_gpu_seq_embed_tokenImpl(ctx, ref, row_tokens[r]);
+		if (st != SSLM_OK) return st;
+		entry[r] = Mr1SnapshotState(ref, &entry_codes[r]);
+		if ((st = Mr1DecodeAndDrain(ctx, ref, adapter, dpl)) != SSLM_OK) return st;
+		const superslm::SequenceLayerState after = Mr1SnapshotState(ref, &after_codes[r]);
+		after_bytes[r] = superslm_gpu::PackGpuSeqStateBytes(after, static_cast<uint32_t>(H));
+		const superslm::KvPageView v = Mr1KvViewOf(ref);
+		for (size_t h = 0; h < NH; ++h) {
+			for (size_t half = 0; half < 2; ++half) {
+				const uint8_t* src = KvHostBase(ref) + Mr1KvRowOffset(v, 0, half, NH, HD, h, p0 + r);
+				ref_kv[r].insert(ref_kv[r].end(), src, src + HD);
+			}
+		}
+		if (L > 1 && (st = Mr1DecodeAndDrain(ctx, ref, adapter, dpl * (L - 1))) != SSLM_OK) return st;
+	}
+
+	// Widened: the first layer for every row, one submission, on `wide`.
+	SeqDecodeClaim claim(wide);
+	if (!claim.held()) return SSLM_BUSY;
+	if (const SslmGpuStatus g = EntrySubmitGuard(ScopeForHolder(wide), GuardDevice::kReachesSingleton); g != SSLM_OK) {
+		return g;
+	}
+	superslm_gpu::GpuPagedKvBinding paged{};
+	const superslm_gpu::GpuPagedKvBinding* paged_ptr = nullptr;
+	if (wide->pool != nullptr) {
+		const SslmGpuStatus map_st = MapPooledPagesThrough(wide, p0 + real_rows);
+		if (map_st != SSLM_OK) return map_st;
+		paged.view = Mr1KvViewOf(wide);
+		paged.table_resident = wide->table_buf.Get();
+		paged.upload_table = wide->table_dirty;
+		paged_ptr = &paged;
+	}
+	superslm_gpu::GpuAdapterBridge bridge;
+	const superslm_gpu::GpuAdapterBridge* bridge_ptr = nullptr;
+	if (adapter != nullptr) {
+		bridge.lora_ab_resident = adapter->lora_ab_buf.Get();
+		bridge.fold_resident = adapter->fold_buf.Get();
+		bridge.rank = adapter->rank;
+		bridge.slots = &adapter->slots[0][0];
+		bridge.num_hidden_layers = model->num_hidden_layers;
+		bridge_ptr = &bridge;
+	}
+	const std::vector<uint8_t> mirror_before(KvHostBase(wide), KvHostBase(wide) + KvHostBytes(wide));
+	uint64_t model_generation = 0;
+	std::memcpy(&model_generation, model->content_hash.data(), sizeof(model_generation));
+	superslm_gpu::GpuWideRowsReadback rb;
+	const superslm::SslmForwardStatus fst = superslm_gpu::RunMultirowWideLayersForSmoke(
+	    entry.data(), real_rows, variant_h, /*layers=*/1, model->num_hidden_layers, H, HD, NH,
+	    model->intermediate_size, wide->context_cap, KvHostBase(wide), KvHostBytes(wide),
+	    wide->pool != nullptr ? wide->pool->pool_buf.Get() : wide->kv_buf.Get(),
+	    wide->pool != nullptr ? &wide->pool->kv_needs_resume_barrier : &wide->kv_needs_resume_barrier,
+	    model->weights_buf.Get(), model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
+	    model->rope_cos_elem_count, model->rope_sin_elem_count, bridge_ptr,
+	    /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim, model_generation,
+	    model->has_qk_norm, paged_ptr, &rb);
+	if (fst != superslm::SslmForwardStatus::Ok) {
+		std::snprintf(out->detail, sizeof(out->detail), "widened submission refused: %s",
+		              superslm::SslmForwardStatusName(fst));
+		return MapSubmitRejectionToGpuStatus(fst);
+	}
+	if (wide->pool != nullptr) wide->table_dirty = false;  // this submission's head uploaded it
+
+	// Compare. Rows: byte for byte. Padded rows: as they entered. K/V: the real rows' first-layer rows against
+	// one-row's, and every other byte against the mirror as it stood before the submission.
+	size_t used = 0;
+	auto note = [&](const char* fmt, auto... args) {
+		if (used + 1 >= sizeof(out->detail)) return;
+		const int n = std::snprintf(out->detail + used, sizeof(out->detail) - used, fmt, args...);
+		if (n > 0) used = std::min(sizeof(out->detail) - 1, used + static_cast<size_t>(n));
+	};
+	for (uint32_t r = 0; r < variant_h; ++r) {
+		const uint8_t* got = rb.rows.data() + rb.row_bytes * r;
+		// A real row must equal one-row's state after the first layer; a padded row must leave as it entered.
+		const std::vector<uint8_t> want =
+		    r < real_rows ? after_bytes[r]
+		                  : std::vector<uint8_t>(rb.entry_rows.begin() + rb.row_bytes * r,
+		                                         rb.entry_rows.begin() + rb.row_bytes * (r + 1));
+		size_t first = want.size();
+		for (size_t i = 0; i < want.size() && i < rb.row_bytes; ++i) {
+			if (got[i] != want[i]) {
+				first = i;
+				break;
+			}
+		}
+		if (first == want.size()) {
+			if (r < real_rows) ++out->rows_equal;
+			else ++out->padded_rows_inert;
+		} else {
+			note("%s row %u differs from byte %zu; ", r < real_rows ? "real" : "padded", r, first);
+		}
+	}
+	const superslm::KvPageView wv = Mr1KvViewOf(wide);
+	std::vector<uint8_t> expected_written(rb.kv.size(), 0);
+	for (uint32_t r = 0; r < real_rows; ++r) {
+		size_t k = 0;
+		for (size_t h = 0; h < NH; ++h) {
+			for (size_t half = 0; half < 2; ++half, k += HD) {
+				const size_t off = Mr1KvRowOffset(wv, 0, half, NH, HD, h, p0 + r);
+				if (off + HD > rb.kv.size()) {
+					note("K/V row (r %u, head %zu, half %zu) outside the buffer; ", r, h, half);
+					continue;
+				}
+				for (size_t i = 0; i < HD; ++i) {
+					expected_written[off + i] = 1;
+					++out->kv_row_bytes_compared;
+					if (rb.kv[off + i] != ref_kv[r][k + i]) ++out->kv_row_bytes_differing;
+				}
+			}
+		}
+	}
+	const size_t n = std::min(rb.kv.size(), mirror_before.size());
+	for (size_t i = 0; i < n; ++i) {
+		if (!expected_written[i] && rb.kv[i] != mirror_before[i]) ++out->kv_stray_bytes;
+	}
+	if (out->kv_row_bytes_differing) note("%llu K/V row bytes differ; ", static_cast<unsigned long long>(out->kv_row_bytes_differing));
+	if (out->kv_stray_bytes) note("%llu stray K/V bytes; ", static_cast<unsigned long long>(out->kv_stray_bytes));
+	return SSLM_OK;
+}
+
+SslmGpuStatus sslm_gpu_test_only_mr1_wide_one_layer_smoke(SslmGpuContext* ctx, SslmGpuSequenceHandle* ref,
+                                                          SslmGpuSequenceHandle* wide,
+                                                          const SslmGpuAdapterHandle* adapter,
+                                                          const int32_t* row_tokens, uint32_t real_rows,
+                                                          uint32_t variant_h,
+                                                          SslmGpuMr1WideSmokeReport* out) noexcept {
+	return InvokeGpuApiBoundary(__func__, [&] {
+		return sslm_gpu_test_only_mr1_wide_one_layer_smokeImpl(ctx, ref, wide, adapter, row_tokens, real_rows,
+		                                                       variant_h, out);
+	});
+}
+
+#endif  // SUPERSLM_MULTIROW_WIDE

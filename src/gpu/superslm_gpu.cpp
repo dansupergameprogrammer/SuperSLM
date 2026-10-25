@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "d3d12_harness.h"
+#include "multirow_wide.h"  // MR1 test-only declarations; empty unless SUPERSLM_MULTIROW_WIDE
 #include "gpu_call_timing_snapshot.h"
 #include "shaders/kv_page_addr_model.h"
 #include "gpu_kv_pool_geometry.h"  // paged-KV G3: the coverage twin's chunk-wide form
@@ -1922,6 +1923,45 @@ void RecordOneTokenFullDepthDispatchBody(
 	}
 }
 
+// The SeqState bytes a submission uploads for `seq` (T-2039's dynamic, per-real-hidden_size layout:
+// hidden_codes[H] i32, hidden_scale.m/e i64, layer_index u32, kv_sat_lo/hi u32, context_length i64,
+// sticky_status i64, then the four per-site counter pairs; see SeqScaleOff/.../SeqStickyOff above,
+// matched shader-side by site_common.hlsli's SeqScaleOffGpu family). Extracted unchanged from
+// PrepareGpuLayerLoopChunkOpenState so the multi-row plan's widened recorder (multirow_wide.inl) packs
+// each row exactly as the one-row submission packs its one.
+std::vector<uint8_t> PackGpuSeqStateBytes(const superslm::SequenceLayerState& seq, uint32_t H) {
+	std::vector<uint8_t> seq_bytes(SeqTotalSize(H), 0);
+	for (uint32_t i = 0; i < H; ++i) PutI32At(seq_bytes, i * 4, static_cast<int32_t>(seq.hidden_codes[i]));
+	PutI64At(seq_bytes, SeqScaleOff(H) + 0, seq.hidden_scale.m);
+	PutI64At(seq_bytes, SeqScaleOff(H) + 8, seq.hidden_scale.e);
+	PutI32At(seq_bytes, SeqLayerIdxOff(H), static_cast<int32_t>(seq.layer_index));
+	PutI32At(seq_bytes, SeqSatLoOff(H), static_cast<int32_t>(seq.kv_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqSatHiOff(H), static_cast<int32_t>((seq.kv_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI64At(seq_bytes, SeqCtxLenOff(H), seq.context_length);
+	PutI64At(seq_bytes, SeqStickyOff(H), 0);  // sticky_status = kTagOk
+	// (T-2577, D-SLM6280): the four per-site breakdowns, same lo/hi split as the aggregate
+	// immediately above -- carried forward across calls exactly like the aggregate is (never
+	// zeroed here; a fresh sequence starts at whatever `seq` itself carries, matching
+	// `kv_saturation_count`'s own "caller resets on sequence create" contract).
+	PutI32At(seq_bytes, SeqKvLandingSatLoOff(H),
+	         static_cast<int32_t>(seq.kv_landing_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqKvLandingSatHiOff(H),
+	         static_cast<int32_t>((seq.kv_landing_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqKChannelLandingSatLoOff(H),
+	         static_cast<int32_t>(seq.k_channel_landing_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqKChannelLandingSatHiOff(H),
+	         static_cast<int32_t>((seq.k_channel_landing_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqRopeQSatLoOff(H),
+	         static_cast<int32_t>(seq.rope_q_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqRopeQSatHiOff(H),
+	         static_cast<int32_t>((seq.rope_q_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqRopeKSatLoOff(H),
+	         static_cast<int32_t>(seq.rope_k_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqRopeKSatHiOff(H),
+	         static_cast<int32_t>((seq.rope_k_saturation_count >> 32) & 0xFFFFFFFFu));
+	return seq_bytes;
+}
+
 // T-2169 (Rung 2b-prep, design Sec5.1, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
 // pack-and-residency decision, and the once-per-call root-signature/twelve-SRV-UAV-binding setup,
 // extracted verbatim from RunLayerLoopGpuSubmit's own former inline body -- a mechanical
@@ -1967,6 +2007,18 @@ struct GpuLayerLoopChunkOpenState {
 	// that leaves it false reached no open list, so the recording window's cleanup
 	// (AbandonRecording) leaves the list alone.
 	bool list_opened = false;
+	// Multi-row plan §3.3 (MR1): what the binding block below bound at root parameters 1 (t0), 6 and 7
+	// (t5/t6), 13 and 14 (t8/t9) and kComposedRootParamKvPageTable (t10), and the two b1 page constants
+	// -- the bindings this struct did not otherwise carry. Recorded so a recorder that sets its own root
+	// signature after this call (the widened one, multirow_wide.inl) rebinds exactly what the one-row
+	// body reads. Recording them changes nothing the one-row path binds or records.
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_weights;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_rope_cos;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_rope_sin;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_lora_ab;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_fold;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_kv_page_table;
+	uint32_t bound_kv_page_constants[harness::Device::kComposedPageConstantCount] = {};
 };
 
 // The readback's table barrier: when this submission uploaded a pooled holder's table buffer, the
@@ -2380,35 +2432,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// context_length i64, sticky_status i64; see SeqScaleOff/.../SeqStickyOff
 	// above, matched shader-side by site_common.hlsli's own SeqScaleOffGpu
 	// family). ---
-	std::vector<uint8_t> seq_bytes(SeqTotalSize(H), 0);
-	for (uint32_t i = 0; i < H; ++i) PutI32At(seq_bytes, i * 4, static_cast<int32_t>(seq.hidden_codes[i]));
-	PutI64At(seq_bytes, SeqScaleOff(H) + 0, seq.hidden_scale.m);
-	PutI64At(seq_bytes, SeqScaleOff(H) + 8, seq.hidden_scale.e);
-	PutI32At(seq_bytes, SeqLayerIdxOff(H), static_cast<int32_t>(seq.layer_index));
-	PutI32At(seq_bytes, SeqSatLoOff(H), static_cast<int32_t>(seq.kv_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqSatHiOff(H), static_cast<int32_t>((seq.kv_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI64At(seq_bytes, SeqCtxLenOff(H), seq.context_length);
-	PutI64At(seq_bytes, SeqStickyOff(H), 0);  // sticky_status = kTagOk
-	// (T-2577, D-SLM6280): the four per-site breakdowns, same lo/hi split as the aggregate
-	// immediately above -- carried forward across calls exactly like the aggregate is (never
-	// zeroed here; a fresh sequence starts at whatever `seq` itself carries, matching
-	// `kv_saturation_count`'s own "caller resets on sequence create" contract).
-	PutI32At(seq_bytes, SeqKvLandingSatLoOff(H),
-	         static_cast<int32_t>(seq.kv_landing_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqKvLandingSatHiOff(H),
-	         static_cast<int32_t>((seq.kv_landing_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqKChannelLandingSatLoOff(H),
-	         static_cast<int32_t>(seq.k_channel_landing_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqKChannelLandingSatHiOff(H),
-	         static_cast<int32_t>((seq.k_channel_landing_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqRopeQSatLoOff(H),
-	         static_cast<int32_t>(seq.rope_q_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqRopeQSatHiOff(H),
-	         static_cast<int32_t>((seq.rope_q_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqRopeKSatLoOff(H),
-	         static_cast<int32_t>(seq.rope_k_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqRopeKSatHiOff(H),
-	         static_cast<int32_t>((seq.rope_k_saturation_count >> 32) & 0xFFFFFFFFu));
+	const std::vector<uint8_t> seq_bytes = PackGpuSeqStateBytes(seq, H);
 
 	// T-2039: LayerScratch's own dynamic, per-real-dims layout (superseding
 	// T-2035's fixed 640-byte assumption, Sec13.5's own named blocker) --
@@ -2949,9 +2973,13 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	if (b5_async_swap_srv_rebind) {
 		harness::BindRootSrv(dev.list.Get(), 6, sin_table_buf.Get());
 		harness::BindRootSrv(dev.list.Get(), 7, cos_table_buf.Get());
+		out_state->bound_rope_cos = sin_table_buf;
+		out_state->bound_rope_sin = cos_table_buf;
 	} else {
 		harness::BindRootSrv(dev.list.Get(), 6, cos_table_buf.Get());
 		harness::BindRootSrv(dev.list.Get(), 7, sin_table_buf.Get());
+		out_state->bound_rope_cos = cos_table_buf;
+		out_state->bound_rope_sin = sin_table_buf;
 	}
 	harness::BindRootSrv(dev.list.Get(), 8, scratch_layout_buf.Get());
 	harness::BindRootUav(dev.list.Get(), 9, seq_uav.Get());
@@ -2992,7 +3020,14 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		    static_cast<uint32_t>(std::min<size_t>(kv_view.page_bytes, UINT32_MAX))};
 		dev.list->SetComputeRoot32BitConstants(harness::Device::kComposedRootParamKvPageConstants,
 		                                       harness::Device::kComposedPageConstantCount, page_constants, 0);
+		for (UINT i = 0; i < harness::Device::kComposedPageConstantCount; ++i) {
+			out_state->bound_kv_page_constants[i] = page_constants[i];
+		}
 	}
+	out_state->bound_weights = lw_buf;
+	out_state->bound_lora_ab = adapter_bridge ? adapter_bridge->lora_ab_resident : model_const_buf.Get();
+	out_state->bound_fold = adapter_bridge ? adapter_bridge->fold_resident : model_const_buf.Get();
+	out_state->bound_kv_page_table = kv_table_resident != nullptr ? kv_table_resident : kv_page_table_buf.Get();
 
 	out_state->H = H;
 	out_state->HD = HD;
@@ -5379,5 +5414,11 @@ bool MapModelGpuResidencyWithInjection(uint64_t required_bytes) {
 	}
 	return true;  // every allocation call succeeded (including the N==0 vacuous case)
 }
+
+// Multi-row GPU plan (rev 1.3.2), slice MR1: the widened kernels' test-only host side. Compiled only under
+// SUPERSLM_MULTIROW_WIDE, which no shipped target defines (multirow_wide.h).
+#if defined(SUPERSLM_MULTIROW_WIDE)
+#include "multirow_wide.inl"
+#endif
 
 }  // namespace superslm_gpu
