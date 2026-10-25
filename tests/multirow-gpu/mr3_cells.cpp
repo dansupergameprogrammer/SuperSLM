@@ -64,6 +64,10 @@
 //   9.1   save after the close and restore (SLM5 and SLM6): the restored handle re-saves the same bytes, and its
 //         continuation equals the twin's restored handle's
 //   9.3   in 2.1
+//   stale (review S1/N7) the stale-shader refusal covers the widened binaries: a <site>_wide_h<H> or
+//         <gemm>_gemm_wide_h<H> .cso older than its shaders_wide source, the one-row site it is generated from, or a
+//         .hlsli of either directory is refused, naming the newer file; fresh binaries, a tree without shaders_wide,
+//         and one-row names beside a newer shaders_wide file are not
 //   (9.2 is mr3_92_blobs.cpp, run by the runner against the base tag's binary.)
 //
 // Usage: mr3_cells.exe --model=PATH [--fixtures=DIR] [--adapter=PATH] [--shaders=DIR] [--cells=..] [--cycles=N]
@@ -81,6 +85,9 @@
 #include <random>
 #include <set>
 #include <thread>
+
+#include <filesystem>
+#include <fstream>
 
 #include "mr2_common.h"
 #include "mr3_entry.h"
@@ -1305,6 +1312,71 @@ void Cell54DeviceLost(const mr2::Model& m) {
 		Check(sm.chunks_open == 0 && sm.row_buffer_free == sm.row_buffer_sets, tag + ": the chunk's row set was not freed");
 	}
 }
+// 5.4 (review N5): an M = 1 chunk whose layer 0 runs in a BATCH slot gets the same bookkeeping as from the single call
+// (the M = 1 hook after the slot's submission: row p0's rollback snapshot, the adapter fixed, the slice in flight).
+// With an adapter (pkv_def): a later slice naming another adapter is BUSY, in a batch slot and in the single call. Then
+// rows_abandon returns it to its entry blob, and a feed that runs every slice through the batch closes equal to the
+// twin. Without an adapter (both fixtures): the abandon and the batch-only feed.
+void Cell54BatchFirstM1(const mr2::Model& m) {
+	const int32_t V = m.vocab();
+	const uint32_t D = m.dpl();
+	std::vector<uint8_t> bytes;
+	superslm::SslmModelView view{};
+	const bool have_adapter = LoadAdapter(m, &bytes, &view);
+	if (!have_adapter && m.base() == "pkv_def") Check(false, "5.4 batch-first M1: no --adapter (pkv_def_r4.adp)");
+	for (int use : {0, 1}) {
+		if (use && !have_adapter) continue;
+		for (int pooled = 0; pooled <= 1; ++pooled) {
+			const std::string tag = F("%s %s batch-first M1 chunk%s", m.base().c_str(), pooled ? "pooled" : "dedicated", use ? " on an adapter" : "");
+			World w(m, Shaders());
+			if (!w.ok) { Check(false, tag); continue; }
+			SslmGpuAdapterHandle *a1 = nullptr, *a2 = nullptr;
+			if (use) {
+				Check(sslm_gpu_adapter_map(w.ctx, w.model, &view, &a1) == S::SSLM_OK && sslm_gpu_adapter_map(w.ctx, w.model, &view, &a2) == S::SSLM_OK,
+				      tag + ": adapter maps");
+				w.adapters.push_back(a1);
+				w.adapters.push_back(a2);
+			}
+			Pair p = MakePair(w, pooled != 0), q = MakePair(w, pooled != 0);
+			const std::vector<int32_t> head = Stream(0, 3, V, 101), rows = Stream(3, 1, V, 101);
+			Twin(w, p.a, head, Full(m), m, a1);
+			Twin(w, p.t, head, Full(m), m, a1);
+			const std::vector<uint8_t> entry = Blob(w, p.a, tag);
+			Check(Embed(w, p.a, rows) == S::SSLM_OK, tag + ": embed");
+			Check(sslm_gpu_seq_embed_token(w.ctx, q.a, mr2::StreamToken(0, V, 102)) == S::SSLM_OK, tag + ": plain embed");
+			std::vector<S> st;
+			S call = S::SSLM_DEVICE_LOST;
+			// The plain member first takes its L layers from the running budget; the chunk member gets the last D (layer 0).
+			Batch(w, {q.a, p.a}, Full(m) + D, &st, &call, {nullptr, a1});
+			StatusIs(st[0], S::SSLM_OK, tag + ": the plain member");
+			StatusIs(st[1], S::SSLM_OK, tag + ": layer 0 in the batch");
+			mr2::Ready(w, p.a);
+			mr2::Ready(w, q.a);
+			Check(RowsOpen(p.a) == 1 && Layer(p.a) == 1, F("%s: rows_open %d layer %u after layer 0 in the batch", tag.c_str(), RowsOpen(p.a), Layer(p.a)));
+			if (use) {
+				Batch(w, {p.a}, D, &st, &call, {a2});
+				StatusIs(st[0], MR3_MIDTOKEN_ADAPTER_STATUS, tag + ": another adapter handle in a later batch slot");
+				StatusIs(sslm_decode_step_gpu(w.ctx, p.a, nullptr, D), MR3_MIDTOKEN_ADAPTER_STATUS, tag + ": no adapter on a later single call");
+				Check(RowsOpen(p.a) == 1 && Layer(p.a) == 1, tag + ": a refused slice changed the chunk");
+			}
+			StatusIs(sslm_gpu_seq_rows_abandon(w.ctx, p.a), S::SSLM_OK, tag + ": abandon");
+			Check(RowsOpen(p.a) == 0 && LastCommitted(p.a) == 0, F("%s: rows_open %d last_rows_committed %d after the abandon", tag.c_str(), RowsOpen(p.a), LastCommitted(p.a)));
+			BlobEq(Blob(w, p.a, tag), entry, tag + ": back at entry");
+			// Every slice through the batch, one layer each.
+			Check(Embed(w, p.a, rows) == S::SSLM_OK, tag + ": embed again");
+			for (int i = 0; i < 8 && RowsOpen(p.a) != 0; ++i) {
+				Batch(w, {p.a}, D, &st, &call, {a1});
+				StatusIs(st[0], S::SSLM_OK, F("%s: batch slice %d", tag.c_str(), i));
+				mr2::Ready(w, p.a);
+				if (st[0] != S::SSLM_OK) break;
+			}
+			Check(RowsOpen(p.a) == 0 && LastCommitted(p.a) == 1,
+			      F("%s: rows_open %d last_rows_committed %d after the batch-only feed", tag.c_str(), RowsOpen(p.a), LastCommitted(p.a)));
+			Check(Twin(w, p.t, rows, D, m, a1) == S::SSLM_OK, tag + ": twin");
+			BlobEq(Blob(w, p.a, tag), Blob(w, p.t, tag), tag + ": vs the twin");
+		}
+	}
+}
 void Cell54(const mr2::Model& m) {
 	g_cell = "5.4";
 	const int32_t V = m.vocab();
@@ -1368,6 +1440,7 @@ void Cell54(const mr2::Model& m) {
 	Cell54Budget(m);
 	Cell54Adapter(m);
 	Cell54DeviceLost(m);
+	Cell54BatchFirstM1(m);
 }
 void Cell86(const mr2::Model& m) {
 	g_cell = "8.6";
@@ -1400,6 +1473,113 @@ void Cell86(const mr2::Model& m) {
 		CleanClose(r, c[i].a, 6, F("chunk %d", i));
 		Twin(w, c[i].t, Stream(2, 6, V, 60 + i), full, m);
 		BlobEq(Blob(w, c[i].a, "8.6"), Blob(w, c[i].t, "8.6"), F("chunk %d (%s)", i, i ? "pooled" : "dedicated"));
+	}
+}
+
+// ------------------------------------------------------------------------------------------------ stale (S1, N7)
+}  // namespace
+namespace superslm_gpu::harness {
+std::string ShaderBinaryStalenessDiagnostic(const std::string& shader_source_dir, const std::string& shader_name,
+                                             const std::string& cso_path);
+}
+namespace {
+// A disposable tree under %TEMP%: <root>/src/gpu/shaders and <root>/src/gpu/shaders_wide, files written then aged.
+struct StaleTree {
+	std::filesystem::path root;
+	StaleTree(const char* tag) {
+		char tmp[MAX_PATH]{};
+		if (GetTempPathA(MAX_PATH, tmp) == 0) return;
+		root = std::filesystem::path(tmp) / F("sslm_mr3_stale_%lu_%s", static_cast<unsigned long>(GetCurrentProcessId()), tag);
+		std::error_code ec;
+		std::filesystem::remove_all(root, ec);
+		std::filesystem::create_directories(root / "src" / "gpu" / "shaders", ec);
+		std::filesystem::create_directories(root / "src" / "gpu" / "shaders_wide", ec);
+		std::filesystem::create_directories(root / "out", ec);
+	}
+	~StaleTree() {
+		std::error_code ec;
+		std::filesystem::remove_all(root, ec);
+	}
+	bool ok() const { return !root.empty() && std::filesystem::exists(root / "src" / "gpu" / "shaders_wide"); }
+	std::filesystem::path P(const std::string& rel) const { return root / rel; }
+	// Written, then dated `age` seconds before now (all ages relative to one clock reading).
+	void Put(const std::string& rel, int age) const {
+		{ std::ofstream f(P(rel), std::ios::binary); f << "x\n"; }
+		std::error_code ec;
+		std::filesystem::last_write_time(P(rel), std::filesystem::file_time_type::clock::now() - std::chrono::seconds(age), ec);
+	}
+	std::string Src() const { return P("src/gpu/shaders").string(); }
+	std::string Diag(const std::string& name) const {
+		return superslm_gpu::harness::ShaderBinaryStalenessDiagnostic(Src(), name, P("out/" + name + ".cso").string());
+	}
+};
+void CellStale(const mr2::Model&) {
+	g_cell = "stale";
+	const char* kSite = "attn_norm_site_wide_h8";
+	const char* kGemm = "q_proj_gemm_wide_h8";
+	const char* kRow = "attn_norm_site";
+	// The fresh tree: every source 600 s old, every binary 300 s old.
+	auto Fresh = [&](StaleTree& t) {
+		t.Put("src/gpu/shaders/attn_norm_site.hlsl", 600);
+		t.Put("src/gpu/shaders/common.hlsli", 600);
+		t.Put("src/gpu/shaders_wide/attn_norm_site_wide.hlsl", 600);
+		t.Put("src/gpu/shaders_wide/proj_gemm_wide.hlsl", 600);
+		t.Put("src/gpu/shaders_wide/wide_common.hlsli", 600);
+		for (const char* n : {kSite, kGemm, kRow}) t.Put(F("out/%s.cso", n), 300);
+	};
+	auto Refused = [&](const StaleTree& t, const char* name, const char* names_file, const std::string& tag) {
+		const std::string d = t.Diag(name);
+		Check(d.find("stale shader binary") != std::string::npos && d.find(names_file) != std::string::npos,
+		      F("%s: %s.cso not refused naming %s (got \"%s\")", tag.c_str(), name, names_file, d.c_str()));
+	};
+	auto Accepted = [&](const StaleTree& t, const char* name, const std::string& tag) {
+		const std::string d = t.Diag(name);
+		Check(d.empty(), F("%s: %s.cso refused (\"%s\")", tag.c_str(), name, d.c_str()));
+	};
+	{
+		StaleTree t("fresh");
+		Check(t.ok(), "stale: temp tree");
+		if (!t.ok()) return;
+		Fresh(t);
+		for (const char* n : {kSite, kGemm, kRow}) Accepted(t, n, "fresh binaries");
+	}
+	struct Touch {
+		const char* file;     // touched 60 s ago (newer than the binaries)
+		const char* refused;  // the binary that must be refused
+		const char* names;    // the file the refusal names
+		std::vector<const char*> kept;  // binaries the touch must not refuse
+	};
+	const std::vector<Touch> touches = {
+	    {"src/gpu/shaders_wide/attn_norm_site_wide.hlsl", kSite, "attn_norm_site_wide.hlsl", {kGemm, kRow}},
+	    {"src/gpu/shaders/attn_norm_site.hlsl", kSite, "attn_norm_site.hlsl", {kGemm}},
+	    {"src/gpu/shaders_wide/proj_gemm_wide.hlsl", kGemm, "proj_gemm_wide.hlsl", {kSite, kRow}},
+	    {"src/gpu/shaders_wide/wide_common.hlsli", kSite, "wide_common.hlsli", {kRow}},
+	    {"src/gpu/shaders_wide/wide_common.hlsli", kGemm, "wide_common.hlsli", {}},
+	    {"src/gpu/shaders_wide/added_later.hlsli", kSite, "added_later.hlsli", {kRow}},
+	    {"src/gpu/shaders/common.hlsli", kGemm, "common.hlsli", {}},
+	};
+	for (size_t i = 0; i < touches.size(); ++i) {
+		const Touch& x = touches[i];
+		StaleTree t(F("touch%zu", i).c_str());
+		if (!t.ok()) { Check(false, "stale: temp tree"); continue; }
+		Fresh(t);
+		t.Put(x.file, 60);
+		const std::string tag = F("after touching %s", x.file);
+		Refused(t, x.refused, x.names, tag);
+		for (const char* k : x.kept) Accepted(t, k, tag);
+	}
+	{
+		// A tree with no shaders_wide (an installed consumer's sources, or a pre-MR3 tree): nothing to compare a widened
+		// binary against, so no refusal, even beside a newer one-row source.
+		StaleTree t("nowide");
+		if (!t.ok()) { Check(false, "stale: temp tree"); return; }
+		Fresh(t);
+		std::error_code ec;
+		std::filesystem::remove_all(t.P("src/gpu/shaders_wide"), ec);
+		t.Put("src/gpu/shaders/attn_norm_site.hlsl", 60);
+		Accepted(t, kSite, "no shaders_wide");
+		Accepted(t, kGemm, "no shaders_wide");
+		Refused(t, kRow, "attn_norm_site.hlsl", "no shaders_wide (the one-row binary)");
 	}
 }
 
@@ -2075,7 +2255,7 @@ int main(int argc, char** argv) {
 	    {"7.15", Cell715}, {"7.16", Cell716}, {"5.1", Cell51}, {"5.2", Cell52}, {"5.5", Cell55}, {"5.4", Cell54},
 	    {"8.6", Cell86}, {"8.1", Cell81}, {"8.2", Cell82}, {"8.8", Cell88}, {"8.9", Cell89}, {"9.1", Cell91},
 	    {"1.3", Cell13}, {"2.4", Cell24}, {"3.1", Cell31}, {"3.2", Cell32}, {"3.3w", Cell33w}, {"5.6", Cell56},
-	    {"1.1", Cell11}};
+	    {"1.1", Cell11}, {"stale", CellStale}};
 	bool all = true;
 	for (const auto& c : cells) {
 		if (!g_opt.want(c.first)) continue;
