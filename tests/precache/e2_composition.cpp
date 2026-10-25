@@ -108,7 +108,7 @@ void CrossBuild91() {
 PKV_CELL("9.1/E2", "E1", CrossBuild91);
 
 void Ordinals716() {
-    // 1.19.0 appends SSLM_RESTORE_PARENT_MISMATCH at 31 (delta prefix saves), so the sentinel is 32.
+    // 1.20.0 appends SSLM_RESTORE_PARENT_MISMATCH at 31 (delta prefix saves), so the sentinel is 32.
     PKV_CHECK_EQ(int(SSLM_STATUS_NEXT_FREE),32);
     PKV_CHECK_EQ(int(SSLM_KV_BUDGET_EXCEEDED),29);
 #ifdef SSLM_HAS_PREFIX_SAVE_ABI

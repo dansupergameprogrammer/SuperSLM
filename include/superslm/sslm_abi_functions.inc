@@ -186,7 +186,7 @@ SUPERSLM_API sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t*
 SUPERSLM_API sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool, const void* buf,
                                               size_t n, sslm_prefix parent_or_null, sslm_prefix* out,
                                               uint32_t* out_shared_pages);
-/* SuperSLM 1.19.0, delta saves. Save a frozen NESTED prefix (origin >= 1) as SPD1 bytes: its header,
+/* SuperSLM 1.20.0, delta saves. Save a frozen NESTED prefix (origin >= 1) as SPD1 bytes: its header,
  * its residual and only its own rows [origin, L), plus the SHA-256 of its rows [0, origin) (the parent
  * rows digest, equal to the SHA-256 of a parent SPX1's rows section). Size reporting and refusals are
  * sslm_prefix_save's; a root prefix (origin 0) is SSLM_INVALID_ARGUMENT. No parent handle is needed.

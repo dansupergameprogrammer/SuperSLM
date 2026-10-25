@@ -24,7 +24,7 @@ def main() -> None:
         "T2138 positional mirror lacks the appended status before its sentinel")
     assert re.search(rf"\b{status}\b[^\n]*\b30\b", text["API documentation"]), (
         "API documentation lacks the status and ordinal")
-    # 1.19.0 (delta prefix saves, cell D14/E6): the parent status, appended after it at 31.
+    # 1.20.0 (delta prefix saves, cell D14/E6): the parent status, appended after it at 31.
     parent = "SSLM_RESTORE_PARENT_MISMATCH"
     assert re.search(rf"X\({parent}\)", text["public X-macro"]), "parent status absent"
     assert re.search(r"#define SSLM_HAS_PREFIX_DELTA_ABI 1\b", text["public X-macro"]), "delta ABI macro absent"

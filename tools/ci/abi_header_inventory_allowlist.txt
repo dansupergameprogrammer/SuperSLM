@@ -69,4 +69,4 @@ SSLM_HAS_PAGED_KV_ABI  # Paged-KV plan (rev 16.1) Sec3.6, step C5: defined besid
 # this checker's own inventory source, t2133 Sec8, does not and structurally cannot cover; same
 # shape as SSLM_DECODE_MODE_GREEDY above.
 SSLM_HAS_PREFIX_SAVE_ABI  # Precached prefixes E2: frozen-prefix save/restore ABI.
-SSLM_HAS_PREFIX_DELTA_ABI  # 1.19.0 delta prefix saves: save_delta, assemble, SPD1 restore.
+SSLM_HAS_PREFIX_DELTA_ABI  # 1.20.0 delta prefix saves: save_delta, assemble, SPD1 restore.

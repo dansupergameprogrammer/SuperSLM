@@ -1,12 +1,12 @@
-# 1.19.0 box sitting: run sheet
+# 1.20.0 box sitting: run sheet
 
 Plan superslm-prefix-delta-1p18 §8 S3. One sitting of about 20 minutes, Dan nearby (home box: short runs only).
-Run it on the merged release tree, after 1.16.0, 1.17.0 and 1.18.0 have landed; the status ordinal may have moved then.
+Run it on the merged release tree, after 1.16.0 through 1.19.0 have landed; the status ordinal may have moved then.
 
-**P0. Worktree.** `git -C D:\SuperSLM worktree add D:\_scratch\delta-1p19\src <release-tree commit>` (scratch under
-`D:\_scratch\delta-1p19`, per the disk rules). Never on `develop`/`main` directly.
+**P0. Worktree.** `git -C D:\SuperSLM worktree add D:\_scratch\delta-1p20\src <release-tree commit>` (scratch under
+`D:\_scratch\delta-1p20`, per the disk rules). Never on `develop`/`main` directly.
 
-**P1. Run.** `powershell -ExecutionPolicy Bypass -File D:\_scratch\delta-1p19\src\docs\release\1p19-box\run-1p19-box.ps1`
+**P1. Run.** `powershell -ExecutionPolicy Bypass -File D:\_scratch\delta-1p20\src\docs\release\1p20-box\run-1p20-box.ps1`
 
 Steps, each resumable (`out\<step>.done`):
 
@@ -22,7 +22,7 @@ Steps, each resumable (`out\<step>.done`):
 **P2. Commit (box session, on the release branch, `[skip ci]`):** copy `out\c_abi_verbs.txt` and
 `out\consumed_symbols.txt` over `tests\t2807-api-slot\`; set `build.bat`'s verb count to the new total; set cell
 9.X2's expected line of `sslm_seq_jump_forward` to the line the `verbs` step reports (48 on 1.15's list); commit the
-`out\status.txt` and logs under `docs\release\1p19-box\results\`.
+`out\status.txt` and logs under `docs\release\1p20-box\results\`.
 
 D12 (the schema-bound delta cell) is not written yet: it needs the synthetic schema fixtures, so it is written with
 the box session's fixtures before this sitting, or the e1-msvc step runs without it and the record says so.
