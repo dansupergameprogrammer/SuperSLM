@@ -43,11 +43,17 @@ struct T2790Resources {
 T2790Resources g_t2790;
 bool g_t2790_enabled = false;
 
-// Timing, accumulated across chunks until reset: per-site GPU milliseconds (the timestamp delta
-// before each dispatch to the next, summed over layers), host recording and fence-wait time.
+// Timing, accumulated across chunks until reset: per-site GPU milliseconds, host recording and
+// fence-wait time. Each dispatch is bracketed by its OWN begin and end timestamps, and a site's time
+// is end - begin, summed over layers. The time from one dispatch's end stamp to the next one's begin
+// stamp (the UAV barrier drain, timestamp cost) is kept apart as the gap. So per chunk,
+// sum(sites) + gap = gpu_busy exactly, and a site's time can never land in another site's slot.
+// (The first cut used one stamp per boundary, each doubling as the previous dispatch's end; any lag
+// between a dispatch finishing and the next stamp landing was then charged to the NEXT site.)
 double g_t2790_site_ms[kT2790SitesPerLayer] = {};
 uint64_t g_t2790_chunks = 0;
-double g_t2790_record_ms = 0, g_t2790_wait_ms = 0, g_t2790_gpu_busy_ms = 0;
+double g_t2790_record_ms = 0, g_t2790_wait_ms = 0, g_t2790_gpu_busy_ms = 0, g_t2790_gap_ms = 0;
+uint64_t g_t2790_untimed_dispatches = 0;  // dispatches past the timestamp heap (none at 24 layers)
 
 Microsoft::WRL::ComPtr<ID3D12RootSignature> T2790MakeRootSig(harness::Device& dev) {
 	D3D12_DESCRIPTOR_RANGE ranges[3]{};
@@ -176,7 +182,12 @@ uint32_t T2790Rows() { return kT2790Rows; }
 void T2790ResetTimings() {
 	for (double& v : g_t2790_site_ms) v = 0;
 	g_t2790_chunks = 0;
-	g_t2790_record_ms = g_t2790_wait_ms = g_t2790_gpu_busy_ms = 0;
+	g_t2790_record_ms = g_t2790_wait_ms = g_t2790_gpu_busy_ms = g_t2790_gap_ms = 0;
+	g_t2790_untimed_dispatches = 0;
+}
+void T2790GetGapTimings(double* gap_ms, uint64_t* untimed_dispatches) {
+	*gap_ms = g_t2790_gap_ms;
+	*untimed_dispatches = g_t2790_untimed_dispatches;
 }
 void T2790GetTimings(double* site_ms_25, uint64_t* chunks, double* record_ms, double* wait_ms,
                      double* gpu_busy_ms) {
@@ -278,28 +289,29 @@ superslm::SslmForwardStatus T2790SubmitWidenedChunk(
 			uav_barrier.UAV.pResource = nullptr;
 			const uint32_t position0 = static_cast<uint32_t>(p0);
 			const uint32_t width0 = position0 + 1u;
+			// Timestamp slots 2d and 2d+1 bracket dispatch d (begin, end).
 			uint32_t qi = 0;
-			auto stamp = [&](uint32_t site) {
-				if (qi < harness::Device::kMaxTimestampSlots - 1) {
+			auto stamp = [&]() {
+				if (qi < harness::Device::kMaxTimestampSlots) {
 					dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, qi);
 				}
 				++qi;
-				dispatch_site.push_back(site);
 			};
 			// Plain sites: the 12-value block bind_and_dispatch writes. Rows go in Y unless `gemm`.
 			auto plain = [&](uint32_t site, uint32_t layer, uint32_t groups_x, uint32_t lanes,
 			                 bool gemm) {
-				stamp(site);
 				uint32_t consts[12] = {layer, H, HD, NH, cap, position0, NQH, width0, I, N, lanes, Q_WIDTH};
 				dev.list->SetComputeRoot32BitConstants(0, 12, consts, 0);
 				dev.list->SetPipelineState(g_t2790_pso_by_site[site].Get());
+				dispatch_site.push_back(site);
+				stamp();
 				dev.list->Dispatch(groups_x, gemm ? 1u : kT2790Rows, 1);
+				stamp();
 				dev.list->ResourceBarrier(1, &uav_barrier);
 			};
 			// Tail sites: the 28-value block bind_and_dispatch_tail writes with no adapter bound.
 			struct Slot { uint32_t in_base, wide_base; };
 			auto tail = [&](uint32_t site, uint32_t layer, std::initializer_list<Slot> slots) {
-				stamp(site);
 				uint32_t consts[28] = {layer, H, HD, NH, cap, position0, NQH, width0, I, N, 1u};
 				size_t base = 11;
 				for (const Slot& s : slots) {
@@ -316,7 +328,10 @@ superslm::SslmForwardStatus T2790SubmitWidenedChunk(
 				consts[27] = Q_WIDTH;
 				dev.list->SetComputeRoot32BitConstants(0, 28, consts, 0);
 				dev.list->SetPipelineState(g_t2790_pso_by_site[site].Get());
+				dispatch_site.push_back(site);
+				stamp();
 				dev.list->Dispatch(1, kT2790Rows, 1);
+				stamp();
 				dev.list->ResourceBarrier(1, &uav_barrier);
 			};
 
@@ -364,10 +379,14 @@ superslm::SslmForwardStatus T2790SubmitWidenedChunk(
 				plain(23, l, 1, 1, false);
 				plain(24, l, 1, 1, false);
 			}
-			const uint32_t n_stamps = std::min(qi, harness::Device::kMaxTimestampSlots - 1);
-			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, n_stamps);
-			dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, n_stamps + 1,
-			                           dev.timestamp_readback.Get(), 0);
+			// Only whole begin/end pairs are used; 24 layers x 25 sites x 2 = 1200 of 8192 slots.
+			const uint32_t n_timed = std::min<uint32_t>(static_cast<uint32_t>(dispatch_site.size()),
+			                                            harness::Device::kMaxTimestampSlots / 2u);
+			const uint32_t n_stamps = 2u * n_timed;
+			if (n_stamps > 0) {
+				dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, n_stamps,
+				                           dev.timestamp_readback.Get(), 0);
+			}
 
 			// Readback: every row's SeqState, and each (layer, kv head, K|V) run of this chunk's
 			// committed positions -- contiguous in the K/V layout, so one copy per run.
@@ -423,7 +442,7 @@ superslm::SslmForwardStatus T2790SubmitWidenedChunk(
 			g_t2790_wait_ms += std::chrono::duration<double, std::milli>(t_wait_end - t_record_end).count();
 
 			if (dev.timestamp_frequency > 0 && n_stamps > 0) {
-				std::vector<UINT64> ts(n_stamps + 1, 0);
+				std::vector<UINT64> ts(n_stamps, 0);
 				void* qp = nullptr;
 				D3D12_RANGE qr{0, ts.size() * sizeof(UINT64)};
 				SSLM_GPU_HR(dev.timestamp_readback->Map(0, &qr, &qp));
@@ -431,10 +450,16 @@ superslm::SslmForwardStatus T2790SubmitWidenedChunk(
 				D3D12_RANGE none{0, 0};
 				dev.timestamp_readback->Unmap(0, &none);
 				const double freq = static_cast<double>(dev.timestamp_frequency);
-				for (uint32_t d = 0; d < n_stamps; ++d) {
-					g_t2790_site_ms[dispatch_site[d]] += static_cast<double>(ts[d + 1] - ts[d]) / freq * 1000.0;
+				// Signed differences: a timestamp that lands out of order shows as a negative, not a wrap.
+				auto dms = [&](uint32_t a, uint32_t b) {
+					return static_cast<double>(static_cast<int64_t>(ts[b] - ts[a])) / freq * 1000.0;
+				};
+				for (uint32_t d = 0; d < n_timed; ++d) {
+					g_t2790_site_ms[dispatch_site[d]] += dms(2u * d, 2u * d + 1u);
+					if (d + 1 < n_timed) g_t2790_gap_ms += dms(2u * d + 1u, 2u * d + 2u);
 				}
-				g_t2790_gpu_busy_ms += static_cast<double>(ts.back() - ts.front()) / freq * 1000.0;
+				g_t2790_gpu_busy_ms += dms(0, n_stamps - 1u);
+				g_t2790_untimed_dispatches += dispatch_site.size() - n_timed;
 			}
 			++g_t2790_chunks;
 

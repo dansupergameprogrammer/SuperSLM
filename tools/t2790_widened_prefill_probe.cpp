@@ -11,7 +11,9 @@
 //         copy-back, this probe's own timing -- is the same code in both modes.
 //
 // Timing: the first document is run once untimed (pipeline creation, residency warm-up) in both
-// modes, then every document is timed. Per-site GPU timings of the widened sites are printed in mode 1.
+// modes, then every document is timed. Per-site GPU timings of the widened sites are printed in mode 1:
+// each dispatch has its own begin/end timestamp pair, so per chunk sum(sites) + gap = gpu_busy, where
+// gap is the GPU time between one dispatch's end stamp and the next one's begin stamp.
 //
 // Usage: t2790_probe_h<H> <model.sslm> <token-rows.txt> <frames.bin> <timings.tsv> <context_cap> <mode>
 #include <chrono>
@@ -35,6 +37,7 @@ uint32_t T2790Rows();
 void T2790ResetTimings();
 void T2790GetTimings(double* site_ms_25, uint64_t* chunks, double* record_ms, double* wait_ms,
                      double* gpu_busy_ms);
+void T2790GetGapTimings(double* gap_ms, uint64_t* untimed_dispatches);
 }  // namespace superslm_gpu
 
 using namespace superslm;
@@ -157,11 +160,17 @@ int main(int argc, char** argv) {
 		uint64_t chunks = 0;
 		double rec = 0, wait = 0, busy = 0;
 		superslm_gpu::T2790GetTimings(site, &chunks, &rec, &wait, &busy);
+		double gap = 0;
+		uint64_t untimed = 0;
+		superslm_gpu::T2790GetGapTimings(&gap, &untimed);
 		double sum = 0;
 		for (double v : site) sum += v;
 		std::printf("chunks=%llu host_record_ms=%.1f (%.3f/chunk) fence_wait_ms=%.1f gpu_busy_ms=%.1f (%.3f/chunk)\n",
 		            static_cast<unsigned long long>(chunks), rec, chunks ? rec / chunks : 0.0, wait, busy,
 		            chunks ? busy / chunks : 0.0);
+		std::printf("site_sum_ms=%.1f (%.4f/chunk) gap_ms=%.1f (%.4f/chunk) untimed_dispatches=%llu\n", sum,
+		            chunks ? sum / chunks : 0.0, gap, chunks ? gap / chunks : 0.0,
+		            static_cast<unsigned long long>(untimed));
 		std::printf("site\tms_total\tms_per_chunk\tshare\n");
 		for (int s = 0; s < 25; ++s) {
 			std::printf("%s\t%.1f\t%.4f\t%.3f\n", kSiteNames[s], site[s], chunks ? site[s] / chunks : 0.0,
