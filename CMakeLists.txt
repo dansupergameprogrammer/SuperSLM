@@ -1118,6 +1118,55 @@ if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 	unset(_superslm_shader_cso)
 	unset(_superslm_shader_staged)
 
+	# Multi-row plan §3.1/§3.2: the row-widened site variants, H in {2, 4, 8}, at the same pinned
+	# target and flags. src/gpu/shaders_wide holds the 19 generated non-GEMM sites
+	# (gen_wide_shaders.py, never edited by hand) and the one hand-written GEMM source, compiled
+	# once per GEMM site. Outputs are <site>_wide_h<H>.cso and <gemm>_gemm_wide_h<H>.cso beside the
+	# one-row shaders.
+	set(_sslm_wide_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders_wide")
+	file(GLOB _sslm_wide_site_srcs CONFIGURE_DEPENDS "${_sslm_wide_dir}/*_site_wide.hlsl")
+	set(_sslm_wide_jobs "")
+	foreach(_sslm_wide_h 2 4 8)
+		foreach(_sslm_wide_src ${_sslm_wide_site_srcs})
+			get_filename_component(_sslm_wide_name "${_sslm_wide_src}" NAME_WE)
+			list(APPEND _sslm_wide_jobs "${_sslm_wide_name}_h${_sslm_wide_h}|${_sslm_wide_src}|${_sslm_wide_h}|0")
+		endforeach()
+		set(_sslm_wide_gi 1)
+		foreach(_sslm_wide_g q_proj kv_proj o_proj gate_proj up_proj down_proj)
+			list(APPEND _sslm_wide_jobs
+			     "${_sslm_wide_g}_gemm_wide_h${_sslm_wide_h}|${_sslm_wide_dir}/proj_gemm_wide.hlsl|${_sslm_wide_h}|${_sslm_wide_gi}")
+			math(EXPR _sslm_wide_gi "${_sslm_wide_gi} + 1")
+		endforeach()
+	endforeach()
+	foreach(_sslm_wide_job ${_sslm_wide_jobs})
+		string(REPLACE "|" ";" _sslm_wide_parts "${_sslm_wide_job}")
+		list(GET _sslm_wide_parts 0 _sslm_wide_out)
+		list(GET _sslm_wide_parts 1 _sslm_wide_src)
+		list(GET _sslm_wide_parts 2 _sslm_wide_rows)
+		list(GET _sslm_wide_parts 3 _sslm_wide_gemm)
+		set(_sslm_wide_defs "-DSSLM_WIDE_H=${_sslm_wide_rows}")
+		if(NOT _sslm_wide_gemm STREQUAL "0")
+			list(APPEND _sslm_wide_defs "-DSSLM_GEMM_SITE=${_sslm_wide_gemm}")
+		endif()
+		set(_sslm_wide_cso "${SUPERSLM_GPU_SHADER_OUT_DIR}/${_sslm_wide_out}.cso")
+		set(_sslm_wide_staged "${SUPERSLM_GPU_SHADER_STAGE_DIR}/${_sslm_wide_out}.cso")
+		add_custom_command(
+			OUTPUT "${_sslm_wide_cso}" "${_sslm_wide_staged}"
+			COMMAND "${CMAKE_COMMAND}" -E make_directory "${SUPERSLM_GPU_SHADER_OUT_DIR}"
+			COMMAND "${SUPERSLM_DXC_EXECUTABLE}" -T cs_6_2 -E main -Fo "${_sslm_wide_cso}" "${_sslm_wide_src}" -O3 -HV 2018 -WX
+			        ${_sslm_wide_defs} -I "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders"
+			COMMAND "${CMAKE_COMMAND}" -E copy "${_sslm_wide_cso}" "${_sslm_wide_staged}"
+			DEPENDS "${_sslm_wide_src}" ${SUPERSLM_GPU_SHADER_HEADERS}
+			COMMENT "dxc: ${_sslm_wide_out}.cso"
+			VERBATIM
+		)
+		list(APPEND SUPERSLM_GPU_SHADER_OUTPUTS "${_sslm_wide_cso}")
+		list(APPEND SUPERSLM_GPU_SHADER_STAGED "${_sslm_wide_staged}")
+	endforeach()
+	unset(_sslm_wide_dir)
+	unset(_sslm_wide_site_srcs)
+	unset(_sslm_wide_jobs)
+
 	add_custom_target(superslm_gpu_shaders DEPENDS ${SUPERSLM_GPU_SHADER_OUTPUTS} ${SUPERSLM_GPU_SHADER_STAGED})
 
 	# T-2152: superslm_tests dispatches real GPU shaders on WIN32 (the T-2019

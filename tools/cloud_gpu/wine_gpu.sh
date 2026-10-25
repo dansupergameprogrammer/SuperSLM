@@ -89,6 +89,21 @@ cmd_build() {
 	for f in src/gpu/shaders/*.hlsl; do
 		"$DXC" -T cs_6_2 -E main -Fo "out/shaders/$(basename "$f" .hlsl).cso" "$f" -O3 -HV 2018 -WX >/dev/null
 	done
+	# The row-widened variants (multi-row plan §3.1/§3.2), as build.bat compiles them.
+	if [ -d src/gpu/shaders_wide ]; then
+		for h in 2 4 8; do
+			for f in src/gpu/shaders_wide/*_site_wide.hlsl; do
+				"$DXC" -T cs_6_2 -E main -Fo "out/shaders/$(basename "$f" .hlsl)_h$h.cso" "$f" -O3 -HV 2018 -WX \
+					-D SSLM_WIDE_H=$h -I src/gpu/shaders >/dev/null
+			done
+			gi=1
+			for g in q_proj kv_proj o_proj gate_proj up_proj down_proj; do
+				"$DXC" -T cs_6_2 -E main -Fo "out/shaders/${g}_gemm_wide_h$h.cso" src/gpu/shaders_wide/proj_gemm_wide.hlsl \
+					-O3 -HV 2018 -WX -D SSLM_WIDE_H=$h -D SSLM_GEMM_SITE=$gi -I src/gpu/shaders >/dev/null
+				gi=$((gi + 1))
+			done
+		done
+	fi
 	local jobs="${JOBS:-2}"
 	# shellcheck disable=SC2086
 	printf '%s\n' $SRCS | xargs -P "$jobs" -I{} sh -c \
