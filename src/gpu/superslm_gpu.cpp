@@ -257,7 +257,8 @@ std::string ShaderPath(const std::string& name) {
 	}
 	// (T-2575, D-SLM6268): refuse a shader binary older than the source it claims to be a
 	// compile of, rather than dispatching it. Every `.cso` this tree ever loads comes through
-	// this one function, so the check has no per-shader enumeration to keep current. The
+	// this one function, so the check has no per-shader enumeration to keep current; the
+	// widened variants' names map to their shaders_wide sources by rule (MR3 review S1). The
 	// refusal is deliberately a hard failure rather than a warning
 	// (`StandardsDocument.md` §4): a warning on a diagnostic path nobody reads is what let a
 	// dead RoPE saturation counter be measured, root-caused and quarantined across two
@@ -365,24 +366,86 @@ const std::string& ShaderSourceDirOrEmpty() {
 	return cached;
 }
 
+namespace {
+
+// (MR3 review S1): the sources a widened binary is compiled from. The multi-row variants
+// (multirow_wide.inl) are loaded by names that have no `<name>.hlsl` beside the one-row
+// sources: `<site>_wide_h<H>` compiles shaders_wide/<site>_wide.hlsl (generated from the
+// one-row shaders/<site>.hlsl), and `<gemm>_gemm_wide_h<H>` compiles
+// shaders_wide/proj_gemm_wide.hlsl. Returns false for a name of neither form. `wide_dir` is
+// shaders_wide beside the one-row source directory.
+bool WidenedShaderSources(const std::string& shader_source_dir, const std::string& shader_name,
+                          std::string* out_wide_dir, std::vector<std::string>* out_sources) {
+	const size_t h = shader_name.rfind("_h");
+	if (h == std::string::npos || h + 2 >= shader_name.size()) return false;
+	for (size_t i = h + 2; i < shader_name.size(); ++i) {
+		if (shader_name[i] < '0' || shader_name[i] > '9') return false;
+	}
+	const std::string stem = shader_name.substr(0, h);
+	const size_t slash = shader_source_dir.find_last_of("\\/");
+	if (slash == std::string::npos) return false;
+	*out_wide_dir = shader_source_dir.substr(0, slash) + "\\shaders_wide";
+	static const std::string kGemm = "_gemm_wide";
+	static const std::string kWide = "_wide";
+	if (stem.size() > kGemm.size() && stem.compare(stem.size() - kGemm.size(), kGemm.size(), kGemm) == 0) {
+		out_sources->push_back(*out_wide_dir + "\\proj_gemm_wide.hlsl");
+		return true;
+	}
+	if (stem.size() > kWide.size() && stem.compare(stem.size() - kWide.size(), kWide.size(), kWide) == 0) {
+		out_sources->push_back(*out_wide_dir + "\\" + stem + ".hlsl");
+		out_sources->push_back(shader_source_dir + "\\" + stem.substr(0, stem.size() - kWide.size()) + ".hlsl");
+		return true;
+	}
+	return false;
+}
+
+}  // namespace
+
 std::string ShaderBinaryStalenessDiagnostic(const std::string& shader_source_dir,
                                              const std::string& shader_name,
                                              const std::string& cso_path) {
 	if (shader_source_dir.empty()) return {};
-	const std::string hlsl_path = shader_source_dir + "\\" + shader_name + ".hlsl";
+	// The binary's own sources: `<name>.hlsl` beside the one-row shaders, or, for a widened
+	// variant, its source in shaders_wide (and the one-row site it is generated from). The
+	// shared headers of every directory searched are sources of every binary compiled there.
+	std::vector<std::string> sources;
+	std::vector<std::string> header_dirs{shader_source_dir};
+	std::string wide_dir;
+	if (WidenedShaderSources(shader_source_dir, shader_name, &wide_dir, &sources)) {
+		header_dirs.push_back(wide_dir);
+	} else {
+		sources.push_back(shader_source_dir + "\\" + shader_name + ".hlsl");
+	}
 	// The source path is ANSI always; the .cso path is UTF-8 exactly when an override is fixed,
 	// because only then does ShaderPath build it from the override (d3d12_harness.h).
-	const uint64_t hlsl_t = ShaderFileWriteTime(hlsl_path, /*utf8=*/false);
-	if (hlsl_t == 0) return {};  // no such source beside the others -- nothing to compare against
+	uint64_t own_t = 0;
+	std::string own_name;
+	for (const std::string& s : sources) {
+		const uint64_t t = ShaderFileWriteTime(s, /*utf8=*/false);
+		if (t > own_t) {
+			own_t = t;
+			own_name = s;
+		}
+	}
+	// No such source -- nothing to compare against. For a widened name this is a tree without
+	// shaders_wide; the one-row source alone is not what it compiles.
+	if (own_t == 0 || ShaderFileWriteTime(sources.front(), /*utf8=*/false) == 0) return {};
 	const uint64_t cso_t = ShaderFileWriteTime(cso_path, /*utf8=*/ShaderDirOverrideActive());
 	if (cso_t == 0) return {};  // absent binary -- ReadFile reports "cannot open shader"
-	std::string newest_header_name;
-	const uint64_t hdr_t = NewestMatchingFileTime(shader_source_dir, "*.hlsli", &newest_header_name);
-	const bool header_wins = hdr_t > hlsl_t;
-	const uint64_t src_t = header_wins ? hdr_t : hlsl_t;
+	uint64_t hdr_t = 0;
+	std::string hdr_name;
+	for (const std::string& d : header_dirs) {
+		std::string name;
+		const uint64_t t = NewestMatchingFileTime(d, "*.hlsli", &name);
+		if (t > hdr_t) {
+			hdr_t = t;
+			hdr_name = d + "\\" + name;
+		}
+	}
+	const bool header_wins = hdr_t > own_t;
+	const uint64_t src_t = header_wins ? hdr_t : own_t;
 	if (cso_t >= src_t) return {};
-	const std::string src_name =
-	    header_wins ? (shader_source_dir + "\\" + newest_header_name) : hlsl_path;
+	const std::string src_name = header_wins ? hdr_name : own_name;
 	return "stale shader binary: " + cso_path + " (compiled " + FormatShaderFileTime(cso_t) +
 	       ") is older than " + src_name + " (modified " + FormatShaderFileTime(src_t) +
 	       "). Recompile the shaders into that directory with dxc before running this "
