@@ -907,8 +907,8 @@ void SetGpuSeqState(SslmGpuSequenceHandle* seq, superslm_gpu::SslmSequenceGpuSta
 // Multi-row plan (rev 1.3.2), MR2: the chunk hooks the existing verbs call while a chunk is open (plan §4.6's
 // table, and §4.1's advancing through the decode step and ready). Defined with the internal entry at the end of
 // this file; with SUPERSLM_MULTIROW_WIDE undefined no handle ever has a chunk and every verb is the base's.
-namespace {
 #if defined(SUPERSLM_MULTIROW_WIDE)
+namespace {
 SslmGpuStatus RowsDecodeStep(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, const SslmGpuAdapterHandle* adapter,
                              uint32_t dispatch_budget);
 SslmGpuStatus RowsReady(SslmGpuSequenceHandle* seq, int32_t block, int32_t* out_ready, SslmGpuStatus* out_status);
@@ -917,8 +917,8 @@ void RowsAfterOneRowSubmit(SslmGpuSequenceHandle* seq, const SslmGpuAdapterHandl
 void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_status);
 void RowsDropChunk(SslmGpuSequenceHandle* seq);
 bool RowsChunkOpen(const SslmGpuSequenceHandle* seq) { return seq->rows_chunk != nullptr; }
-#endif
 }  // namespace
+#endif
 
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
 // Test seam (test builds only; tests/paged-kv-gpu/pkvg_same_handle_race.cpp): a hook run on the
