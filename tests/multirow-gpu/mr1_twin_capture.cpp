@@ -14,6 +14,7 @@
 //   --start  one-row tokens fed (to full depth) before the captured rows, so p0 = start (cell 6.1's offset s)
 //   --out    writes r<row>_l<layer>.slm5 for each captured blob and index.txt (row layer bytes fnv1a64)
 // Exit 0 when every call returned SSLM_OK and the two runs agree.
+// mr1_wide_smoke.cpp includes this file with MR1_TWIN_NO_MAIN for Capture().
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -143,6 +144,7 @@ bool Capture(const Args& a, const superslm::SslmModelView& view, std::vector<Blo
 
 }  // namespace
 
+#ifndef MR1_TWIN_NO_MAIN
 int main(int argc, char** argv) {
 	Args a;
 	for (int i = 1; i < argc; ++i) {
@@ -205,3 +207,4 @@ int main(int argc, char** argv) {
 	std::printf("PASS twin capture: %zu blobs, deterministic across two fresh contexts\n", run1.size());
 	return 0;
 }
+#endif  // MR1_TWIN_NO_MAIN

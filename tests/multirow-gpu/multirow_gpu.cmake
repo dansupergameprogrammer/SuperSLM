@@ -15,3 +15,6 @@ add_test(NAME mr1_lint_population
 	COMMAND ${Python3_EXECUTABLE} -m unittest -v tests/multirow-gpu/test_mr1_lint_population.py
 	WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 set_tests_properties(mr1_cells mr1_lint_population PROPERTIES LABELS "multirow-gpu;mr1")
+# The MR1 host binding of the widened kernels is test-only, compiled under SUPERSLM_MULTIROW_WIDE (src/gpu/
+# multirow_wide.h); 4.3c type-checks it and 4.7d lints it in that configuration.
+set_tests_properties(mr1_cells PROPERTIES ENVIRONMENT "MR1_HOST_DEFS=-DSUPERSLM_MULTIROW_WIDE")

@@ -18,7 +18,8 @@
 #               superslm_tests compile command (sources, /D, /I) equals the tag's: the suite that runs is the
 #               tag's. build.bat may gain shader steps (the widened variants).
 #   tests       superslm_tests.exe, built from build.bat's own superslm_tests command (sources, /D and /I
-#               parsed from the file, so the cloud build follows the box build), run under Wine; exit 0.
+#               parsed from the file, so the cloud build follows the box build), run under Wine. Green when its
+#               FAIL lines are exactly p41_wine_baseline_v1.15.0.txt (the base tag's own three under Wine).
 #   pkvg        (opt-in) the paged-KV GPU suite's step-G5 runner (tests/paged-kv-gpu, pkvg_g5) over
 #               tools/gen_paged_kv_fixture.py's fixtures (pkv_def, pkv_qk, ...), real-artifact cells skipped; exit 0.
 #
@@ -114,7 +115,20 @@ if want tests; then
 		rc=$?
 		set -e
 		tail -5 "$OUT/superslm_tests.log" | sed 's/^/    /'
-		if [ $rc = 0 ]; then echo "PASS tests (superslm_tests.exe exit 0)"; else echo "FAIL tests: exit $rc (log $OUT/superslm_tests.log)"; FAILED+=(tests); fi
+		# Ruling 2 (rulings-mr1.md): no failure beyond the base tag's own under Wine. The baseline file pins the
+		# base tag's three sfd_cells_x failure lines (1.X4, 5.X4, 11.X3) verbatim; any other FAIL line, a changed
+		# or missing baseline line, or a run that did not reach its totals line is red.
+		BASELINE="$HERE/p41_wine_baseline_v1.15.0.txt"
+		grep "^FAIL" "$OUT/superslm_tests.log" >"$OUT/superslm_tests.failures" || true
+		if ! grep -q "^superslm tests: [0-9]* checks" "$OUT/superslm_tests.log"; then
+			echo "FAIL tests: the run did not reach its totals line (exit $rc, log $OUT/superslm_tests.log)"; FAILED+=(tests)
+		elif diff -u "$BASELINE" "$OUT/superslm_tests.failures" >"$OUT/superslm_tests.failures.diff"; then
+			echo "PASS tests (exit $rc; failures are exactly the base tag's $(wc -l <"$BASELINE") pinned sfd_cells_x lines)"
+		else
+			echo "FAIL tests: failures differ from the base tag's pinned set ($OUT/superslm_tests.failures.diff):"
+			sed -n '3,30p' "$OUT/superslm_tests.failures.diff" | sed 's/^/    /'
+			FAILED+=(tests)
+		fi
 	fi
 fi
 
