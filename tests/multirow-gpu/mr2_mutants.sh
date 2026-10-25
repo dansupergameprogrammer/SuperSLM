@@ -23,11 +23,8 @@
 #   MX5   counters summed over all rows                                                    -> 6.6 (every j < 7)
 #   MX7   the close copies a row above f into the mirror                                   -> 6.6
 #   MX8   rollback skips HolderUnmapTail                                                   -> 1.1r (MR3's 1.1; its
-#         entry sits on a page boundary so every rollback has a page to unmap). SURVIVES at MR2: the page is
-#         inside the budget's up-front reservation (free_pages never moves) and HolderUnmapTail returns it to
-#         the holder's reserve so the next map draws the same page, so pool stats, blobs and device bytes are
-#         identical with or without the unmap. Only the holder's mapped-page count shows it, and no MR2 seam
-#         reports that: 1.1r needs one (the builder's side) before MX8 can go red. Left graded, so it stays red.
+#         entry sits on a page boundary so every rollback has a page to unmap): graded by the holder's mapped-page
+#         count (sslm_gpu_test_only_mr2_holder_mapped), since pool counts and bytes cannot show it.
 #   MX11  ctxlen advanced once per chunk                                                   -> 6.1
 #   MX20  the refused row's counter deltas dropped (rev 1.1's rule)                        -> 6.6
 #   MX21  the refused row's mirror rows not copied                                         -> 6.6

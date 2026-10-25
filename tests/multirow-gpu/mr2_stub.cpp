@@ -30,3 +30,6 @@ SslmGpuStatus sslm_gpu_test_only_mr2_device_kv(SslmGpuContext*, SslmGpuKvPoolHan
 SslmGpuStatus sslm_gpu_test_only_mr2_arm_slice_alloc_failure(SslmGpuContext*, int32_t) noexcept {
 	return SslmGpuStatus::SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 }
+SslmGpuStatus sslm_gpu_test_only_mr2_holder_mapped(const SslmGpuSequenceHandle*, uint32_t*) noexcept {
+	return SslmGpuStatus::SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+}
