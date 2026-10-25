@@ -624,17 +624,28 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
  *      open: SSLM_BUSY;
  *   4. a bad spec: SSLM_SEQUENCE_KV_BUFFER_MISMATCH (the branch's argument status). A bad spec is a
  *      null `out_admitted`, a null spec or token pointer, `struct_size` below sizeof(SslmGpuRowsSpec), `count` outside
- *      1..SSLM_GPU_MAX_ROWS, a kind other than SSLM_GPU_ROWS_PROMPT (SCHEMA_FORCED and EXACT_DRAFT are
- *      not available yet), or any flag set;
- *   5. a token outside the vocabulary: SSLM_TOKEN_ID_OUT_OF_RANGE.
+ *      1..SSLM_GPU_MAX_ROWS, a kind other than SSLM_GPU_ROWS_PROMPT or SSLM_GPU_ROWS_SCHEMA_FORCED
+ *      (EXACT_DRAFT is not available yet), a flag other than SSLM_GPU_ROWS_FIRST_PREWALKED, or that flag
+ *      with PROMPT;
+ *   5. a token outside the vocabulary: SSLM_TOKEN_ID_OUT_OF_RANGE;
+ *   6. SCHEMA_FORCED on a model mapped without a forced-next table: SSLM_GPU_FORCED_TABLE_ABSENT;
+ *   7. no row fits (below);
+ *   8. SCHEMA_FORCED with no schema bound, or whose first matched row (row 0; row 1 under
+ *      SSLM_GPU_ROWS_FIRST_PREWALKED, when admitted) is not the token the schema forces at the walk state:
+ *      SSLM_SEQUENCE_REJECTED.
  * A larger `struct_size` is accepted and the bytes past sizeof(SslmGpuRowsSpec) are never read.
  * Admission: `*out_admitted` receives the longest admitted prefix of the tokens, capped by the
  * context's headroom and, for a budgeted (pooled) sequence, by its budget limit. When nothing fits,
  * the call refuses with the cap's status and writes nothing: SSLM_GPU_CONTEXT_CAP_EXCEEDED at the context
- * cap, SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below the cap.
+ * cap, SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below the cap. SCHEMA_FORCED is further capped by
+ * the longest prefix that matches the forced table from the walk state (sslm_gpu_seq_forced_tokens'
+ * chain); under SSLM_GPU_ROWS_FIRST_PREWALKED row 0 (a produced token whose finish already walked it)
+ * is embedded but neither matched nor walked, and matching starts at row 1.
  * Effects: the sequence's ready-for-logits state is cleared (an abandon or failure restores it); its
- * schema binding and walk state are untouched. A count of 1 behaves exactly as sslm_gpu_seq_embed_token
- * followed by a one-row token.
+ * schema binding is untouched, and so is its walk state while the chunk is open. A PROMPT close leaves
+ * the walk unchanged; a SCHEMA_FORCED close advances it over exactly the committed rows (row 0 under
+ * FIRST_PREWALKED excluded). A count of 1 behaves exactly as sslm_gpu_seq_embed_token followed by a
+ * one-row token.
  *
  * ADVANCING. sslm_decode_step_gpu advances every row of the open chunk by
  * floor(dispatch_budget / DispatchesPerLayer) whole layers (the per-layer count is the model's, as for
@@ -687,10 +698,10 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
 #define SSLM_GPU_MAX_ROWS 8
 typedef enum {
     SSLM_GPU_ROWS_PROMPT = 0,
-    SSLM_GPU_ROWS_SCHEMA_FORCED = 1,  /* reserved: a bad spec on this branch */
+    SSLM_GPU_ROWS_SCHEMA_FORCED = 1,  /* the chain the bound schema forces (multi-row MR4) */
     SSLM_GPU_ROWS_EXACT_DRAFT = 2     /* reserved: a bad spec on this branch */
 } SslmGpuRowsKind;
-#define SSLM_GPU_ROWS_FIRST_PREWALKED 0x1u  /* reserved: a bad spec on this branch */
+#define SSLM_GPU_ROWS_FIRST_PREWALKED 0x1u  /* SCHEMA_FORCED: row 0 already walked by its finish */
 typedef struct SslmGpuRowsSpec {
     uint32_t       struct_size;  /* sizeof(SslmGpuRowsSpec); larger accepted, the tail ignored */
     int32_t        kind;         /* SslmGpuRowsKind */
@@ -1232,8 +1243,9 @@ typedef struct SslmGpuJumpOptions {
 
 /* sslm_gpu_seq_jump_forward admits, in one pass, the pending token (when one is given) and then the chain the bound
  * schema forces from the walk state: the GPU twin of sslm_seq_jump_forward in canonical mode. The GPU is greedy
- * only, so there are no decode parameters. Rows go through the schema-content chunk path in sub-chunks of 4, so an
- * R-row call makes ceil(R/4) layer submissions; at most `chunk_budget` rows are admitted, the pending row included.
+ * only, so there are no decode parameters. Rows run as multi-row passes of up to 4 rows each (a pass of one row on
+ * the schema-content chunk path), so an R-row call makes ceil(R/4) layer submissions; at most `chunk_budget` rows
+ * are admitted, the pending row included.
  * `out_forced` receives the forced ids admitted (at most `cap`, which must be >= chunk_budget) and
  * `*out_forced_count` their number; the pending row is not counted. The GPU keeps no forced-token counter.
  *

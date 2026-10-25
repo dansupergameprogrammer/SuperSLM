@@ -3,9 +3,11 @@
 # tools/cloud_gpu/wine_gpu.sh; run its `setup` once first). MR1 gate: "Wine one-layer smoke equal on pkv_def and
 # pkv_qk" (multirow_wide_smoke.cpp). MR2 and MR3: the recorder through the published verbs against the one-row
 # twin, the batch with open chunks and the provisional statuses (multirow_rows_smoke.cpp; a development aid, the
-# test author's suite grades the cells).
+# test author's suite grades the cells); in --suite=mr2, MR4's SCHEMA_FORCED, FIRST_PREWALKED and jump cases on F-SFD
+# (tools/gen_schema_fast_decode_fixture.py). MR4: --suite=bench runs cell 10.2's box bench (multirow_cost_bench.cpp) in a
+# reduced form, to show it closes every M and writes a table header that compiles and mr4_box.py's CSV; the numbers are lavapipe's.
 #
-# Usage: tools/multirow_wide_smoke.sh [--out=DIR] [--jobs=N] [--build-only] [--quick] [--suite=mr1|mr2|all]
+# Usage: tools/multirow_wide_smoke.sh [--out=DIR] [--jobs=N] [--build-only] [--quick] [--suite=mr1|mr2|bench|all]
 #   --out    default <repo>/out/mr1-wide-smoke. Each run gets its own WINEPREFIX (<out>/wineprefix-<pid>)
 #            unless WINEPREFIX_MR1 names one.
 #   --quick  the tools' reduced grids
@@ -32,7 +34,7 @@ for a in "$@"; do
 		--build-only) RUN=0 ;;
 		--quick) QUICK=(--quick) ;;
 		--suite=*) SUITE="${a#--suite=}" ;;
-		*) sed -n '2,16p' "$0"; exit 2 ;;
+		*) sed -n '2,19p' "$0"; exit 2 ;;
 	esac
 done
 mkdir -p "$OUT/shaders" "$OUT/obj"
@@ -71,13 +73,13 @@ ENGINE=()
 # shellcheck disable=SC2086
 for s in $SRCS; do case "$s" in src/*) ENGINE+=("$s") ;; esac; done
 mkdir -p "$OUT/obj/tools"
-printf '%s\n' "${ENGINE[@]}" tools/multirow_wide_smoke.cpp tools/multirow_rows_smoke.cpp | xargs -P "$JOBS" -I{} bash -c \
+printf '%s\n' "${ENGINE[@]}" tools/multirow_wide_smoke.cpp tools/multirow_rows_smoke.cpp tools/multirow_cost_bench.cpp | xargs -P "$JOBS" -I{} bash -c \
 	'd="$1"; case "$2" in tools/*) d="$1/tools" ;; esac; o="$d/$(echo "$2" | tr / _).o"; '"$CXX $FLAGS"' -w -c "$2" -o "$o" || { echo "COMPILE FAILED: $2"; exit 1; }' _ "$OUT/obj" {}
-for t in multirow_wide_smoke multirow_rows_smoke; do
+for t in multirow_wide_smoke multirow_rows_smoke multirow_cost_bench; do
 	"$CXX" -O2 "$OUT/obj"/*.o "$OUT/obj/tools/tools_$t.cpp.o" -o "$OUT/$t.exe" -ld3d12 -ldxgi -ldxguid -lshlwapi -lpsapi \
 		-static -static-libgcc -static-libstdc++
 done
-echo "built $OUT/multirow_wide_smoke.exe and $OUT/multirow_rows_smoke.exe (+ $(ls "$OUT"/shaders/*.cso | wc -l) shaders)"
+echo "built $OUT/multirow_wide_smoke.exe, multirow_rows_smoke.exe and multirow_cost_bench.exe (+ $(ls "$OUT"/shaders/*.cso | wc -l) shaders)"
 [ "$RUN" = 1 ] || exit 0
 
 FIX="$OUT/fixtures"
@@ -112,6 +114,32 @@ for s in mr1 mr2; do
 		# The close's refusal path: RoPE tables truncated to 12 positions, so every row at 12 or later refuses.
 		leg "$exe" mr2-refusal-pkv_def --model="$FIX/pkv_def.sslm" --refusal-only --rope-positions=12
 		leg "$exe" mr2-refusal-pkv_qk --model="$FIX/pkv_qk.sslm" --refusal-only --rope-positions=12
+		# MR4: SCHEMA_FORCED, FIRST_PREWALKED and the jump on the recorder, on F-SFD (a forced-next table).
+		for src in "${MR_FIXTURES:-}" "$REPO/out/mr-p41/fixtures"; do
+			[ -n "$src" ] && [ -f "$src/sfd/fsfd.sslm" ] && [ ! -f "$FIX/sfd/fsfd.sslm" ] && mkdir -p "$FIX/sfd" &&
+				cp "$src/sfd/fsfd.sslm" "$src/sfd/fsfd_ref.txt" "$FIX/sfd/"
+		done
+		[ -f "$FIX/sfd/fsfd.sslm" ] || python3 tools/gen_schema_fast_decode_fixture.py "$FIX/sfd" >/dev/null
+		leg "$exe" mr4-forced-fsfd --model="$FIX/sfd/fsfd.sslm" --forced-schema=potion_shop_order
 	fi
 done
+case "$SUITE" in
+	bench|all)
+		leg multirow_cost_bench bench-pkv_def --model="$FIX/pkv_def.sslm" --runs=3 --p0=3 --out="$OUT/gpu_rows_cost_table.h" \
+			--json="$OUT/multirow_cost_bench.json" --csv="$OUT/multirow_cost_bench.csv" --model-name=pkv_def
+		# The written header is the shipped one's layout: the suite's table cell compiles against either.
+		for h in "$OUT" include; do
+			rm -rf "$OUT/tablecheck"; mkdir -p "$OUT/tablecheck/superslm"
+			cp "$h/$( [ "$h" = include ] && echo superslm/ )gpu_rows_cost_table.h" "$OUT/tablecheck/superslm/gpu_rows_cost_table.h" 2>/dev/null || true
+			if printf '#include "superslm/gpu_rows_cost_table.h"\nint main(){return superslm_gpu::kGpuRowsCostRatioPerMille[0] == 1000 && superslm_gpu::kGpuRowCostUs == 6200 ? 0 : 1;}\n' |
+				g++ -x c++ -std=c++17 -Wall -Werror -I"$OUT/tablecheck" - -o "$OUT/tablecheck/t" && "$OUT/tablecheck/t"; then
+				echo "    PASS $h table header compiles, r(1) = 1000"
+			else
+				echo "    FAIL $h table header"; FAILED+=(bench-table-$h)
+			fi
+		done
+		[ "$(head -1 "$OUT/multirow_cost_bench.csv")" = "model,M,logits,runs,warmup,median_us,p95_us,max_us" ] &&
+			[ "$(wc -l <"$OUT/multirow_cost_bench.csv")" = 17 ] && echo "    PASS CSV: mr4_box.py's columns, 16 rows" ||
+			{ echo "    FAIL CSV"; FAILED+=(bench-csv); } ;;
+esac
 if [ ${#FAILED[@]} = 0 ]; then echo "Multi-row Wine smoke ($SUITE): PASS"; else echo "Multi-row Wine smoke ($SUITE): FAIL (${FAILED[*]})"; exit 1; fi

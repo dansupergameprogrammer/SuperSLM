@@ -42,3 +42,4 @@ t2132_diag_layer_bisect_gpu.cpp  # T-2132 session 3 diagnostic tool -- see tools
 t2132_dim8m2_diag.cpp  # T-2132 diagnostic tool -- see tools\t2132_dim8m2_diag_build.bat
 multirow_wide_smoke.cpp  # multi-row GPU plan MR1: built and run by tools/multirow_wide_smoke.sh (mingw-w64, -DSUPERSLM_MULTIROW_WIDE, Wine software GPU); test-only, outside build.bat by design
 multirow_rows_smoke.cpp  # multi-row GPU plan MR2: built and run by tools/multirow_wide_smoke.sh --suite=mr2 (mingw-w64, -DSUPERSLM_MULTIROW_WIDE, Wine software GPU); test-only, outside build.bat by design
+multirow_cost_bench.cpp  # multi-row GPU plan MR4, cell 10.2: the box bench that writes include/superslm/gpu_rows_cost_table.h and mr4_box.py's CSV; built and run reduced by tools/multirow_wide_smoke.sh --suite=bench (mingw-w64, Wine software GPU); on the box by the MB4 kit, outside build.bat by design

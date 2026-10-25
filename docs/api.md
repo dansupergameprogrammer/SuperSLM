@@ -448,10 +448,23 @@ do {
   that is Submitted, mid-token, or already has a chunk open returns
   `SSLM_BUSY`. A bad spec returns `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`: a null
   pointer, `struct_size` too small, a count outside 1..8, a kind other than
-  `SSLM_GPU_ROWS_PROMPT`, or any flag set. A token outside the vocabulary
-  returns `SSLM_TOKEN_ID_OUT_OF_RANGE`. Nothing is written on any refusal.
-  The sequence's ready-for-logits state is cleared. Its schema binding and
-  walk state are untouched.
+  `SSLM_GPU_ROWS_PROMPT` or `SSLM_GPU_ROWS_SCHEMA_FORCED`, a flag other than
+  `SSLM_GPU_ROWS_FIRST_PREWALKED`, or that flag with `PROMPT`. A token
+  outside the vocabulary returns `SSLM_TOKEN_ID_OUT_OF_RANGE`. Nothing is
+  written on any refusal. The sequence's ready-for-logits state is cleared.
+  Its schema binding and walk state are untouched while the chunk is open.
+- **Schema-forced rows.** `SSLM_GPU_ROWS_SCHEMA_FORCED` admits the chain the
+  bound schema forces from the walk state (the ids
+  `sslm_gpu_seq_forced_tokens` reports), as far as the given tokens match it
+  and the headroom allows. With `SSLM_GPU_ROWS_FIRST_PREWALKED`, row 0 is a
+  produced token whose finish already walked it: it is embedded but not
+  matched or walked, and matching starts at row 1. The close advances the
+  walk over exactly the rows committed (row 0 excluded under the flag). The
+  checks run in this order, after the spec and token checks: a model mapped
+  without a forced-next table returns `SSLM_GPU_FORCED_TABLE_ABSENT`; no row
+  fitting returns the cap's status as above; no schema bound, or a first
+  matched row (row 1 under the flag, when admitted) that is not the forced
+  token, returns `SSLM_SEQUENCE_REJECTED`.
 - **Advancing.** `sslm_decode_step_gpu` moves every row of the chunk forward
   by the whole layers the budget covers, counted as for one row
   (`DispatchesPerLayer` per layer). A budget below one layer returns
@@ -1510,8 +1523,8 @@ on a tied device-head model: a host parallel-for hook that does not run every ta
 same row, as the host-head finish already did.
 
 **The jump-forward verb.** `sslm_gpu_seq_jump_forward(ctx, seq, pending_token, chunk_budget, opts, out_forced, cap,
-out_forced_count)` is the GPU twin of `sslm_seq_jump_forward` in canonical mode. It admits, in one pass through the
-schema-content chunk path, the pending token (when one is given) and then the chain the schema forces from the walk
+out_forced_count)` is the GPU twin of `sslm_seq_jump_forward` in canonical mode. It admits, in passes of up to 4 rows
+(a pass of one row on the schema-content chunk path), the pending token (when one is given) and then the chain the schema forces from the walk
 state, at most `chunk_budget` rows in all; R rows make ceil(R / 4) layer submissions. `out_forced` receives the
 forced ids admitted (`cap` must be at least `chunk_budget`), and `*out_forced_count` their number, the pending row
 not counted. The GPU keeps no forced-token counter, and no save format changes. `SslmGpuJumpOptions` is

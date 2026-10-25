@@ -912,6 +912,11 @@ void RowsAfterOneRowSubmit(SslmGpuSequenceHandle* seq, const SslmGpuAdapterHandl
 void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_status);
 void RowsDropChunk(SslmGpuSequenceHandle* seq);
 bool RowsChunkOpen(const SslmGpuSequenceHandle* seq) { return seq->rows_chunk != nullptr; }
+SslmGpuStatus RowsRollbackAndClose(SslmGpuSequenceHandle* seq);
+uint32_t RowsForcedPrefix(const SslmGpuSequenceHandle* seq, const int32_t* tokens, uint32_t n, bool prewalked,
+                          std::vector<uint32_t>* walk_after);
+bool RowsOpenChunk(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t kind, uint32_t flags,
+                   const int32_t* tokens, uint32_t M, std::vector<uint32_t> walk_after);
 }  // namespace
 
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
@@ -5578,9 +5583,6 @@ SslmGpuStatus sslm_gpu_seq_jump_forwardImpl(SslmGpuContext* ctx, SslmGpuSequence
 		return fail(map_st);
 	}
 	host_bad_alloc_at(1);
-	int64_t derived_count = 0;
-	bool guard_rejected = false;
-	superslm::SslmForwardStatus chunk_fault = superslm::SslmForwardStatus::Ok;
 #if defined(SUPERSLM_GPU_TEST_SEAMS)
 	{
 		std::lock_guard<std::mutex> lock(g_chunk_fault_mu);
@@ -5591,13 +5593,78 @@ SslmGpuStatus sslm_gpu_seq_jump_forwardImpl(SslmGpuContext* ctx, SslmGpuSequence
 		~SlotClear() { superslm_gpu::ChunkFaultSlotForTest() = superslm_gpu::ChunkFaultForTest{}; }
 	} slot_clear;
 #endif
-	SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data(), scan.admit_count, chunk_open_ctxlen,
-	                                &derived_count, &guard_rejected, &chunk_fault);
-	if (derived_count < static_cast<int64_t>(scan.admit_count)) {
-		// A device failure in the pass (rev 1.4.1, review L9): restore the entry state and return the failure's
-		// status. The bridge's device-derived prefix is not kept (XG19).
-		return fail(chunk_fault == superslm::SslmForwardStatus::GpuAllocationFailed ? SSLM_GPU_ALLOCATION_FAILED
-		                                                                           : SSLM_DEVICE_LOST);
+	// Multi-row plan §4.7 (MR4): the rows run on the M-row recorder, in passes of at most kJumpRowsPerPass rows,
+	// each one SCHEMA_FORCED chunk advanced to full depth in one submission and closed before the next pass records
+	// (the device's one command allocator). The pass size is the schema-content path's TDR-safe sub-chunk, so an
+	// R-row call still makes ceil(R/4) layer submissions (the 1.17 contract, G12.1). A pass of one row runs on the
+	// schema-content path itself (the recorder's M = 1 is the one-row body). Any refusal or fault in any pass
+	// restores the entry state (7.9): a guard refusal at row j, like every other device failure, returns
+	// SSLM_DEVICE_LOST, an allocation failure SSLM_GPU_ALLOCATION_FAILED. The rows query keeps its entry value:
+	// the verb's passes are internal.
+	const int32_t entry_last_rows_committed = seq->last_rows_committed;
+	struct LastRowsKeep {
+		SslmGpuSequenceHandle* s;
+		int32_t v;
+		~LastRowsKeep() { s->last_rows_committed = v; }
+	} last_rows_keep{seq, entry_last_rows_committed};
+	auto pass_fail = [&](superslm::SslmForwardStatus fs) {
+		if (seq->rows_chunk != nullptr) RowsRollbackAndClose(seq);
+		return fail(fs == superslm::SslmForwardStatus::GpuAllocationFailed ? SSLM_GPU_ALLOCATION_FAILED
+		                                                                  : SSLM_DEVICE_LOST);
+	};
+	const size_t block_bytes = scan.chunk_embedding_bytes.size() / static_cast<size_t>(admit);
+	constexpr int32_t kJumpRowsPerPass = 4;
+	int32_t pass = 0;
+	for (int32_t off = 0; off < admit; off += kJumpRowsPerPass, ++pass) {
+		const int32_t n = std::min<int32_t>(kJumpRowsPerPass, admit - off);
+#if defined(SUPERSLM_GPU_TEST_SEAMS)
+		// S-GCHUNKFAULT: the armed pass is refused before it is recorded, as the schema-content path refuses its
+		// armed sub-chunk (a pass is the sub-chunk here).
+		if (superslm_gpu::ChunkFaultForTest& f = superslm_gpu::ChunkFaultSlotForTest(); f.at >= 0) {
+			if (f.at == pass) {
+				const superslm::SslmForwardStatus fs = f.status;
+				f.at = -1;
+				return pass_fail(fs);
+			}
+		}
+		const superslm_gpu::ChunkFaultForTest held = superslm_gpu::ChunkFaultSlotForTest();
+		superslm_gpu::ChunkFaultSlotForTest() = superslm_gpu::ChunkFaultForTest{};  // the one-row pass never fires it
+#endif
+		if (n == 1) {
+			int64_t one_derived = 0;
+			bool one_guard = false;
+			superslm::SslmForwardStatus one_fault = superslm::SslmForwardStatus::Ok;
+			seq->live_state.context_length = seq->context_length;
+			SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data() + static_cast<size_t>(off) * block_bytes,
+			                                1u, seq->context_length, &one_derived, &one_guard, &one_fault);
+			if (one_derived < 1) {
+				return pass_fail(one_fault == superslm::SslmForwardStatus::GpuAllocationFailed
+				                     ? one_fault
+				                     : superslm::SslmForwardStatus::GpuDeviceRemoved);
+			}
+		} else {
+			std::vector<uint32_t> walk_after(scan.dfa_states_after.begin() + off, scan.dfa_states_after.begin() + off + n);
+			const uint32_t flags = (off == 0 && pend > 0) ? SSLM_GPU_ROWS_FIRST_PREWALKED : 0u;
+			if (!RowsOpenChunk(ctx, seq, SSLM_GPU_ROWS_SCHEMA_FORCED, flags, rows.data() + off, static_cast<uint32_t>(n),
+			                   std::move(walk_after))) {
+				return pass_fail(superslm::SslmForwardStatus::GpuDeviceRemoved);  // unreachable: the rows are in range
+			}
+			const SslmGpuStatus sub = RowsDecodeStep(ctx, seq, seq->bound_adapter, L * model->dispatches_per_layer);
+			if (sub != SSLM_OK) {
+				return pass_fail(sub == SSLM_GPU_ALLOCATION_FAILED ? superslm::SslmForwardStatus::GpuAllocationFailed
+				                                                   : superslm::SslmForwardStatus::GpuDeviceRemoved);
+			}
+			int32_t ready = 0;
+			SslmGpuStatus closed = SSLM_OK;
+			(void)RowsReady(seq, /*block=*/1, &ready, &closed);
+			if (!ready || closed != SSLM_OK || seq->rows_chunk != nullptr) {
+				return pass_fail(closed == SSLM_GPU_ALLOCATION_FAILED ? superslm::SslmForwardStatus::GpuAllocationFailed
+				                                                      : superslm::SslmForwardStatus::GpuDeviceRemoved);
+			}
+		}
+#if defined(SUPERSLM_GPU_TEST_SEAMS)
+		superslm_gpu::ChunkFaultSlotForTest() = held;
+#endif
 	}
 	host_bad_alloc_at(2);
 	seq->dfa_walk_state = scan.dfa_states_after[static_cast<size_t>(admit) - 1];
@@ -7730,9 +7797,11 @@ SslmGpuStatus RowsCommitPrefix(SslmGpuSequenceHandle* seq, const std::vector<Gpu
 		}
 		copy_row(static_cast<uint32_t>(j), refusing_end);
 	}
-	// Residual, scale, layer_index and ctxlen from row f's SeqState; the walk is untouched (PROMPT).
+	// Residual, scale, layer_index and ctxlen from row f's SeqState. The walk is untouched for PROMPT; for
+	// SCHEMA_FORCED (MR4) it advances over exactly the k committed rows.
 	const GpuRowsRowState& rf = rows[f];
 	RowsPublishState(seq, rf.hidden_codes, rf.hidden_scale, rf.layer_index, rf.context_length, counters);
+	if (k > 0 && !c.walk_after.empty()) seq->dfa_walk_state = c.walk_after[k - 1];
 	// Pages: unmap every page that holds no position <= p0 + f (never below what the handle mapped at entry).
 	SslmGpuStatus status = SSLM_OK;
 	if (seq->pool != nullptr) {
@@ -7950,6 +8019,7 @@ void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_statu
 		c.slice_ends.push_back(c.layers_done);
 		if (seq->layer_index >= seq->model->num_hidden_layers) {
 			seq->last_rows_committed = 1;  // the clean close: CommitPrefix(1, 0), already on the handle
+			if (!c.walk_after.empty()) seq->dfa_walk_state = c.walk_after[0];  // SCHEMA_FORCED (MR4)
 			RowsDropChunkImpl(seq);
 		}
 		return;
@@ -7979,17 +8049,24 @@ SslmGpuStatus sslm_gpu_seq_embed_rowsImpl(SslmGpuContext* ctx, SslmGpuSequenceHa
 	SslmGpuModelHandle* model = seq->model;
 	const uint32_t L = model->num_hidden_layers;
 	if ((seq->layer_index != 0 && seq->layer_index != L) || seq->rows_chunk != nullptr) return SSLM_BUSY;
-	// 4. A bad spec: the argument status (§3.7: main's argument-fault status on the branch). Only PROMPT exists on
-	// the branch (SCHEMA_FORCED is a bad spec before R-17, EXACT_DRAFT before MR5), so every flag is a bad one.
+	// 4. A bad spec: the argument status (§3.7: main's argument-fault status on the branch). PROMPT and, since MR4,
+	// SCHEMA_FORCED exist (EXACT_DRAFT is a bad spec before MR5); FIRST_PREWALKED is the one flag, and only with
+	// SCHEMA_FORCED.
 	constexpr uint32_t kSpecV1 = static_cast<uint32_t>(sizeof(SslmGpuRowsSpec));
 	if (spec == nullptr || out_admitted == nullptr || spec->struct_size < kSpecV1 || spec->tokens == nullptr ||
-	    spec->count < 1 || spec->count > SSLM_GPU_MAX_ROWS || spec->kind != SSLM_GPU_ROWS_PROMPT || spec->flags != 0u) {
+	    spec->count < 1 || spec->count > SSLM_GPU_MAX_ROWS ||
+	    (spec->kind != SSLM_GPU_ROWS_PROMPT && spec->kind != SSLM_GPU_ROWS_SCHEMA_FORCED) ||
+	    (spec->flags & ~SSLM_GPU_ROWS_FIRST_PREWALKED) != 0u ||
+	    (spec->kind == SSLM_GPU_ROWS_PROMPT && spec->flags != 0u)) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	// 5. A token outside the vocabulary.
 	for (int32_t r = 0; r < spec->count; ++r) {
 		if (spec->tokens[r] < 0 || spec->tokens[r] >= model->vocab_size) return SSLM_TOKEN_ID_OUT_OF_RANGE;
 	}
+	const bool forced = spec->kind == SSLM_GPU_ROWS_SCHEMA_FORCED;
+	// SCHEMA_FORCED (MR4; rulings item 11): no forced-next table is the table's status, before the cap's.
+	if (forced && !model->forced.present) return SSLM_GPU_FORCED_TABLE_ABSENT;
 	// Admission: the longest prefix within the context's headroom and, pooled, the budget limit. Zero admitted
 	// returns the cap's status: 1.17's SSLM_GPU_CONTEXT_CAP_EXCEEDED at the cap (plan §3.7, R-17),
 	// SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below it, as sslm_gpu_seq_jump_forward does.
@@ -7999,27 +8076,88 @@ SslmGpuStatus sslm_gpu_seq_embed_rowsImpl(SslmGpuContext* ctx, SslmGpuSequenceHa
 	    (seq->pool != nullptr && seq->limit < seq->context_cap) ? seq->limit - p0 : std::numeric_limits<int64_t>::max();
 	const int64_t admitted = std::max<int64_t>(0, std::min<int64_t>({spec->count, headroom, limit_room}));
 	if (admitted == 0) return headroom <= 0 ? SSLM_GPU_CONTEXT_CAP_EXCEEDED : SSLM_GPU_KV_BUDGET_EXCEEDED;
-	const uint32_t M = static_cast<uint32_t>(admitted);
+	// SCHEMA_FORCED: further capped by the longest prefix that matches the forced table from the walk state; under
+	// FIRST_PREWALKED row 0 is embedded but neither matched nor walked (E25). None matching, or no schema bound, is
+	// SSLM_SEQUENCE_REJECTED (rulings item 11).
+	// Under FIRST_PREWALKED the first matched row is row 1: with a row 1 admitted, only row 0 surviving is a refusal.
+	std::vector<uint32_t> walk_after;
+	const bool prewalked = (spec->flags & SSLM_GPU_ROWS_FIRST_PREWALKED) != 0u;
+	const uint32_t M = forced ? RowsForcedPrefix(seq, spec->tokens, static_cast<uint32_t>(admitted), prewalked,
+	                                             &walk_after)
+	                          : static_cast<uint32_t>(admitted);
+	if (M == 0 || (forced && prewalked && M == 1 && admitted > 1)) return SSLM_SEQUENCE_REJECTED;
+	if (!RowsOpenChunk(ctx, seq, spec->kind, spec->flags, spec->tokens, M, std::move(walk_after))) {
+		return SSLM_TOKEN_ID_OUT_OF_RANGE;  // nothing written
+	}
+	*out_admitted = static_cast<int32_t>(M);
+	return SSLM_OK;
+}
 
+namespace {
+
+// SCHEMA_FORCED admission (MR4): how many of the first `n` tokens the forced table admits from the walk state, and
+// the walk state after each admitted row. 0 when no schema is bound.
+uint32_t RowsForcedPrefix(const SslmGpuSequenceHandle* seq, const int32_t* tokens, uint32_t n, bool prewalked,
+                          std::vector<uint32_t>* walk_after) {
+	const SslmGpuModelHandle* model = seq->model;
+	walk_after->clear();
+	if (seq->bound_schema_index < 0) return 0;
+	const size_t si = static_cast<size_t>(seq->bound_schema_index);
+	const superslm::SchemaEntry* entry = model->schemas.ByIndex(si);
+	if (entry == nullptr || si >= model->forced.table.size()) return 0;
+	uint32_t w = seq->dfa_walk_state;
+	uint32_t r = 0;
+	if (prewalked) {
+		walk_after->push_back(w);  // row 0 was walked by its finish
+		r = 1;
+	}
+	if (r < n) {
+		std::vector<int32_t> chain(n - r);
+		const int32_t len = superslm::forced_table::ForcedChain(model->schemas, model->forced.table[si],
+		                                                        static_cast<uint32_t>(si), w, chain.data(),
+		                                                        static_cast<int32_t>(n - r));
+		for (uint32_t i = 0; r < n && static_cast<int32_t>(i) < len && i < chain.size(); ++i, ++r) {
+			if (tokens[r] != chain[i]) break;
+			uint32_t nx = 0;
+			if (!model->schemas.Transition(*entry, w, static_cast<uint32_t>(tokens[r]), &nx)) break;
+			w = nx;
+			walk_after->push_back(w);
+		}
+	}
+	return static_cast<uint32_t>(walk_after->size());
+}
+
+}  // namespace
+
+namespace {
+
+// Opens a chunk of the first M tokens (plan §4.1's effects): false, with nothing written, if a row's embed fails.
+// The caller holds the claim and has checked the handle's shape and the admission.
+bool RowsOpenChunk(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t kind, uint32_t flags,
+                   const int32_t* tokens, uint32_t M, std::vector<uint32_t> walk_after) {
+	SslmGpuModelHandle* model = seq->model;
+	const int64_t p0 = seq->context_length;
 	auto chunk = std::make_unique<GpuRowsChunk>();
 	chunk->rows = M;
 	chunk->variant_h = superslm_gpu::GpuRowsVariantFor(M);
-	chunk->kind = spec->kind;
-	chunk->flags = spec->flags;
+	chunk->kind = kind;
+	chunk->flags = flags;
 	chunk->p0 = p0;
-	chunk->tokens.assign(spec->tokens, spec->tokens + M);
+	chunk->tokens.assign(tokens, tokens + M);
+	chunk->walk_after = std::move(walk_after);
 	chunk->row_codes.assign(M, std::vector<int8_t>(model->hidden_size));
 	chunk->row_scales.assign(M, superslm::CarriedScale{});
 	for (uint32_t r = 0; r < M; ++r) {
 		if (superslm::EmbedEntry(chunk->tokens[r], model->vocab_size, model->embed_weights.data(),
 		                         static_cast<size_t>(model->hidden_size), model->embed_site_constant,
 		                         chunk->row_codes[r].data(), &chunk->row_scales[r]) != superslm::SslmForwardStatus::Ok) {
-			return SSLM_TOKEN_ID_OUT_OF_RANGE;  // nothing written yet
+			return false;  // nothing written yet
 		}
 	}
 	RowsSnapshotEntry(seq, &chunk->entry);
 
-	// Effects (§4.1): ready_for_logits cleared (rollback restores it); PROMPT leaves the schema and walk alone.
+	// Effects (§4.1): ready_for_logits cleared (rollback restores it); the walk moves only at the close
+	// (SCHEMA_FORCED), and PROMPT leaves the schema and walk alone.
 	seq->ready_for_logits = false;
 	seq->bind_eligible = false;
 	if (M == 1) {
@@ -8031,12 +8169,11 @@ SslmGpuStatus sslm_gpu_seq_embed_rowsImpl(SslmGpuContext* ctx, SslmGpuSequenceHa
 		seq->live_state.layer_index = 0;
 	}
 	seq->rows_chunk = std::move(chunk);
-	{
-		ctx->rows.pool.ChunkOpened();
-	}
-	*out_admitted = static_cast<int32_t>(M);
-	return SSLM_OK;
+	ctx->rows.pool.ChunkOpened();
+	return true;
 }
+
+}  // namespace
 
 SslmGpuStatus sslm_gpu_seq_rows_abandonImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) {
 	if (!ctx || !seq || !seq->model || seq->ctx != ctx) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;

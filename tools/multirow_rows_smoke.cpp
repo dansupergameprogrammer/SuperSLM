@@ -28,6 +28,18 @@
 //   statuses save with a chunk open (SSLM_GPU_ROWS_CHUNK_OPEN, the buffer and size untouched), admission capped by
 //            the context's headroom, and SSLM_GPU_CONTEXT_CAP_EXCEEDED at the cap with nothing written.
 //
+// MR4 (plan §4.1's SCHEMA_FORCED and FIRST_PREWALKED, §4.7's jump on the recorder), with --forced-schema=NAME on a
+// model with a forced-next table (tools/gen_schema_fast_decode_fixture.py's fsfd.sslm, schema potion_shop_order):
+//   forced     from a fresh bound sequence, embed_rows(SCHEMA_FORCED, the chain) closes equal (blob, walk, then the
+//              next token and blob) to the chain fed row by row through sslm_gpu_seq_embed_schema_token;
+//   diverge    the chain diverging at row k admits k (k = 1), and at row 0 is SSLM_SEQUENCE_REJECTED with nothing
+//              written; unbound is REJECTED; at the context cap CONTEXT_CAP_EXCEEDED wins over a wrong row 0;
+//   prewalked  a produced token t with a chain after it: [t, chain] under FIRST_PREWALKED equals t by embed_token and
+//              the chain by walked embeds; without the flag it is REJECTED with nothing written (MX16); with the flag
+//              and a wrong row 1 it is REJECTED;
+//   jump       sslm_gpu_seq_jump_forward(t) against the prewalked chunk: forced ids, then the next token and blob.
+// Without --forced-schema, SCHEMA_FORCED on the model reports SSLM_GPU_FORCED_TABLE_ABSENT when it has no table.
+//
 // --refusal-only runs just the refusal cases (with --rope-positions the clean grid's later rows would refuse too).
 //
 // --rope-positions=N truncates the model's RoPE tables to N positions in this process before it is mapped, so
@@ -35,7 +47,7 @@
 // tag): the refusal cases then run with p0 = N - j, whatever the tokens.
 //
 // Usage: multirow_rows_smoke.exe --model=PATH [--adapter=PATH] [--shaders=DIR] [--quick] [--scan=N] [--refusal-only]
-//                                [--rope-positions=N]
+//                                [--rope-positions=N] [--forced-schema=NAME]
 // Exit 0 when every case passes.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -45,6 +57,7 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -452,13 +465,249 @@ void StatusCase(const Env& e, bool pooled) {
 
 }  // namespace
 
+// ---- MR4: SCHEMA_FORCED, FIRST_PREWALKED and the jump on the recorder ----
+
+SslmGpuStatus FullDepth(const Env& e, SslmGpuSequenceHandle* s) { return Step(e, s, e.L * e.dpl); }
+
+SslmGpuStatus ForcedChunk(const Env& e, SslmGpuSequenceHandle* s, const std::vector<int32_t>& rows, uint32_t flags,
+                          int32_t* admitted) {
+	SslmGpuRowsSpec spec{};
+	spec.struct_size = sizeof spec;
+	spec.kind = SSLM_GPU_ROWS_SCHEMA_FORCED;
+	spec.flags = flags;
+	spec.tokens = rows.data();
+	spec.count = static_cast<int32_t>(rows.size());
+	*admitted = 0;
+	const SslmGpuStatus st = sslm_gpu_seq_embed_rows(e.ctx, s, &spec, admitted);
+	return st != SSLM_OK ? st : FullDepth(e, s);  // one slice of the whole depth closes it
+}
+
+std::vector<int32_t> Chain(const Env& e, SslmGpuSequenceHandle* s) {
+	int32_t ids[64], n = 0, acc = 0;
+	if (sslm_gpu_seq_forced_tokens(e.ctx, s, ids, 64, &n, &acc) != SSLM_OK || n < 0) return {};
+	return std::vector<int32_t>(ids, ids + n);
+}
+
+SslmGpuSequenceHandle* NewBound(const Env& e, int32_t schema, int64_t cap = 64) {
+	SslmGpuSequenceHandle* s = nullptr;
+	if (sslm_gpu_seq_create(e.ctx, e.model, cap, &s) != SSLM_OK) return nullptr;
+	if (schema >= 0 && SslmGpuSeqSetSchemaForG5Bridge(e.ctx, s, schema) != SSLM_OK) {
+		sslm_gpu_seq_release(e.ctx, s);
+		return nullptr;
+	}
+	return s;
+}
+
+// A produced token in hand (layer 0, ready clear): the start chain by the verb, then one decode-bridge call, which
+// finishes the last admitted row. Returns the token (walked by the finish).
+int32_t TokenInHand(const Env& e, SslmGpuSequenceHandle* s) {
+	int32_t forced[64], n = 0, tok = -1;
+	if (sslm_gpu_seq_jump_forward(e.ctx, s, -1, 64, nullptr, forced, 64, &n) != SSLM_OK || n < 1) return -1;
+	if (SslmGpuSeqDecodeStepForG5Bridge(e.ctx, s, forced[n - 1], e.L * e.dpl, &tok) != SSLM_OK) return -1;
+	return tok;
+}
+
+bool SameState(const Env& e, SslmGpuSequenceHandle* a, SslmGpuSequenceHandle* b, char* why, size_t n, const char* at) {
+	std::vector<uint8_t> ba, bb;
+	if (!Save(e, a, &ba) || !Save(e, b, &bb)) return std::snprintf(why, n, "%s: save failed", at), false;
+	const uint32_t wa = SslmGpuSeqWalkStateForG5Bridge(a), wb = SslmGpuSeqWalkStateForG5Bridge(b);
+	if (ba != bb || wa != wb) {
+		std::snprintf(why, n, "%s: blobs differ at %ld (sizes %zu/%zu), walk %u/%u", at, FirstDiff(ba, bb), ba.size(),
+		              bb.size(), wa, wb);
+		return false;
+	}
+	return true;
+}
+
+// The next token on both handles, both resting at full depth with the ready flag clear (a chunk's close, or a
+// one-row token's last layer): the token finish on each, then the blobs again. (A handle with the ready flag set,
+// as the jump verb leaves it, takes one decode-bridge call instead, which finishes only.)
+bool SameNext(const Env& e, SslmGpuSequenceHandle* a, SslmGpuSequenceHandle* b, int32_t last, char* why, size_t n,
+              int32_t* out_tok = nullptr) {
+	int32_t ta = -1, tb = -1;
+	(void)last;
+	const SslmGpuStatus sa = SslmGpuSeqFinishTokenForG5Bridge(e.ctx, a, &ta);
+	const SslmGpuStatus sb = SslmGpuSeqFinishTokenForG5Bridge(e.ctx, b, &tb);
+	if (sa != SSLM_OK || sb != SSLM_OK || ta != tb) {
+		std::snprintf(why, n, "next token %d (%d) / %d (%d)", ta, static_cast<int>(sa), tb, static_cast<int>(sb));
+		return false;
+	}
+	if (out_tok) *out_tok = ta;
+	return SameState(e, a, b, why, n, "after the next token");
+}
+
+void ForcedCases(const Env& e, const char* schema_name) {
+	char why[256];
+	const int32_t schema = SslmGpuSchemaLookupForG5Bridge(e.model, schema_name);
+	if (schema < 0) {
+		Report(false, "forced setup", "schema not found");
+		return;
+	}
+	// forced: the start chain as one chunk against walked embeds.
+	{
+		SslmGpuSequenceHandle* a = NewBound(e, schema);
+		SslmGpuSequenceHandle* b = NewBound(e, schema);
+		const std::vector<int32_t> c = a ? Chain(e, a) : std::vector<int32_t>{};
+		bool pass = a && b && c.size() >= 2;
+		if (!pass) std::snprintf(why, sizeof why, "setup: chain of %zu at the start state", c.size());
+		const std::vector<int32_t> rows(c.begin(), c.begin() + std::min<size_t>(c.size(), SSLM_GPU_MAX_ROWS));
+		int32_t admitted = 0, committed = 0;
+		if (pass) {
+			const SslmGpuStatus st = ForcedChunk(e, a, rows, 0, &admitted);
+			sslm_gpu_seq_last_rows_committed(a, &committed);
+			for (int32_t t : rows) {
+				if (sslm_gpu_seq_embed_schema_token(e.ctx, b, t) != SSLM_OK || FullDepth(e, b) != SSLM_OK) pass = false;
+			}
+			if (st != SSLM_OK || admitted != static_cast<int32_t>(rows.size()) || committed != admitted || !pass) {
+				std::snprintf(why, sizeof why, "close -> %d, admitted %d of %zu, committed %d, twin ok %d",
+				              static_cast<int>(st), admitted, rows.size(), committed, pass);
+				pass = false;
+			}
+		}
+		pass = pass && SameState(e, a, b, why, sizeof why, "at the close") && SameNext(e, a, b, rows.back(), why, sizeof why);
+		Report(pass, "forced M = " + std::to_string(rows.size()) + " from the start state", why);
+		if (a) sslm_gpu_seq_release(e.ctx, a);
+		if (b) sslm_gpu_seq_release(e.ctx, b);
+	}
+	// diverge: at row 1 admits 1; at row 0, unbound and at the cap refuse with nothing written.
+	{
+		SslmGpuSequenceHandle* a = NewBound(e, schema);
+		SslmGpuSequenceHandle* b = NewBound(e, schema);
+		SslmGpuSequenceHandle* u = NewBound(e, -1);
+		const std::vector<int32_t> c = a ? Chain(e, a) : std::vector<int32_t>{};
+		bool pass = a && b && u && c.size() >= 2;
+		std::snprintf(why, sizeof why, "setup");
+		if (pass) {
+			const int32_t wrong = (c[1] + 1) % e.vocab;
+			std::vector<uint8_t> before, after;
+			int32_t admitted = -1;
+			// Row 0 wrong: REJECTED, nothing written.
+			Save(e, b, &before);
+			SslmGpuRowsSpec spec{sizeof spec, SSLM_GPU_ROWS_SCHEMA_FORCED, nullptr, 2, 0};
+			const std::vector<int32_t> r0 = {(c[0] + 1) % e.vocab, c[1]};
+			spec.tokens = r0.data();
+			const SslmGpuStatus s0 = sslm_gpu_seq_embed_rows(e.ctx, b, &spec, &admitted);
+			Save(e, b, &after);
+			// Unbound: REJECTED.
+			int32_t adm_u = -1;
+			spec.tokens = c.data();
+			const SslmGpuStatus su = sslm_gpu_seq_embed_rows(e.ctx, u, &spec, &adm_u);
+			// PROMPT with FIRST_PREWALKED: the argument status.
+			SslmGpuRowsSpec bad{sizeof bad, SSLM_GPU_ROWS_PROMPT, c.data(), 2, SSLM_GPU_ROWS_FIRST_PREWALKED};
+			int32_t adm_b = -1;
+			const SslmGpuStatus sbad = sslm_gpu_seq_embed_rows(e.ctx, b, &bad, &adm_b);
+			// Row 1 wrong: admits 1.
+			const std::vector<int32_t> r1 = {c[0], wrong};
+			int32_t adm1 = 0;
+			const SslmGpuStatus s1 = ForcedChunk(e, a, r1, 0, &adm1);
+			pass = s0 == SSLM_SEQUENCE_REJECTED && admitted == -1 && before == after && su == SSLM_SEQUENCE_REJECTED &&
+			       adm_u == -1 && sbad == SSLM_SEQUENCE_KV_BUFFER_MISMATCH && s1 == SSLM_OK && adm1 == 1;
+			std::snprintf(why, sizeof why,
+			              "row 0 wrong -> %d (admitted %d, unchanged %d); unbound -> %d; PROMPT+flag -> %d; row 1 wrong -> %d "
+			              "admitted %d",
+			              static_cast<int>(s0), admitted, before == after, static_cast<int>(su), static_cast<int>(sbad),
+			              static_cast<int>(s1), adm1);
+		}
+		Report(pass, "forced diverging at rows 0 and 1, unbound, PROMPT with the flag", why);
+		// At the cap: a one-row cap filled by one prompt row, then a wrong row 0: the cap's status wins.
+		SslmGpuSequenceHandle* k = NewBound(e, schema, 1);
+		pass = k != nullptr && c.size() >= 1;
+		if (pass) {
+			pass = sslm_gpu_seq_embed_token(e.ctx, k, c[0]) == SSLM_OK && FullDepth(e, k) == SSLM_OK;
+			const std::vector<int32_t> rk = {(c[0] + 1) % e.vocab};
+			SslmGpuRowsSpec spec{sizeof spec, SSLM_GPU_ROWS_SCHEMA_FORCED, rk.data(), 1, 0};
+			int32_t adm = -1;
+			const SslmGpuStatus sk = sslm_gpu_seq_embed_rows(e.ctx, k, &spec, &adm);
+			pass = pass && sk == SSLM_GPU_CONTEXT_CAP_EXCEEDED && adm == -1;
+			std::snprintf(why, sizeof why, "at the cap with a wrong row 0 -> %d (admitted %d)", static_cast<int>(sk), adm);
+		}
+		Report(pass, "forced at the context cap", why);
+		for (SslmGpuSequenceHandle* h : {a, b, u, k})
+			if (h) sslm_gpu_seq_release(e.ctx, h);
+	}
+	// prewalked and jump: a produced token with a chain after it.
+	{
+		SslmGpuSequenceHandle* a = NewBound(e, schema);
+		SslmGpuSequenceHandle* b = NewBound(e, schema);
+		SslmGpuSequenceHandle* j = NewBound(e, schema);
+		SslmGpuSequenceHandle* n = NewBound(e, schema);
+		const int32_t t = (a && b && j && n) ? TokenInHand(e, a) : -1;
+		const int32_t tb = t >= 0 ? TokenInHand(e, b) : -1, tj = t >= 0 ? TokenInHand(e, j) : -1,
+		              tn = t >= 0 ? TokenInHand(e, n) : -1;
+		const std::vector<int32_t> q = t >= 0 ? Chain(e, a) : std::vector<int32_t>{};
+		bool pass = t >= 0 && tb == t && tj == t && tn == t && !q.empty();
+		std::snprintf(why, sizeof why, "setup: token %d/%d/%d/%d, chain of %zu after it", t, tb, tj, tn, q.size());
+		std::vector<int32_t> rows = {t};
+		for (size_t i = 0; i < q.size() && rows.size() < SSLM_GPU_MAX_ROWS; ++i) rows.push_back(q[i]);
+		if (pass) {
+			// Without the flag: REJECTED, nothing written (unless t is itself the forced token, which this fixture's
+			// produced token is not: the walk is past it).
+			std::vector<uint8_t> before, after;
+			Save(e, n, &before);
+			int32_t adm_n = -1;
+			SslmGpuRowsSpec spec{sizeof spec, SSLM_GPU_ROWS_SCHEMA_FORCED, rows.data(), static_cast<int32_t>(rows.size()), 0};
+			const SslmGpuStatus sn = sslm_gpu_seq_embed_rows(e.ctx, n, &spec, &adm_n);
+			// With the flag and a wrong row 1: REJECTED.
+			std::vector<int32_t> w1 = rows.size() >= 2 ? rows : std::vector<int32_t>{t, 0};
+			w1[1] = (q[0] + 1) % e.vocab;
+			SslmGpuRowsSpec spec_w{sizeof spec_w, SSLM_GPU_ROWS_SCHEMA_FORCED, w1.data(), 2, SSLM_GPU_ROWS_FIRST_PREWALKED};
+			int32_t adm_w = -1;
+			const SslmGpuStatus sw = sslm_gpu_seq_embed_rows(e.ctx, n, &spec_w, &adm_w);
+			Save(e, n, &after);
+			const bool t_forced = t == q[0];
+			// With the flag: the chunk against embed_token(t) and walked embeds.
+			int32_t adm = 0;
+			const SslmGpuStatus sa = ForcedChunk(e, a, rows, SSLM_GPU_ROWS_FIRST_PREWALKED, &adm);
+			bool twin = sslm_gpu_seq_embed_token(e.ctx, b, t) == SSLM_OK && FullDepth(e, b) == SSLM_OK;
+			for (size_t i = 1; i < rows.size(); ++i)
+				twin = twin && sslm_gpu_seq_embed_schema_token(e.ctx, b, rows[i]) == SSLM_OK && FullDepth(e, b) == SSLM_OK;
+			pass = (t_forced || (sn == SSLM_SEQUENCE_REJECTED && adm_n == -1)) && sw == SSLM_SEQUENCE_REJECTED &&
+			       adm_w == -1 && before == after && sa == SSLM_OK && adm == static_cast<int32_t>(rows.size()) && twin;
+			std::snprintf(why, sizeof why,
+			              "no flag -> %d (admitted %d%s); wrong row 1 -> %d; unchanged %d; flag -> %d admitted %d of %zu; "
+			              "twin ok %d",
+			              static_cast<int>(sn), adm_n, t_forced ? ", t is forced" : "", static_cast<int>(sw),
+			              before == after, static_cast<int>(sa), adm, rows.size(), twin);
+			pass = pass && SameState(e, a, b, why, sizeof why, "at the close");
+			// The jump verb from the same token: same forced ids, then the same next token and blob as the chunk.
+			int32_t forced[64], nf = 0;
+			const SslmGpuStatus sj = sslm_gpu_seq_jump_forward(e.ctx, j, t, static_cast<int32_t>(rows.size()), nullptr,
+			                                                   forced, 64, &nf);
+			const bool ids = sj == SSLM_OK && nf == static_cast<int32_t>(rows.size()) - 1 &&
+			                 std::equal(rows.begin() + 1, rows.end(), forced);
+			int32_t next_a = -1;
+			Report(pass && SameNext(e, a, b, rows.back(), why, sizeof why, &next_a),
+			       "prewalked M = " + std::to_string(rows.size()) + " (8.10, MX16)", why);
+			// The jump's handle takes its next token the same way, and must land on the chunk's token and blob.
+			char jwhy[256];
+			int32_t next_j = -1;
+			const SslmGpuStatus sjn =
+			    ids ? SslmGpuSeqDecodeStepForG5Bridge(e.ctx, j, rows.back(), e.L * e.dpl, &next_j) : SSLM_DEVICE_LOST;
+			std::snprintf(jwhy, sizeof jwhy, "jump -> %d, %d forced (want %zu); next token %d (%d), chunk's %d",
+			              static_cast<int>(sj), nf, rows.size() - 1, next_j, static_cast<int>(sjn), next_a);
+			const bool jok = ids && sjn == SSLM_OK && next_j == next_a && next_a >= 0 &&
+			                 SameState(e, a, j, jwhy, sizeof jwhy, "after the next token");
+			Report(jok, "jump R = " + std::to_string(rows.size()) + " on the recorder against the prewalked chunk", jwhy);
+		} else {
+			Report(false, "prewalked", why);
+		}
+		for (SslmGpuSequenceHandle* h : {a, b, j, n})
+			if (h) sslm_gpu_seq_release(e.ctx, h);
+	}
+}
+
 int main(int argc, char** argv) {
 	std::string model_path, adapter_path, shaders;
 	bool quick = false, refusal_only = false;
 	int scan = 64;
 	int rope_positions = 0;
+	std::string forced_schema;
 	for (int i = 1; i < argc; ++i) {
 		const std::string a = argv[i];
+		if (a.rfind("--forced-schema=", 0) == 0) {
+			forced_schema = a.substr(16);
+			continue;
+		}
 		if (a.rfind("--model=", 0) == 0) model_path = a.substr(8);
 		else if (a.rfind("--adapter=", 0) == 0) adapter_path = a.substr(10);
 		else if (a.rfind("--shaders=", 0) == 0) shaders = a.substr(10);
@@ -516,6 +765,27 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
+	if (!forced_schema.empty()) {
+		ForcedCases(e, forced_schema.c_str());
+		sslm_gpu_model_unmap(e.ctx, e.model);
+		sslm_gpu_context_destroy(e.ctx);
+		std::printf("multi-row recorder smoke (MR4 forced): %s (%d cases, %d failed)\n", g_failed ? "FAIL" : "PASS",
+		            g_cases, g_failed);
+		return g_failed ? 1 : 0;
+	}
+	{
+		// MR4: SCHEMA_FORCED on a model mapped without a forced-next table.
+		SslmGpuSequenceHandle* s = nullptr;
+		const int32_t tok = 1;
+		SslmGpuRowsSpec spec{sizeof spec, SSLM_GPU_ROWS_SCHEMA_FORCED, &tok, 1, 0};
+		int32_t adm = -1;
+		SslmGpuStatus st = SSLM_DEVICE_LOST;
+		if (sslm_gpu_seq_create(e.ctx, e.model, 8, &s) == SSLM_OK) st = sslm_gpu_seq_embed_rows(e.ctx, s, &spec, &adm);
+		char why[96];
+		std::snprintf(why, sizeof why, "SCHEMA_FORCED -> %d (admitted %d)", static_cast<int>(st), adm);
+		Report(st == SSLM_GPU_FORCED_TABLE_ABSENT && adm == -1, "forced on a model with no forced-next table", why);
+		if (s) sslm_gpu_seq_release(e.ctx, s);
+	}
 	const std::vector<uint32_t> ms = quick ? std::vector<uint32_t>{1, 2, 3, 5, 8} : std::vector<uint32_t>{1, 2, 3, 4, 5, 6, 7, 8};
 	const std::vector<int> p0s = quick ? std::vector<int>{3} : std::vector<int>{0, 3, 13};
 	for (int pooled = 0; pooled < 2 && !refusal_only; ++pooled) {

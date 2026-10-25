@@ -214,6 +214,9 @@ struct GpuRowsChunk {
 	std::vector<int32_t> tokens;
 	std::vector<std::vector<int8_t>> row_codes;
 	std::vector<superslm::CarriedScale> row_scales;
+	// SCHEMA_FORCED (MR4): the walk state after row r is committed (row 0 under FIRST_PREWALKED leaves the entry's);
+	// the close sets the walk to walk_after[k - 1] for k committed rows. Empty for PROMPT.
+	std::vector<uint32_t> walk_after;
 	GpuRowsEntrySnapshot entry;
 	const SslmGpuAdapterHandle* adapter = nullptr;
 	bool adapter_fixed = false;
