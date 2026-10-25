@@ -15,8 +15,13 @@
 #   wave     4.9: mr2_wave_probe.exe records D3D12_FEATURE_DATA_D3D12_OPTIONS1.WaveLaneCountMin/Max and the lane
 #            count a throwaway probe shader sees at the widened sites' group shape (diagnostic: always PASS when
 #            the probe ran, the numbers go into the record).
-#   cells    mr2_cells.exe, every cloud cell (see mr2_cells.cpp), on pkv_def, pkv_qk and the 6.6/6.7 fixtures. When
-#            src/ defines no recorder entry, the cells are built against mr2_stub.cpp and are red-unimplemented.
+#   cells    mr2_cells.exe, every cloud cell (see mr2_cells.cpp), on pkv_def and pkv_qk, with the refusal fixtures
+#            (mr2_fixtures.py) and pkv_def_r4.adp (tools/gen_multirow_adapter_fixture.py). When src/ defines no
+#            recorder entry, the cells are built against mr2_stub.cpp and are red-unimplemented. MR2_CELLS=6.1,6.6
+#            runs a subset; MR2_PARTITIONS sets 6.2's count (default 200, the plan's). Before the cells, the
+#            references they grade against are checked with no recorder involved (--instrument: twin determinism,
+#            the refusal fixtures, the GPU-vs-CPU anchor), so they are green before the recorder exists.
+#   P4.1 is tests/multirow-gpu/p41_cloud.sh (MR1's runner), run unchanged at every step.
 #   mutants  the MR2 mutants that can be built today (see mr2_mutants.sh).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -171,12 +176,23 @@ if want cells; then
 	if [ "$RUN" = 1 ]; then
 		fixtures; wine_up
 		python3 "$HERE/mr2_fixtures.py" "$FIX" >/dev/null
+		[ -f "$FIX/pkv_def_r4.adp" ] || python3 tools/gen_multirow_adapter_fixture.py "$FIX/pkv_def.sslm" "$FIX/pkv_def_r4.adp" >/dev/null
+		# The references first (no recorder involved; green before the recorder exists).
 		for m in pkv_def pkv_qk; do
 			set +e
-			"$WINE" "$OUT/cells/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" >"$OUT/cells-$m.log" 2>&1
+			"$WINE" "$OUT/cells/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" --instrument >"$OUT/instruments-$m.log" 2>&1
 			rc=$?
 			set -e
-			grep -E "^(FAIL|RED|BOX|cell)|cells:" "$OUT/cells-$m.log" | tr -d '\r' | head -60 | sed 's/^/    /'
+			grep -E "^(FAIL|RED|PASS)" "$OUT/instruments-$m.log" | tr -d '\r' | head -20 | sed 's/^/    /'
+			if [ $rc = 0 ]; then echo "PASS instruments $m"; else echo "FAIL instruments $m"; FAILED+=("instruments-$m"); fi
+		done
+		for m in pkv_def pkv_qk; do
+			set +e
+			"$WINE" "$OUT/cells/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" --adapter="$FIX/pkv_def_r4.adp" \
+				--partitions="${MR2_PARTITIONS:-200}" ${MR2_CELLS:+--cells=$MR2_CELLS} >"$OUT/cells-$m.log" 2>&1
+			rc=$?
+			set -e
+			grep -E "^(FAIL|RED|cell)|cells:" "$OUT/cells-$m.log" | tr -d '\r' | head -60 | sed 's/^/    /'
 			if [ $rc = 0 ]; then echo "PASS cells $m"; else echo "FAIL cells $m (exit $rc, $OUT/cells-$m.log)"; FAILED+=("cells-$m"); fi
 		done
 	fi
