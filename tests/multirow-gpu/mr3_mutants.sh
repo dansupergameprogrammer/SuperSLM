@@ -78,8 +78,8 @@ must_red() {
 	if [ $ok = 1 ]; then echo "PASS mutant $name -> red in $cells ($*)"; else echo "FAIL mutant $name survived ($cells)"; FAILED+=("$name"); fi
 }
 G=src/gpu/gpu_1p0.cpp
-# MX9: the save's chunk-open refusal (the line after its plan §4.5 comment), whatever status it returns.
-if want MX9; then host_mutant MX9 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) return SSLM_[A-Z_]+;(\n#endif\n\s*// Paged KV \(G5)' \
+# MX9: the save's chunk-open refusal (the line before its Paged KV comment; an #endif between them, gated or not), whatever status it returns.
+if want MX9; then host_mutant MX9 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) return SSLM_[A-Z_]+;(\n(?:#endif\n)?\s*// Paged KV \(G5)' \
 	'\1(void)0;  // MX9: save admitted mid-chunk\2' && must_red MX9 7.6 pkv_def pkv_qk; fi
 # MX10: both adapter checks (the M = 1 path's and the widened path's).
 if want MX10; then host_mutant MX10 $G 2 \
