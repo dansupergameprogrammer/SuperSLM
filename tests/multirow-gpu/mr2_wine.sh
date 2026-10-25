@@ -20,7 +20,8 @@
 #            recorder entry, the cells are built against mr2_stub.cpp and are red-unimplemented. MR2_CELLS=6.1,6.6
 #            runs a subset; MR2_PARTITIONS sets 6.2's count (default 200, the plan's). Before the cells, the
 #            references they grade against are checked with no recorder involved (--instrument: twin determinism,
-#            the refusal fixtures, the GPU-vs-CPU anchor), so they are green before the recorder exists.
+#            the refusal fixtures, the GPU-vs-CPU anchor), so they are green before the recorder exists. 4.10: 6.1's
+#            hashes equal mr2_410_hashes.txt, which the first green run writes (commit it).
 #   P4.1 is tests/multirow-gpu/p41_cloud.sh (MR1's runner), run unchanged at every step.
 #   mutants  the MR2 mutants that can be built today (see mr2_mutants.sh).
 set -euo pipefail
@@ -193,8 +194,20 @@ if want cells; then
 			rc=$?
 			set -e
 			grep -E "^(FAIL|RED|cell)|cells:" "$OUT/cells-$m.log" | tr -d '\r' | head -60 | sed 's/^/    /'
-			if [ $rc = 0 ]; then echo "PASS cells $m"; else echo "FAIL cells $m (exit $rc, $OUT/cells-$m.log)"; FAILED+=("cells-$m"); fi
+			if [ $rc = 0 ]; then echo "PASS cells $m"; else echo "FAIL cells $m (exit $rc, $OUT/cells-$m.log)"; FAILED+=("cells-$m"); cells_red=1; fi
 		done
+		# 4.10: 6.1's blob hashes are pinned from the first green run (mr2_410_hashes.txt, committed); every later run
+		# must reproduce them byte for byte. A red run never writes the pin.
+		if [ -z "${MR2_CELLS:-}" ] || [[ ",$MR2_CELLS," == *",6.1,"* ]]; then
+			PIN410="$HERE/mr2_410_hashes.txt"
+			cat "$OUT/cells-pkv_def.log" "$OUT/cells-pkv_qk.log" | tr -d '\r' | grep "^hash 4.10 " >"$OUT/hash410.txt" || true
+			if [ ! -s "$OUT/hash410.txt" ]; then echo "FAIL 4.10: the cells printed no hashes"; FAILED+=(4.10)
+			elif [ ! -f "$PIN410" ]; then
+				if [ "${cells_red:-0}" = 0 ]; then cp "$OUT/hash410.txt" "$PIN410"; echo "4.10: pinned $(wc -l <"$PIN410") hashes from this green run into $PIN410 (commit it)"
+				else echo "FAIL 4.10: no pin, and a red run does not write one"; FAILED+=(4.10); fi
+			elif diff "$PIN410" "$OUT/hash410.txt" >"$OUT/hash410.diff"; then echo "PASS 4.10 ($(wc -l <"$PIN410") hashes = the pin)"
+			else echo "FAIL 4.10: hashes differ from $PIN410 ($OUT/hash410.diff)"; FAILED+=(4.10); fi
+		fi
 	fi
 fi
 

@@ -15,7 +15,8 @@
 #   MX15  barriers removed from the widened GEMM tree's last log2(32) steps: 4.7's lint (MR1 suite) is its
 #         cell; here it is EXECUTED under 6.1/4.10 and the result is recorded, red or not (plan: "the record
 #         names the machine (if any) that turns it red")
-# Host mutants (applied to the recorder's C++ once it exists in src/; each names the code it changes):
+# Host mutants (one exact edit to a copy of the recorder's C++, gpu_1p0.cpp or multirow_wide.inl; a site that is
+# no longer there fails the mutant rather than skipping it):
 #   MX1h  attention groups sized for row 0 (`max_width = width0`)                          -> 6.1 (MX1-host cases)
 #   MX4   the close picks the LAST refused row instead of the first                        -> 6.6 (two-refusal)
 #   MX5   counters summed over all rows                                                    -> 6.6 (every j < 7)
@@ -28,6 +29,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
+export CXX="${CXX:-$HERE/mingw_cxx.sh}"
 WINE_GPU_SOURCED=1 . "$REPO/tools/cloud_gpu/wine_gpu.sh"
 OUT="$REPO/out/mr2/mutants"
 JOBS=2
@@ -43,7 +45,8 @@ done
 cd "$REPO"
 CELLS="$(dirname "$OUT")/cells"
 FIX="$(dirname "$OUT")/fixtures"
-[ -f "$CELLS/mr2_cells.exe" ] || bash "$HERE/mr2_wine.sh" --out="$(dirname "$OUT")" --only=cells --build-only --jobs="$JOBS"
+# Always through mr2_wine.sh's incremental build: an exe left from a stub build (before the recorder) is not the cells.
+bash "$HERE/mr2_wine.sh" --out="$(dirname "$OUT")" --only=cells --build-only --jobs="$JOBS" >/dev/null
 want() { [ -z "$ONLY" ] && return 0; case ",$ONLY," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 FAILED=()
 if ! grep -rqs "sslm_gpu_seq_embed_rows" src/gpu/*.cpp src/gpu/*.inl; then
@@ -118,9 +121,45 @@ if want MX15; then
 		echo "REPORT MX15 executed on this machine ($m, 6.1): $([ $rc = 0 ] && echo 'green (lockstep holds here)' || echo 'RED')"
 	done
 fi
-for h in MX1h MX4 MX5 MX7 MX8 MX11 MX20 MX21; do
-	want "$h" && echo "PENDING mutant $h: host mutant of the recorder's C++; its applicator is added with the recorder (see the header)"
-done
-if [ ${#FAILED[@]} -eq 0 ]; then echo "mutants: PASS (shader mutants)"; exit 0; fi
+# host_mutant NAME FILE OLD NEW: the cells' objects with FILE's one exact OLD replaced by NEW (must occur once) in a
+# copy of the tree, the translation unit that compiles FILE rebuilt with mr2_wine.sh's flags, relinked.
+CFLAGS="-std=c++20 -O2 -Iinclude -Isrc -Isrc/gpu -Itests -Itests/multirow-gpu -DNOMINMAX -DWIN32_LEAN_AND_MEAN -include d3d12.h -include d3d12sdklayers.h -DSUPERSLM_MULTIROW_WIDE"
+host_mutant() {
+	local name="$1" file="$2" d="$OUT/$1" tu
+	rm -rf "$d"; mkdir -p "$d/tree"
+	cp "$CELLS/d3d12.dll" "$CELLS/d3d12core.dll" "$d/"; cp -r "$CELLS/shaders" "$d/shaders"; cp -a "$CELLS/obj" "$d/obj"
+	cp -a include src tests "$d/tree/"
+	if ! MX_OLD="$3" MX_NEW="$4" python3 -I -c "import os,sys; p=sys.argv[1]; s=open(p).read(); o=os.environ['MX_OLD']; n=s.count(o)
+if n!=1: sys.exit('%s occurs %d times in %s' % (o.splitlines()[0], n, p))
+open(p,'w').write(s.replace(o, os.environ['MX_NEW']))" "$d/tree/$file"; then
+		echo "FAIL mutant $name: its site is not in $file (the recorder changed; update the applicator)"; FAILED+=("$name"); return 1
+	fi
+	case "$file" in src/gpu/multirow_wide.inl) tu=src/gpu/superslm_gpu.cpp ;; *) tu="$file" ;; esac
+	# shellcheck disable=SC2086
+	if ! (cd "$d/tree" && "$CXX" $CFLAGS -w -c "$tu" -o "$d/obj/$(echo "$tu" | tr / _).o") >"$d/build.log" 2>&1 ||
+		! "$CXX" -O2 "$d/obj"/*.o -o "$d/mr2_cells.exe" -ld3d12 -ldxgi -ldxguid -lshlwapi -lpsapi -static -static-libgcc \
+			-static-libstdc++ >>"$d/build.log" 2>&1; then
+		echo "FAIL mutant $name: build ($d/build.log)"; FAILED+=("$name"); return 1
+	fi
+	rm -rf "$d/tree" "$d/obj"
+}
+INL=src/gpu/multirow_wide.inl; G=src/gpu/gpu_1p0.cpp
+if want MX1h; then host_mutant MX1h $INL 'const uint32_t max_width = width0 + (variant_h - 1u);' \
+	'const uint32_t max_width = width0;  // MX1h' && must_red MX1h 6.1 pkv_def pkv_qk; fi
+if want MX4; then host_mutant MX4 $G $'\t\t\tj = static_cast<int32_t>(r);\n\t\t\tbreak;' \
+	$'\t\t\tj = static_cast<int32_t>(r);  // MX4: no break, the last refused row' && must_red MX4 6.6 pkv_def pkv_qk; fi
+if want MX5; then host_mutant MX5 $G 'for (uint32_t r = 0; r <= f; ++r) counters[i] += rows[r].counters[i];' \
+	'for (uint32_t r = 0; r < M; ++r) counters[i] += rows[r].counters[i];  // MX5' && must_red MX5 6.6 pkv_def pkv_qk; fi
+if want MX7; then host_mutant MX7 $G 'for (uint32_t r = 0; r < k; ++r) copy_row(r, L);' \
+	'for (uint32_t r = 0; r < M; ++r) copy_row(r, L);  // MX7' && must_red MX7 6.6 pkv_def pkv_qk; fi
+if want MX8; then host_mutant MX8 $G 'const SslmGpuStatus unmap = RowsUnmapTailTo(seq, e.holder_mapped);' \
+	'const SslmGpuStatus unmap = SSLM_OK;  // MX8: rollback skips HolderUnmapTail' && must_red MX8 1.1r pkv_def pkv_qk; fi
+if want MX11; then host_mutant MX11 $G 'st.context_length = c.p0 + static_cast<int64_t>(r);' \
+	'st.context_length = c.p0;  // MX11' && must_red MX11 6.1 pkv_def pkv_qk; fi
+if want MX20; then host_mutant MX20 $G 'for (uint32_t r = 0; r <= f; ++r) counters[i] += rows[r].counters[i];' \
+	'for (uint32_t r = 0; r < k; ++r) counters[i] += rows[r].counters[i];  // MX20' && must_red MX20 6.6 pkv_def pkv_qk; fi
+if want MX21; then host_mutant MX21 $G 'copy_row(static_cast<uint32_t>(j), refusing_end);' \
+	'(void)refusing_end;  // MX21' && must_red MX21 6.6 pkv_def pkv_qk; fi
+if [ ${#FAILED[@]} -eq 0 ]; then echo "mutants: PASS"; exit 0; fi
 echo "mutants: FAIL (${FAILED[*]})"
 exit 1
