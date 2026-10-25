@@ -1,0 +1,3 @@
+FAIL tests/schema_fast_decode/sfd_cells_x.inc:1146: released && phys != UINT32_MAX -- [1.X4] setup: released 1, page 4294967295
+FAIL tests/schema_fast_decode/sfd_cells_x.inc:1997: canon != SSLM_OK && j.st == canon && XDiff(after, before).empty() -- [5.X4] status 0 (canonical 0); blob differs (sizes 32992/32992, first byte 48): walk 9/4 ctx 20/16 forced 0/0 order 0/0 history 0/0 ready 1/0 layer 0/0
+FAIL tests/schema_fast_decode/sfd_cells_x.inc:2758: differ > 0 -- [11.X3] with HolderUnmapTail stubbed, every 1.X3 run still equals off (the oracle cannot fail)
