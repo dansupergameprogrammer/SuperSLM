@@ -6,7 +6,7 @@
 # Usage: tests/multirow-gpu/mr4_wine.sh [--out=DIR] [--jobs=N] [--base=REV] [--only=LEG[,LEG...]] [--build-only]
 #   --out   default <repo>/out/mr4
 #   --base  1.17's revision 8.3 compares against (default MR_BASE_TAG, else the merge base with origin/claude/sfd-gpu-1p17)
-#   --only  contract | cells | c83 | table | mutants   (default: contract,cells,c83,table)
+#   --only  contract | cells | c83 | table | sfdg | mutants   (default: contract,cells,c83,table,sfdg)
 # Fixtures: F-SFD (tools/gen_schema_fast_decode_fixture.py) and fsfd_refuse (mr4_fixtures.py) in out/mr4/fixtures (or
 # MR4_FIXTURES), made when absent; pkv_def.sslm (the no-table fixture of 2.3) from MR2's fixtures.
 #
@@ -17,6 +17,11 @@
 #             blob, walk, ready flag, context, at chunk budgets 1..8 and 64, dedicated and pooled, four schemas) are equal,
 #             every budget gives the same line within a binary, and potion_shop_order's stream is the CPU's pinned one.
 #   table     C18's table as data (rulings item 12): mr4_table.cpp compiled against the header the record names.
+#   sfdg      MR4 review S4, ruling 18: 1.17's 15 SFD-GPU cells (tests/schema-fast-decode-gpu: G0.1 ... G12.10, the
+#             jump verb's G12.x among them), built with build_sfd_gpu_mingw.sh from 1.17's tree (--base) and from the
+#             branch, each run under Wine on F-SFD. Graded: the branch's output equals the base binary's line for line
+#             (Wine noise and the per-run durations removed). Not a pass/fail claim on the cells, which are box-only:
+#             some fail on the base itself under Wine (review N3), and must fail the same way on the branch.
 #   mutants   MX16 (mr4_mutants.sh).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +33,7 @@ WINE_GPU_SOURCED=1 . "$REPO/tools/cloud_gpu/wine_gpu.sh"
 OUT="$REPO/out/mr4"
 JOBS=2
 RUN=1
-ONLY="contract,cells,c83,table"
+ONLY="contract,cells,c83,table,sfdg"
 BASE="${MR_BASE_TAG:-}"
 for a in "$@"; do
 	case "$a" in
@@ -37,7 +42,7 @@ for a in "$@"; do
 		--base=*) BASE="${a#--base=}" ;;
 		--only=*) ONLY="${a#--only=}" ;;
 		--build-only) RUN=0 ;;
-		*) sed -n '2,26p' "$0"; exit 2 ;;
+		*) sed -n '2,31p' "$0"; exit 2 ;;
 	esac
 done
 cd "$REPO"
@@ -99,12 +104,15 @@ if want cells; then
 fi
 
 # ------------------------------------------------------------------------------------------------ 8.3
-if want c83; then
-	BT="$OUT/base-tree"
+BT="$OUT/base-tree"
+base_tree() {
 	if [ ! -d "$BT/src" ] || [ "$(git -C "$BT" rev-parse HEAD 2>/dev/null)" != "$(git rev-parse "$BASE^{commit}")" ]; then
 		git worktree remove --force "$BT" 2>/dev/null || rm -rf "$BT"
 		git worktree add --detach "$BT" "$BASE" >/dev/null
 	fi
+}
+if want c83; then
+	base_tree
 	mkdir -p "$BT/tests/multirow-gpu"
 	cp "$HERE/mr4_83_canon.cpp" "$HERE/mingw_d3d12_compat.h" "$BT/tests/multirow-gpu/"
 	shaders "$BT" "$BT/out/c83/shaders"
@@ -142,6 +150,52 @@ if want table; then
 	else
 		grep -m3 "error" "$OUT/table/build.log" | sed 's/^/    /'
 		echo "FAIL table: red-unimplemented (the C18 table header mr4_table.cpp names does not compile; $OUT/table/build.log)"; FAILED+=(table)
+	fi
+fi
+
+# ------------------------------------------------------------------------------------------------ 1.17's SFD-GPU cells
+SFDG_CELLS="sfdg_smoke sfdg_cell_g0_1 sfdg_cell_g2_1 sfdg_cell_g12_4 sfdg_cell_g12_5 sfdg_cell_g5_1 sfdg_cell_g6 sfdg_cell_g8_1
+sfdg_cell_g7_1 sfdg_cell_g9_1 sfdg_cell_g11_1 sfdg_cell_g12_verb sfdg_cell_g12_6 sfdg_cell_g12_7 sfdg_cell_g12_10"
+# sfdg_run TREE DIR WIDE LOG: build the 15 cells from TREE into DIR (their own mingw script; it supplies its own D3D12
+# stand-in, so not through mingw_cxx.sh), stage the shaders and DLLs, and run each on F-SFD, all output into LOG.
+sfdg_run() {
+	local tree="$1" dir="$2" wide="$3" log="$4" c rc
+	# shellcheck disable=SC2086
+	if ! (cd "$tree" && CXX= bash tests/schema-fast-decode-gpu/build_sfd_gpu_mingw.sh --out="$dir" --jobs="$JOBS" $SFDG_CELLS) \
+		>"$dir.build.log" 2>&1; then
+		echo "    sfdg: the build failed in $tree ($dir.build.log)"; return 1
+	fi
+	shaders "$tree" "$dir/shaders" $wide
+	cp "$VKP_DIR/d3d12.dll" "$VKP_DIR/d3d12core.dll" "$dir/"
+	: >"$log"
+	for c in $SFDG_CELLS; do
+		echo "== $c" >>"$log"
+		if [ ! -f "$dir/$c.exe" ]; then echo "NOT BUILT" >>"$log"; continue; fi
+		set +e
+		(cd "$dir" && WINEPREFIX="$WINEPREFIX-sfdg" timeout 2400 "$WINE" "./$c.exe" --fixture-dir="$F4") 2>/dev/null |
+			tr -d '\r' | grep -vE '^(wine|fixme|err:|warn:)' |
+			sed -E 's/[(]?[0-9]+([.][0-9]+)? ?(ms|s)[)]?$/<t>/; s/ [0-9]+([.][0-9]+)? ?ms\b/ <t>/g' >>"$log"
+		rc=${PIPESTATUS[0]}
+		set -e
+		echo "exit $rc" >>"$log"
+	done
+}
+if want sfdg; then
+	base_tree
+	if [ "$RUN" = 1 ]; then
+		fixtures4
+		wine_up
+		mkdir -p "$OUT/sfdg"
+		ok=1
+		sfdg_run "$BT" "$OUT/sfdg/base" "" "$OUT/sfdg/base.txt" || ok=0
+		sfdg_run "$REPO" "$OUT/sfdg/branch" wide "$OUT/sfdg/branch.txt" || ok=0
+		if [ $ok = 1 ] && ! diff -q "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" >/dev/null; then
+			ok=0; echo "    sfdg: the branch's output differs from 1.17's ($(diff "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" | grep -c '^>') lines):"
+			diff "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" | head -12 | sed 's/^/      /'
+		fi
+		awk '/^== /{c=$2} /^exit /{printf "    %-22s exit %s\n", c, $2}' "$OUT/sfdg/branch.txt"  # both binaries: the same
+		if [ $ok = 1 ]; then echo "PASS sfdg (1.17's 15 SFD-GPU cells: the branch's output equals $(git rev-parse --short=8 "$BASE")'s line for line)"
+		else echo "FAIL sfdg ($OUT/sfdg/*.txt)"; FAILED+=(sfdg); fi
 	fi
 fi
 
