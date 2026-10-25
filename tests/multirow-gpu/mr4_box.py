@@ -5,11 +5,14 @@ every product in Python ints, divisions as exact floor and ceiling, never floats
 
   10.2  python3 mr4_box.py check102 TABLE.csv
         The cost table the 10.2 bench files (rulings item 12: the builder's bench writes it). One row per
-        (model, M, logits): `model,M,logits,runs,warmup,median_us,p95_us,max_us`, M = 1..8, logits 0 (C(M)) and 1 (with the
-        per-row logits stage, C(M) + G(M)), for the 0.5B and the 1.5B. Red if a row is missing, if runs != 30 or warmup != 1,
-        if median <= p95 <= max fails, or if MR0's rule on the port fails: C(4) / (4 x C(1)) <= 0.6 at the median (MB2's
-        gate, re-checked here). Prints r(M) and g(M) per mille from the maxima (MR-D15), the values the shipped header takes
-        for this card (MR7 takes the per-M maximum across certified cards).
+        (model, M, logits): `model,M,logits,runs,warmup,median_us,p95_us,max_us,clock[,wall_*]`, M = 1..8, logits 0 (C(M),
+        the recorder's GPU time: clock `gpu`) and 1 (the wall stand-in for the logits stage: clock `wall`, information
+        only), for the 0.5B and the 1.5B. Ruling 18b: r(M) comes only from the logits = 0 rows, and g(M) is never derived
+        from the logits = 1 rows (g stays at its estimate until MR5's GPU bracket). Red if a row is missing, if runs != 30
+        or warmup != 1, if median <= p95 <= max fails, if a logits = 0 row is not clock `gpu`, if a logits = 1 row claims
+        clock `gpu` (flagged, not used: no GPU logits timing exists before MR5), or if MR0's rule on the port fails:
+        C(4) / (4 x C(1)) <= 0.6 at the median (MB2's gate, re-checked here). Prints r(M) per mille from the GPU maxima
+        (MR-D15), the values the shipped header takes for this card (MR7 takes the per-M maximum across certified cards).
   10.5  python3 mr4_box.py canon105 TABLE.csv [--margin=150] [--spans=3,5,6,5,2]
         Canonical over B2's spans, red if not faster: the M-row frames are >= 1.17's one-row Canonical frames at the default
         budget (one row per frame: sum of spans). C18: frames are decided from the configuration alone, so they follow from
@@ -69,12 +72,28 @@ def load(path):
     rows = {}
     with open(path) as f:
         for r in csv.DictReader(f):
-            rows[(r["model"], int(r["M"]), int(r["logits"]))] = {k: int(r[k]) for k in ("runs", "warmup", "median_us", "p95_us", "max_us")}
+            row = {k: int(r[k]) for k in ("runs", "warmup", "median_us", "p95_us", "max_us")}
+            row["clock"] = (r.get("clock") or "").strip()
+            rows[(r["model"], int(r["M"]), int(r["logits"]))] = row
     return rows
 
 
+def clock_problems(rows):
+    """Ruling 18b: logits = 0 rows are the GPU clock (they price r); logits = 1 rows are the wall stand-in (info only)."""
+    bad = []
+    for (model, M, logits), r in sorted(rows.items()):
+        if logits == 0 and r["clock"] != "gpu":
+            bad.append("%s M=%d logits=0: clock %r, want 'gpu' (r(M) is priced from the recorder's GPU time only)" % (model, M, r["clock"]))
+        if logits == 1 and r["clock"] == "gpu":
+            bad.append("%s M=%d logits=1: clock 'gpu' before MR5 (flagged, not used: g is never derived from these rows)" % (model, M))
+        elif logits == 1 and r["clock"] != "wall":
+            bad.append("%s M=%d logits=1: clock %r, want 'wall'" % (model, M, r["clock"]))
+    return bad
+
+
 def check102(path):
-    rows, bad = load(path), []
+    rows = load(path)
+    bad = clock_problems(rows)
     for model in LAYERS:
         for logits in (0, 1):
             for M in range(1, 9):
@@ -91,9 +110,8 @@ def check102(path):
             bad.append("%s: port gate C(4) / (4 C(1)) = %d / %d > 0.6" % (model, c4["median_us"], 4 * c1["median_us"]))
         if c1:
             r = [ceil_div(rows[(model, M, 0)]["max_us"] * 1000, rows[(model, 1, 0)]["max_us"]) for M in range(1, 9) if (model, M, 0) in rows]
-            g = [ceil_div((rows[(model, M, 1)]["max_us"] - rows[(model, M, 0)]["max_us"]) * 1000, rows[(model, 1, 0)]["max_us"])
-                 for M in range(1, 9) if (model, M, 1) in rows and (model, M, 0) in rows]
-            print("10.2 %s: r(M) per mille %s; g(M) per mille %s" % (model, r, g))
+            print("10.2 %s: r(M) per mille %s (logits = 0, clock gpu); g(M) not derived (ruling 18b: the logits = 1 rows are"
+                  " the wall stand-in, information only)" % (model, r))
     for b in bad:
         print("RED 10.2: " + b)
     print("%s 10.2" % ("RED" if bad else "PASS"))
@@ -101,7 +119,8 @@ def check102(path):
 
 
 def canon105(path, margin, spans):
-    rows, bad = load(path), []
+    rows = load(path)
+    bad = [b for b in clock_problems(rows) if "logits=0" in b]  # C(M) is priced from the GPU clock only
     one_row = sum(spans)
     for model, L in LAYERS.items():
         if (model, 1, 0) not in rows:
@@ -137,6 +156,16 @@ def self_test():
     f = frames([3, 5, 6, 5, 2], 24, 6200, cost, 150)[0]
     if f != 17:
         bad.append("B2's spans at m = 150: %d frames, want 17" % f)
+    # Ruling 18b: the clock rules on a synthetic table.
+    def table(clock0, clock1):
+        return {("0.5B", M, lg): {"runs": 30, "warmup": 1, "median_us": 1, "p95_us": 1, "max_us": 1, "clock": clock0 if lg == 0 else clock1}
+                for M in range(1, 9) for lg in (0, 1)}
+    if clock_problems(table("gpu", "wall")):
+        bad.append("clock rules: a well-formed table is flagged")
+    if len(clock_problems(table("gpu", "gpu"))) != 8:
+        bad.append("clock rules: logits = 1 rows with clock 'gpu' are not flagged")
+    if len(clock_problems(table("wall", "wall"))) != 8:
+        bad.append("clock rules: logits = 0 rows on the wall clock are not red")
     for b in bad:
         print("RED self-test: " + b)
     print("%s mr4_box self-test" % ("RED" if bad else "PASS"))
