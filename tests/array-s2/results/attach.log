@@ -1,0 +1,7 @@
+wrote D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm
+fingerprint b75950bb9713fe9544b0b6565a7849e50fee43272eea3fc07882ad7ef40ddc55
+SCM1 bytes 59614386
+schema intents: {"dfa_states": 635, "minItems": {"/properties/intents": 1, "/properties/intents/items/properties/conditions": 0}, "nfa_states": 681, "recursion_depth": 6, "serialized_mask_bytes": 36660995, "token_transitions": 3074805, "tracked_temporary_bytes": 165514483}
+schema intent_gate: {"dfa_states": 399, "minItems": {}, "nfa_states": 424, "recursion_depth": 4, "serialized_mask_bytes": 22953415, "token_transitions": 1921739, "tracked_temporary_bytes": 133260439}
+verified: independent loader accepted the artifact
+measure: exit=0 wall_s=30.43 peak_bytes=3896426496

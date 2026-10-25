@@ -1,5 +1,5 @@
-"""Runs a command and reports its wall time and peak memory (Windows peak working set, or Linux
-peak RSS, of the process and its children, sampled every 50 ms).
+"""Runs a command and reports its wall time and peak memory: the command's own peak (Windows peak
+working set, else RSS), and the largest peak of any child it starts, sampled every 50 ms.
 
     python measure.py <log file> -- <command> [args ...]
 """
@@ -23,17 +23,20 @@ def main(argv: list[str]) -> int:
     with open(log, "w", encoding="utf-8") as out:
         proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT)
         ps = psutil.Process(proc.pid)
-        peak = 0
+        main_peak = child_peak = 0
         while proc.poll() is None:
             try:
-                peak = max(peak, peak_of(ps) + sum(peak_of(c) for c in ps.children(recursive=True)))
+                main_peak = max(main_peak, peak_of(ps))
+                for c in ps.children(recursive=True):
+                    child_peak = max(child_peak, peak_of(c))
             except psutil.Error:
                 pass
             time.sleep(0.05)
     wall = time.perf_counter() - t0
+    line = f"exit={proc.returncode} wall_s={wall:.2f} main_peak_bytes={main_peak} max_child_peak_bytes={child_peak}"
     with open(log, "a", encoding="utf-8") as out:
-        out.write(f"measure: exit={proc.returncode} wall_s={wall:.2f} peak_bytes={peak}\n")
-    print(f"exit={proc.returncode} wall_s={wall:.2f} peak_bytes={peak}")
+        out.write(f"measure: {line}\n")
+    print(line)
     return proc.returncode
 
 

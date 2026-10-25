@@ -1,0 +1,6 @@
+PASS cpu walk one_intent_0_conditions tokens=29 admitted=29 refused_at=-1 refusal=- accepting_end=1 ms=1005
+PASS cpu walk one_intent_1_condition tokens=62 admitted=62 refused_at=-1 refusal=- accepting_end=1 ms=2102
+PASS cpu walk three_intents_0_2_1_conditions tokens=175 admitted=175 refused_at=-1 refusal=- accepting_end=1 ms=6008
+PASS cpu reject trailing_comma@28 tokens=29 admitted=28 refused_at=28 refusal=unreachable accepting_end=0 ms=975
+PASS cpu reject empty_intents@4 tokens=5 admitted=4 refused_at=4 refusal=unreachable accepting_end=0 ms=138
+PASS cpu reject missing_target@13 tokens=23 admitted=13 refused_at=13 refusal=unreachable accepting_end=0 ms=455

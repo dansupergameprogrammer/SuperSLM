@@ -1,0 +1,12 @@
+map cpu base ok=1 ms=411.9 
+map gpu base ok=1 ms=768.6 vram_delta=378798080 
+map cpu schema ok=1 ms=597.7 
+map gpu schema ok=1 ms=989.7 vram_delta=438435840 
+map cpu base ok=1 ms=359.8 
+map gpu base ok=1 ms=648.6 vram_delta=378798080 
+map cpu schema ok=1 ms=601.5 
+map gpu schema ok=1 ms=966.9 vram_delta=438435840 
+map cpu base ok=1 ms=363.2 
+map gpu base ok=1 ms=703.6 vram_delta=378798080 
+map cpu schema ok=1 ms=613.0 
+map gpu schema ok=1 ms=988.0 vram_delta=438435840 
