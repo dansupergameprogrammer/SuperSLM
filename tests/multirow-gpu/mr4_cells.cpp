@@ -327,6 +327,8 @@ void Cell23(Fsfd& fx) {
 				} else if (!z.row0_forced) {
 					rows[0] = NotForced(chain[0]);
 				}
+			} else if (std::string(z.file) == "pkv_def") {
+				rows = {30, 31, 32};  // in pkv_def's vocabulary (256), so the table's status is reached (ruling 16)
 			} else {
 				rows = {300, 301, 302};
 			}
