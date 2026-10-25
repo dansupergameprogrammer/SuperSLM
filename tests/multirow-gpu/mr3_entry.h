@@ -51,6 +51,12 @@ static_assert(MR3_CAP_STATUS != MR3_CHUNK_OPEN_STATUS, "plan §3.7: two distinct
 // the winner there, so every loser runs while the winner holds the claim (the overlap is certain, not sampled).
 void SslmGpuSeqClaimHookForTest(void (*hook)(SslmGpuSequenceHandle* seq, void* user), void* user) noexcept;
 
+// 1.1's device-bytes seam (PROPOSED; the test author's name, one edit here): the bytes of device resources the harness
+// holds now, incremented at the counted allocation primitive (harness::Device::TryMakeBuffer and the descriptor heaps)
+// and decremented when the resource is freed (e.g. through a private-data IUnknown whose Release subtracts). Test builds
+// only (SUPERSLM_GPU_ALLOC_FAULT_INJECTION). The runner defines MR3_HAVE_LIVE_BYTES when src/ defines it.
+uint64_t SslmGpuLiveDeviceBytesForTest() noexcept;
+
 // The harness fault seams 5.6 composes (include/superslm/gpu_port.h): the next removed-device query the fault
 // classifier makes reports removed, so the armed slice fault (mr2_entry.h) classifies as SSLM_DEVICE_LOST.
 void ArmGpuMapDeviceRemovedQueryInjection() noexcept;

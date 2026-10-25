@@ -99,6 +99,7 @@ fi
 if want cells; then
 	EXTRA="-DSUPERSLM_MULTIROW_WIDE -DSUPERSLM_GPU_ALLOC_FAULT_INJECTION -DSUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING"
 	[ $PUBLISHED = 1 ] || { EXTRA="$EXTRA -DMR3_UNPUBLISHED"; echo "cells: building with -DMR3_UNPUBLISHED (MR2's internal entry; provisional statuses are sentinels)"; }
+	grep -rqs "SslmGpuLiveDeviceBytesForTest" src/gpu/*.cpp src/gpu/*.h && EXTRA="$EXTRA -DMR3_HAVE_LIVE_BYTES"
 	grep -rqs "sslm_gpu_seq_embed_rows" src/gpu/*.cpp || { echo "FAIL cells: src/ defines no sslm_gpu_seq_embed_rows"; exit 1; }
 	shaders "$REPO" "$OUT/cells/shaders" wide
 	OBJD="$OUT/cells/obj"

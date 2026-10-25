@@ -398,8 +398,43 @@ void Cell11(const mr2::Model& m) {
 		const SslmGpuMr2Seams s0 = Seams(w);
 		SslmGpuAllocCounterResetForTest();
 		int closes = 0, abandons = 0;
+		// Where the allocations fall (diagnostic): by action and by M = 1 (the one-row body) or M > 1 (widened).
+		std::map<std::string, uint32_t> by;
+		uint32_t mark = 0;
+		auto bill = [&](const std::string& k) { const uint32_t n = SslmGpuAllocCountForTest(); by[k] += n - mark; mark = n; };
+		// Device bytes (plan §7 1.1, §8): the live device bytes the harness holds, on the proposed seam
+		// SslmGpuLiveDeviceBytesForTest (mr3_entry.h). No OS counter can stand in on this platform: Wine reports
+		// PrivateUsage as 0 and resolves /proc/self in wineserver, and the harness allocation count cannot see frees (the
+		// shipped one-row path allocates and frees per call: see the diagnostic below). Read from a quarter of the way in
+		// (every path warm) to the end; the seam is commissioned first on a pool it must see come and go.
+		auto private_bytes = []() -> int64_t {
+#if defined(MR3_HAVE_LIVE_BYTES)
+			return static_cast<int64_t>(SslmGpuLiveDeviceBytesForTest());
+#else
+			return -1;
+#endif
+		};
+#if !defined(MR3_HAVE_LIVE_BYTES)
+		Check(false, "device bytes: red-unimplemented (the engine defines no SslmGpuLiveDeviceBytesForTest; see mr3_entry.h)");
+#else
+		{  // The seam's must-see: a ~24 MiB device pool shows up in it, and goes away with the pool.
+			const int64_t b0 = private_bytes();
+			SslmGpuKvPoolHandle* big = nullptr;
+			const uint32_t pages = static_cast<uint32_t>((24u << 20) / std::max<int64_t>(1, PoolStats(pool).page_positions * 384));
+			const S st = sslm_gpu_kv_pool_create(w.ctx, w.model, pages, &big);
+			const int64_t b1 = private_bytes();
+			if (big) sslm_gpu_kv_pool_destroy(w.ctx, big);
+			const int64_t b2 = private_bytes();
+			Check(st == S::SSLM_OK && b1 - b0 >= (8 << 20) && b1 - b2 >= (8 << 20) && b2 == b0,
+			      F("the live-device-bytes seam: a %u-page pool (%s) moved it by +%lld then -%lld", pages, N(st), (long long)(b1 - b0),
+			        (long long)(b1 - b2)));
+		}
+#endif
+		int64_t bytes_q = 0;
 		for (int cyc = 0; cyc < g_opt.cycles; ++cyc) {
+			if (cyc == g_opt.cycles / 4) bytes_q = private_bytes();
 			const int M = 1 + static_cast<int>(rng() % 8);
+			const std::string mk = M == 1 ? "M=1" : "M>1";
 			if (cyc % 4 == 3) {  // the adopted pooled sequence: abandon at a random layer
 				int32_t adm = 0;
 				Check(Embed(w, b, Stream(cyc, M, V, 34), &adm) == S::SSLM_OK, F("cycle %d adopted embed", cyc));
@@ -407,38 +442,63 @@ void Cell11(const mr2::Model& m) {
 				for (uint32_t l = 0; l < stop; ++l) mr2::Slice(w, b, D);
 				Check(sslm_gpu_seq_rows_abandon(w.ctx, b) == S::SSLM_OK, F("cycle %d adopted abandon", cyc));
 				++abandons;
+				bill("adopted abandon " + mk);
 				if (cyc % 64 == 3) BlobEq(Blob(w, b, "1.1"), b_entry, F("cycle %d adopted back at entry", cyc));
+				bill("reset and save");
 				continue;
 			}
 			if (*SslmGpuSeqHandleContextLengthForBench(a) + M > 96) Check(sslm_gpu_seq_reset(w.ctx, a) == S::SSLM_OK, "reset");
+			bill("reset and save");
 			const std::vector<uint8_t> before = (cyc % 16 == 0) ? Blob(w, a, "1.1") : std::vector<uint8_t>();
+			bill("reset and save");
 			int32_t adm = 0;
 			Check(Embed(w, a, Stream(cyc, M, V, 35), &adm) == S::SSLM_OK && adm == M, F("cycle %d embed M%d", cyc, M));
 			if (rng() % 2) {  // close, at random slicing
 				ChunkRun r;
 				r.admitted = adm;
-				Advance(w, a, r, [&](int) { return D * (1 + rng() % L); });
+				const uint32_t per = 1 + rng() % L;
+				Advance(w, a, r, [&](int) { return D * per; });
 				CleanClose(r, a, M, F("cycle %d", cyc));
 				++closes;
+				bill("close " + mk + (per == 1 ? " one layer per call" : " several layers per call"));
 			} else {  // abandon at a random layer
 				const uint32_t stop = rng() % L;
 				for (uint32_t l = 0; l < stop; ++l) mr2::Slice(w, a, D);
 				Check(sslm_gpu_seq_rows_abandon(w.ctx, a) == S::SSLM_OK && RowsOpen(a) == 0, F("cycle %d abandon", cyc));
 				++abandons;
+				bill("abandon " + mk);
 				if (!before.empty()) BlobEq(Blob(w, a, "1.1"), before, F("cycle %d back at entry after abandon", cyc));
+				bill("reset and save");
 			}
 		}
-		const uint32_t allocs = SslmGpuAllocCountForTest();
+		uint32_t allocs = 0;
+		for (const auto& [k, n] : by) allocs += n;
 		const SslmGpuMr2Seams s1 = Seams(w);
 		const SslmGpuKvPoolStats p1 = PoolStats(pool);
-		Check(allocs == 0, F("%u device allocations over %d cycles after warm-up (harness seam; device bytes must not grow)", allocs, g_opt.cycles));
+		const int64_t grew = private_bytes() - bytes_q;
+#if defined(MR3_HAVE_LIVE_BYTES)
+		Check(grew == 0, F("device bytes: live device bytes moved %lld over the last %d cycles (want back at the start value)", (long long)grew,
+		                   g_opt.cycles - g_opt.cycles / 4));
+#endif
+		std::printf("1.1: live device bytes moved %lld over the last %d cycles; %u harness allocations after warm-up (diagnostic, below)\n",
+		            (long long)grew, g_opt.cycles - g_opt.cycles / 4, allocs);
 		Check(s1.row_buffer_sets == s0.row_buffer_sets && s1.row_buffer_free == s1.row_buffer_sets && s1.chunks_open == 0,
 		      F("row-buffer sets %u -> %u (free %u), chunks open %u", s0.row_buffer_sets, s1.row_buffer_sets, s1.row_buffer_free, s1.chunks_open));
 		Check(p1.free_pages == p0.free_pages && p1.shared_pages == p0.shared_pages,
 		      F("pool free %u shared %u, start %u/%u", p1.free_pages, p1.shared_pages, p0.free_pages, p0.shared_pages));
 		Check(HolderMapped(b) == mapped0, F("adopted holder maps %u pages, start %u", HolderMapped(b), mapped0));
 		BlobEq(Blob(w, b, "1.1"), b_entry, "adopted sequence after every cycle");
-		std::printf("1.1: %d closes, %d abandons\n", closes, abandons);
+		// The baseline: plain one-row tokens (no chunk) on a fresh dedicated handle, after one warm-up token.
+		{
+			SslmGpuSequenceHandle* o = w.Dedicated(64);
+			mr2::FeedRow(w, o, Stream(0, 1, V, 36)[0], D, L);
+			bill("(not graded)");
+			for (int i = 1; i <= 16; ++i) mr2::FeedRow(w, o, Stream(i, 1, V, 36)[0], i % 2 ? D : Full(m), L);
+			bill("baseline: 16 plain one-row tokens, no chunk (not graded)");
+		}
+		std::string split;
+		for (const auto& [k, n] : by) split += F(" %s %u;", k.c_str(), n);
+		std::printf("1.1: %d closes, %d abandons; allocations after warm-up by action:%s\n", closes, abandons, split.c_str());
 		sslm_gpu_prefix_release(w.ctx, pre);
 		// The model unmaps SSLM_OK once every handle is released.
 		for (auto& s : w.seqs)
@@ -1818,6 +1878,7 @@ int main(int argc, char** argv) {
 			if (id.empty()) continue;
 			const int f = g_fail[id];
 			if (f) std::printf("RED cell %s: %d failures of %d checks (%.0f s)\n", id.c_str(), f, g_checks[id], s);
+			else if (g_checks[id] == 0) std::printf("cell %s: n/a on %s (see its note)\n", id.c_str(), m.base().c_str());
 			else std::printf("cell %s: PASS (%d checks, %.0f s)\n", id.c_str(), g_checks[id], s);
 			all = all && f == 0;
 		}
