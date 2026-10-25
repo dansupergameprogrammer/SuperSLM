@@ -27,6 +27,35 @@
 // the chunk runs. This shader reads no K/V and no page table.
 #include "site_common.hlsli"
 
+// Carry-explicit 64-bit add (BRANCH-PROVISIONAL, claude/multirow-gpu-carry): NVIDIA's Blackwell
+// (SM 6.8) backend drops the low-to-high carry of a native 64-bit add in some optimized code
+// shapes (RTX 5060). This is funnel_guards.hlsli's Add64CarryExplicitGpu_ at 79f53dd3
+// (claude/project-thread-nfjpqm), with one change: every 32-bit add goes through AddUint64,
+// which dxc lowers to the DXIL UAddc operation. Written with plain uint adds, as at 79f53dd3,
+// dxc -O3 folds the halves back into a native i64 add in straight-line shapes, so the DXIL the
+// driver compiles still carries one; UAddc is opaque to that fold. No shipped header carries the
+// helper yet, and this file is wide-only, so the definition lives here: when the 1.15.1 hotfix
+// ships one in funnel_guards.hlsli, this copy is a redefinition error and is deleted.
+uint Add32OpaqueGpu_(uint a, uint b)
+{
+    return AddUint64(uint2(a, 0u), uint2(b, 0u)).x;
+}
+
+uint64_t Add64CarryExplicitGpu_(uint64_t ua, uint64_t ub)
+{
+    uint lo_a = (uint)ua, hi_a = (uint)(ua >> 32);
+    uint lo_b = (uint)ub, hi_b = (uint)(ub >> 32);
+    uint2 lo = AddUint64(uint2(lo_a, 0u), uint2(lo_b, 0u));  // lo.y is the carry out of the low word
+    uint hi = Add32OpaqueGpu_(Add32OpaqueGpu_(hi_a, hi_b), lo.y);
+    return ((uint64_t)hi << 32) | (uint64_t)lo.x;
+}
+
+// Two's complement makes the signed sum the same bits; this form only casts.
+int64_t AddS64CarryExplicitGpu_(int64_t a, int64_t b)
+{
+    return (int64_t)Add64CarryExplicitGpu_((uint64_t)a, (uint64_t)b);
+}
+
 cbuffer RootConstants : register(b0)
 {
     uint g_layer_index; uint g_hidden_size; uint g_head_dim; uint g_num_kv_heads;
@@ -77,10 +106,10 @@ void GemmCoalescedWideAt(uint t, int j, uint in_base, uint w_base, uint id_base,
                 [unroll] for (uint r = 0; r < SSLM_WIDE_H; ++r)
                 {
                     const uint4 a4 = LayerScratchRows[r].Load4(in_base + (uint)q * 16u);
-                    acc[r] += (int64_t)(int)a4.x * w0;
-                    acc[r] += (int64_t)(int)a4.y * w1;
-                    acc[r] += (int64_t)(int)a4.z * w2;
-                    acc[r] += (int64_t)(int)a4.w * w3;
+                    acc[r] = AddS64CarryExplicitGpu_(acc[r], (int64_t)(int)a4.x * w0);
+                    acc[r] = AddS64CarryExplicitGpu_(acc[r], (int64_t)(int)a4.y * w1);
+                    acc[r] = AddS64CarryExplicitGpu_(acc[r], (int64_t)(int)a4.z * w2);
+                    acc[r] = AddS64CarryExplicitGpu_(acc[r], (int64_t)(int)a4.w * w3);
                 }
             }
         }
@@ -90,7 +119,7 @@ void GemmCoalescedWideAt(uint t, int j, uint in_base, uint w_base, uint id_base,
             {
                 const int64_t w = (int64_t)LoadSignedByteGpu(LayerWeights, row + (uint)i);
                 [unroll] for (uint r = 0; r < SSLM_WIDE_H; ++r)
-                    acc[r] += (int64_t)LayerScratchRows[r].Load<int>(in_base + (uint)i * 4u) * w;
+                    acc[r] = AddS64CarryExplicitGpu_(acc[r], (int64_t)LayerScratchRows[r].Load<int>(in_base + (uint)i * 4u) * w);
             }
         }
     }

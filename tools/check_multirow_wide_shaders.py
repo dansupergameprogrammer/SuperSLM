@@ -96,6 +96,12 @@ LITERAL_ALLOWLIST = {
         "128-bit arithmetic: 32-bit halves and 64-bit words",
     ("wide128.hlsli", 'r.lo = (v.lo >> (uint)k) | (v.hi << (uint)(64 - k));'):
         "128-bit arithmetic: 32-bit halves and 64-bit words",
+    ("proj_gemm_wide.hlsl", "uint lo_a = (uint)ua, hi_a = (uint)(ua >> 32);"):
+        "carry-explicit 64-bit add: the 32-bit halves of a 64-bit value",
+    ("proj_gemm_wide.hlsl", "uint lo_b = (uint)ub, hi_b = (uint)(ub >> 32);"):
+        "carry-explicit 64-bit add: the 32-bit halves of a 64-bit value",
+    ("proj_gemm_wide.hlsl", "return ((uint64_t)hi << 32) | (uint64_t)lo.x;"):
+        "carry-explicit 64-bit add: the 32-bit halves of a 64-bit value",
     ("context_accumulate_site_wide.hlsl", "uint off_ctx_shift = layer_base + Layout.Load<uint>(32 * 4);"):
         "Layout field index 32 (ctx shift table), not a lane count",
 }
