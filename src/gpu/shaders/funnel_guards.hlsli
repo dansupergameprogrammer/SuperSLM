@@ -49,11 +49,24 @@ bool CarriedScaleMantissaFitsInt32Gpu(int64_t m)
 }
 
 // intmath.cpp SaturatingAdd64 (also checked_chain_funnel.cpp:93-105, identical body).
+// The 64-bit add is written as two 32-bit halves with an explicit carry: NVIDIA's Blackwell
+// (SM 6.8) backend drops the low-to-high carry of a native 64-bit add in some optimized code
+// shapes (RTX 5060, drivers 32.0.16.1088 and .2101; correct at dxc -Od and on Turing).
+uint64_t Add64CarryExplicitGpu_(uint64_t ua, uint64_t ub)
+{
+    uint lo_a = (uint)ua, hi_a = (uint)(ua >> 32);
+    uint lo_b = (uint)ub, hi_b = (uint)(ub >> 32);
+    uint lo = lo_a + lo_b;
+    uint carry = (lo < lo_a) ? 1u : 0u;
+    uint hi = hi_a + hi_b + carry;
+    return ((uint64_t)hi << 32) | (uint64_t)lo;
+}
+
 int64_t SaturatingAdd64Gpu_(int64_t a, int64_t b)
 {
     uint64_t ua = (uint64_t)a;
     uint64_t ub = (uint64_t)b;
-    int64_t out_val = (int64_t)(ua + ub);
+    int64_t out_val = (int64_t)Add64CarryExplicitGpu_(ua, ub);
     bool overflow = ((a >= 0) == (b >= 0)) && ((out_val >= 0) != (a >= 0));
     if (!overflow) return out_val;
     return (a >= 0) ? 0x7FFFFFFFFFFFFFFFLL : (int64_t)0x8000000000000000ULL;
