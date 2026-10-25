@@ -22,10 +22,17 @@
 //         the whole span, walks the chain once (the walk equals 1.17's jump_forward(pending = t)'s) and closes equal to
 //         the one-row twin (t embedded unwalked, the chain walked row by row). Without the flag it admits nothing:
 //         SSLM_SEQUENCE_REJECTED, nothing written (MX16).
+// Ruling 18 (the MR4 code review):
+//   s1    S1 / E-9: a guard refusal at row j of a SCHEMA_FORCED chunk (j 0, j 3, M 1; dedicated and pooled) leaves the
+//         save blob equal to 1.17's schema-content bridge twin byte for byte, walk word included (MXK2, MXK2b).
+//   4.6j, 4.6e, 4.6f  S3: jump_forward, embed_schema_token, forced_tokens with a chunk open: SSLM_BUSY, nothing written,
+//         the chunk then closes equal to its twin (MXK3, MXK4, MXK5).
+//   2.3   M1: ruling 16's token range before the table, as an ordered pair (MXK1).
+//   n1    N1: last_rows_committed keeps its entry value across a jump (MXK6).
 // Verdicts: statuses, whole save blobs against the one-row twin in the same process, the walk state (the bench
 // bridge's G5 accessor), and 1.17's own verbs.
 //
-// Usage: mr4_cells.exe --fixtures=DIR [--cells=2.3,7.9,8.10] [--show=N]
+// Usage: mr4_cells.exe --fixtures=DIR [--cells=2.3,7.9,8.10,s1,4.6j,4.6e,4.6f,n1] [--show=N]
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -52,6 +59,10 @@ using mr2::World;
 constexpr S kTableAbsent = S::SSLM_GPU_FORCED_TABLE_ABSENT;
 constexpr S kCapStatus = S::SSLM_GPU_CONTEXT_CAP_EXCEEDED;
 constexpr S kArgStatus = S::SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+// The schema-content bridge (1.17), the S1 twin.
+inline S SchemaContent(SslmGpuContext* c, SslmGpuSequenceHandle* s, const int32_t* t, int32_t n, uint32_t b, int32_t* consumed) {
+	return SslmGpuSeqPrefillSchemaContentForG5Bridge(c, s, t, n, b, consumed);
+}
 
 struct Opt {
 	std::string fixtures;
@@ -282,6 +293,7 @@ void Cell23(Fsfd& fx) {
 		uint32_t flags;
 		int32_t count;        // rows in the spec (0: a bad spec)
 		S want;
+		bool oov = false;     // row 1 outside the vocabulary (ruling 16's ordered pair, review M1)
 	};
 	const std::vector<Z> zs = {
 	    {"bad spec (count 0) beats no table", "pkv_def", true, 0, false, 0, 0, kArgStatus},
@@ -289,6 +301,9 @@ void Cell23(Fsfd& fx) {
 	    {"no table beats no headroom", "pkv_def", true, 0, false, 0, 3, kTableAbsent},
 	    {"no table beats unbound", "pkv_def", false, -1, false, 0, 3, kTableAbsent},
 	    {"no table, bound, room", "pkv_def", true, -1, false, 0, 3, kTableAbsent},
+	    // Ruling 16 (review M1, MXK1): the token range before the table, as an ordered pair with the row above.
+	    {"token out of range beats no table", "pkv_def", true, -1, false, 0, 3, S::SSLM_TOKEN_ID_OUT_OF_RANGE, true},
+	    {"token out of range beats no table and no headroom", "pkv_def", true, 0, false, 0, 3, S::SSLM_TOKEN_ID_OUT_OF_RANGE, true},
 	    {"no headroom beats a wrong row 0", "fsfd", true, 0, false, 0, 3, kCapStatus},
 	    {"no headroom beats unbound", "fsfd", false, 0, false, 0, 3, kCapStatus},
 	    {"no headroom, matching rows", "fsfd", true, 0, true, 0, 3, kCapStatus},
@@ -333,6 +348,7 @@ void Cell23(Fsfd& fx) {
 				rows = {300, 301, 302};
 			}
 			rows.resize(static_cast<size_t>(std::max(z.count, 0)));
+			if (z.oov && rows.size() > 1) rows[1] = zm.vocab();  // one past the last id
 			const Obs before = Observe(w, s);
 			int32_t adm = -9;
 			SslmGpuRowsSpec spec{sizeof(SslmGpuRowsSpec), SSLM_GPU_ROWS_SCHEMA_FORCED, rows.empty() ? nullptr : rows.data(), z.count, z.flags};
@@ -523,6 +539,170 @@ void Cell79(Fsfd& rf) {
 	Check(!seen.empty(), "no produced-token pass with a refusing row was found");
 }
 
+// ------------------------------------------------------------------------------------------------ ruling 18 (MR4 review)
+// S1 (plan erratum E-9): after a guard refusal at row j of a SCHEMA_FORCED chunk the walk covers the committed rows
+// only (§3.5). The reference is 1.17's shipped schema path, the schema-content bridge, fed the same rows after the
+// same history: the save blob equals it byte for byte, the walk word included. j = 0, j = 3 and M = 1, dedicated
+// and pooled, on fsfd_refuse (the refusing row found on the one-row path). MXK2 and MXK2b (the walk over row j) go red.
+void CellS1(Fsfd& rf) {
+	const Model& m = rf.m;
+	int r = -1;
+	uint32_t stream = 0;
+	std::vector<int32_t> rows;
+	int32_t tok = -1;
+	for (uint32_t st = 1; st < 300 && r < 4; ++st) {
+		const int got = FirstRefusalRun(rf, st, false, &rows, &tok);
+		if (got >= 4 && got + 1 <= static_cast<int>(rows.size())) { r = got; stream = st; }
+	}
+	Check(r >= 4, "no prompt refuses first at chain row 4 or later (fsfd_refuse)");
+	if (r < 4) return;
+	std::printf("s1: stream %u refuses first at chain row %d (chain %zu)\n", stream, r, rows.size());
+	struct C { const char* name; int o, M; };
+	const std::vector<C> cs = {{"j = 3", r - 3, std::min<int>(8, static_cast<int>(rows.size()) - (r - 3))},
+	                           {"j = 0", r, std::min<int>(4, static_cast<int>(rows.size()) - r)},
+	                           {"M = 1", r, 1}};
+	for (int pooled = 0; pooled <= 1; ++pooled)
+		for (const C& c : cs) {
+			const std::string tag = F("%s %s (rows %d..%d, refusal at chain row %d)", pooled ? "pooled" : "dedicated", c.name, c.o, c.o + c.M - 1, r);
+			World w(m);
+			if (!w.ok) { Check(false, tag); continue; }
+			SslmGpuSequenceHandle* a = NewSeq(w, pooled != 0, 200, kLongKey);
+			SslmGpuSequenceHandle* t = NewSeq(w, pooled != 0, 200, kLongKey);
+			const std::vector<int32_t> p = Prompt(6, stream);
+			bool ok = PromptBridge(w, m, a, p) == S::SSLM_OK && PromptBridge(w, m, t, p) == S::SSLM_OK;
+			for (int i = 0; ok && i < c.o; ++i) ok = TwinForced(w, m, a, rows[i]) == S::SSLM_OK && TwinForced(w, m, t, rows[i]) == S::SSLM_OK;
+			if (!ok) { Check(false, tag + ": history"); continue; }
+			const std::vector<int32_t> span(rows.begin() + c.o, rows.begin() + c.o + c.M);
+			int32_t adm = -9;
+			StatusIs(EmbedRows(w, a, SSLM_GPU_ROWS_SCHEMA_FORCED, span, 0, &adm), S::SSLM_OK, tag + ": embed_rows");
+			Check(adm == c.M, F("%s: admitted %d of %d", tag.c_str(), adm, c.M));
+			StatusIs(CloseChunk(w, m, a), S::SSLM_SEQUENCE_REJECTED, tag + ": the chunk's close");
+			Check(LastCommitted(a) == r - c.o, F("%s: last_rows_committed %d, want %d", tag.c_str(), LastCommitted(a), r - c.o));
+			int32_t consumed = -9;
+			// The bridge's own 1.17 contract (TE266-Q5): a guard refusal is SSLM_DEVICE_LOST on this twin.
+			StatusIs(SchemaContent(w.ctx, t, span.data(), c.M, m.full_budget(), &consumed), S::SSLM_DEVICE_LOST, tag + ": the schema-content bridge twin");
+			Check(consumed == r - c.o, F("%s: the bridge twin consumed %d, want %d", tag.c_str(), consumed, r - c.o));
+			Check(Walk(a) == Walk(t), F("%s: walk %u, the schema-content bridge twin %u", tag.c_str(), Walk(a), Walk(t)));
+			const bool first_row = c.o == r && c.M > 1;
+			if (first_row) {
+				// At a refusal of its FIRST row the bridge leaves the residual and scale "unspecified" (gpu_1p0.h) and
+				// differs there (69 bytes); the chunk leaves row 0's refused state, as §4.3 requires. So: the residual
+				// is graded against the one-row twin (1.17's walked embed per row, the same one-layer slicing), and the
+				// bridge twin, given the chunk's residual, must equal the chunk byte for byte (the walk word included).
+				SslmGpuSequenceHandle* u = NewSeq(w, pooled != 0, 200, kLongKey);
+				bool uok = PromptBridge(w, m, u, p) == S::SSLM_OK;
+				for (int i = 0; uok && i < c.o; ++i) uok = TwinForced(w, m, u, rows[i]) == S::SSLM_OK;
+				Check(uok && TwinForced(w, m, u, rows[r]) == S::SSLM_SEQUENCE_REJECTED, tag + ": the one-row twin refuses the row");
+				const size_t H = SslmGpuSeqHandleHiddenSizeForBench(a);
+				Check(std::memcmp(SslmGpuSeqHandleHiddenCodesForBench(a), SslmGpuSeqHandleHiddenCodesForBench(u), H) == 0 &&
+				          std::memcmp(SslmGpuSeqHandleHiddenScaleForBench(a), SslmGpuSeqHandleHiddenScaleForBench(u), sizeof(superslm::CarriedScale)) == 0,
+				      tag + ": the residual or scale differs from the one-row twin's (§4.3)");
+				const superslm::CarriedScale la = SslmGpuSeqHandleLiveStateForBench(a)->hidden_scale,
+				                             lu = SslmGpuSeqHandleLiveStateForBench(u)->hidden_scale;
+				Check(la.m == lu.m && la.e == lu.e, tag + ": the saved (live) scale differs from the one-row twin's (§4.3)");
+				// The save writes the live state's scale (SLM5 bytes 8..23): both copies of the scale go across.
+				std::memcpy(SslmGpuSeqHandleHiddenCodesForBench(t), SslmGpuSeqHandleHiddenCodesForBench(a), H);
+				*SslmGpuSeqHandleHiddenScaleForBench(t) = *SslmGpuSeqHandleHiddenScaleForBench(a);
+				SslmGpuSeqHandleLiveStateForBench(t)->hidden_scale = la;
+			}
+			const std::vector<uint8_t> ba = Blob(w, a, tag), bt = Blob(w, t, tag);
+			BlobEq(ba, bt, tag + (first_row ? " vs 1.17's schema-content bridge twin (the residual from the chunk)" : " vs 1.17's schema-content bridge twin"));
+			if (std::getenv("MR4_S1_DIFF")) {
+				std::string offs;
+				for (size_t i = 0; i < std::min(ba.size(), bt.size()); ++i)
+					if (ba[i] != bt[i] && offs.size() < 600) offs += F(" %zu:%02x/%02x", i, ba[i], bt[i]);
+				std::printf("s1 diff %s:%s | layer %u/%u ctx %lld/%lld ready %d/%d\n", tag.c_str(), offs.c_str(), LayerIdx(a), LayerIdx(t),
+				            (long long)CtxLen(a), (long long)CtxLen(t), ReadyFlag(w, a), ReadyFlag(w, t));
+			}
+		}
+}
+
+// S3: §4.6's R-17 rows. With a chunk open (at layer 0 and at a mid layer, dedicated and pooled), jump_forward,
+// embed_schema_token and forced_tokens each return SSLM_BUSY and write nothing: the handle (blob, walk, layer,
+// ready, rows_open, context, mapped pages) and the out parameters. The chunk then closes equal to a twin that never
+// made the call. MXK3, MXK4 and MXK5 (each guard removed) go red in their cell.
+void CellS3(Fsfd& fx, int verb) {
+	const Model& m = fx.m;
+	static const char* kVerb[3] = {"jump_forward", "embed_schema_token", "forced_tokens"};
+	for (int pooled = 0; pooled <= 1; ++pooled)
+		for (int mid = 0; mid <= 1; ++mid) {
+			const std::string tag = F("%s %s, chunk open at %s", kVerb[verb], pooled ? "pooled" : "dedicated", mid ? "a mid layer" : "layer 0");
+			World w(m);
+			if (!w.ok) { Check(false, tag); continue; }
+			SslmGpuSequenceHandle* a = NewSeq(w, pooled != 0, 200, kLongKey);
+			SslmGpuSequenceHandle* t = NewSeq(w, pooled != 0, 200, kLongKey);
+			const std::vector<int32_t> p = Prompt(12, 5);
+			Check(PromptBridge(w, m, a, p) == S::SSLM_OK && PromptBridge(w, m, t, p) == S::SSLM_OK, tag + ": prompt");
+			const std::vector<int32_t> chain = Chain(w, a);
+			if (chain.size() < 5) { Check(false, tag + ": chain"); continue; }
+			const std::vector<int32_t> span(chain.begin(), chain.begin() + 3);
+			int32_t adm = -9, adm2 = -9;
+			Check(EmbedRows(w, a, SSLM_GPU_ROWS_SCHEMA_FORCED, span, 0, &adm) == S::SSLM_OK && adm == 3 &&
+			          EmbedRows(w, t, SSLM_GPU_ROWS_SCHEMA_FORCED, span, 0, &adm2) == S::SSLM_OK && adm2 == 3,
+			      tag + ": open the chunks");
+			if (mid) Check(mr2::Slice(w, a, m.dpl()) == S::SSLM_OK && mr2::Slice(w, t, m.dpl()) == S::SSLM_OK, tag + ": one layer");
+			// With the chunk open the save is refused (CHUNK_OPEN), so the observation is everything but the blob;
+			// the closed blob is compared below.
+			auto observe_open = [&]() {
+				Obs o;
+				std::vector<uint8_t> b;
+				S sv = S::SSLM_OK;
+				mr2::Save(w, a, &b, &sv);
+				Check(sv == S::SSLM_GPU_ROWS_CHUNK_OPEN, F("%s: save with the chunk open returned %s", tag.c_str(), N(sv)));
+				o.walk = Walk(a);
+				o.layer = LayerIdx(a);
+				o.ready = ReadyFlag(w, a);
+				o.ctx = CtxLen(a);
+				sslm_gpu_seq_rows_open(a, &o.open);
+				uint32_t page = 0;
+				(void)sslm_gpu_test_only_seq_table_entry(a, 0, &page, &o.mapped);
+				return o;
+			};
+			const Obs before = observe_open();
+			std::vector<int32_t> out(64, -7);
+			int32_t n = -9, acc = -9;
+			S st = S::SSLM_OK;
+			if (verb == 0) st = sslm_gpu_seq_jump_forward(w.ctx, a, -1, 8, nullptr, out.data(), 64, &n);
+			else if (verb == 1) st = sslm_gpu_seq_embed_schema_token(w.ctx, a, chain[3]);
+			else st = sslm_gpu_seq_forced_tokens(w.ctx, a, out.data(), 64, &n, &acc);
+			StatusIs(st, S::SSLM_BUSY, tag);
+			Check(n == -9 && acc == -9 && std::all_of(out.begin(), out.end(), [](int32_t v) { return v == -7; }),
+			      F("%s: an out parameter was written (count %d, accepting %d)", tag.c_str(), n, acc));
+			const Obs after = observe_open();
+			Check(after == before, F("%s: changed the handle (before %s; after %s)", tag.c_str(), before.Str().c_str(), after.Str().c_str()));
+			StatusIs(CloseChunk(w, m, a), S::SSLM_OK, tag + ": the close after it");
+			StatusIs(CloseChunk(w, m, t), S::SSLM_OK, tag + ": the twin's close");
+			Check(Walk(a) == Walk(t), F("%s: walk %u, twin %u", tag.c_str(), Walk(a), Walk(t)));
+			BlobEq(Blob(w, a, tag), Blob(w, t, tag), tag + ": closed, vs a twin that never made the call");
+		}
+}
+
+// N1: last_rows_committed keeps its entry value across a jump (the verb's passes are internal; LastRowsKeep): after a
+// prompt (0) and after a 3-row SCHEMA_FORCED close (3), a jump of 8 rows leaves it there. MXK6 goes red.
+void CellN1(Fsfd& fx) {
+	const Model& m = fx.m;
+	for (int pooled = 0; pooled <= 1; ++pooled)
+		for (int entry_rows = 0; entry_rows <= 3; entry_rows += 3) {
+			const std::string tag = F("%s, last_rows_committed %d at entry", pooled ? "pooled" : "dedicated", entry_rows);
+			World w(m);
+			if (!w.ok) { Check(false, tag); continue; }
+			SslmGpuSequenceHandle* a = NewSeq(w, pooled != 0, 200, kLongKey);
+			Check(PromptBridge(w, m, a, Prompt(12, 6)) == S::SSLM_OK, tag + ": prompt");
+			if (entry_rows) {
+				const std::vector<int32_t> chain = Chain(w, a);
+				int32_t adm = -9;
+				Check(chain.size() >= 3 && EmbedRows(w, a, SSLM_GPU_ROWS_SCHEMA_FORCED, {chain[0], chain[1], chain[2]}, 0, &adm) == S::SSLM_OK &&
+				          CloseChunk(w, m, a) == S::SSLM_OK, tag + ": the 3-row close");
+			}
+			Check(LastCommitted(a) == entry_rows, F("%s: %d before the jump", tag.c_str(), LastCommitted(a)));
+			std::vector<int32_t> out(64);
+			int32_t n = -9;
+			StatusIs(sslm_gpu_seq_jump_forward(w.ctx, a, -1, 8, nullptr, out.data(), 64, &n), S::SSLM_OK, tag + ": the jump");
+			Check(n >= 5, F("%s: the jump admitted %d rows (want a multi-pass jump of 5 or more)", tag.c_str(), n));
+			Check(LastCommitted(a) == entry_rows, F("%s: last_rows_committed %d after a jump of %d rows, want %d (its entry value)", tag.c_str(), LastCommitted(a), n, entry_rows));
+		}
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -546,6 +726,11 @@ int main(int argc, char** argv) {
 	    {"2.3", [&] { Cell23(fx); }},
 	    {"8.10", [&] { Cell810(fx); }},
 	    {"7.9", [&] { if (rf.Load("fsfd_refuse.sslm")) Cell79(rf); else { g_cell = "7.9"; Check(false, "fsfd_refuse.sslm did not load"); } }},
+	    {"s1", [&] { if (rf.ok || rf.Load("fsfd_refuse.sslm")) CellS1(rf); else Check(false, "fsfd_refuse.sslm did not load"); }},
+	    {"4.6j", [&] { CellS3(fx, 0); }},
+	    {"4.6e", [&] { CellS3(fx, 1); }},
+	    {"4.6f", [&] { CellS3(fx, 2); }},
+	    {"n1", [&] { CellN1(fx); }},
 	};
 	bool all = true;
 	for (auto& c : cells) {
