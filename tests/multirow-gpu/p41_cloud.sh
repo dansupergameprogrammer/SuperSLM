@@ -23,6 +23,8 @@
 #   pkvg        (opt-in) the paged-KV GPU suite's step-G5 runner (tests/paged-kv-gpu, pkvg_g5) over
 #               tools/gen_paged_kv_fixture.py's fixtures (pkv_def, pkv_qk, ...), real-artifact cells skipped; exit 0.
 #
+#               And its total check count equals the base tag's own superslm_tests, built the same way from a
+#               detached worktree (<out>/base-tree) and run in the same session: a silent drop is red.
 # Build notes: mingw-w64 11's d3d12.h lacks an enumerator the engine uses, so compiles go through
 # tests/multirow-gpu/mingw_cxx.sh (force-includes mingw_d3d12_compat.h). wine_gpu.sh's own `build` source
 # list predates tests/test_schema_fast_decode.cpp and no longer links; this script does not use it.
@@ -76,31 +78,66 @@ if want unmodified; then
 	if [ $ok = 1 ]; then echo "PASS unmodified"; else echo "FAIL unmodified"; FAILED+=(unmodified); fi
 fi
 
+# shaders ROOT DIR: ROOT's src/gpu/shaders compiled into DIR/shaders, plus the vkd3d-proton DLLs into DIR.
 shaders() {
-	for f in src/gpu/shaders/*.hlsl; do
-		local o="$OUT/shaders/$(basename "$f" .hlsl).cso"
-		if [ ! -f "$o" ] || [ "$f" -nt "$o" ] || [ -n "$(find src/gpu/shaders -name '*.hlsli' -newer "$o")" ]; then
+	local root="$1" dir="$2"; mkdir -p "$dir/shaders"
+	for f in "$root"/src/gpu/shaders/*.hlsl; do
+		local o="$dir/shaders/$(basename "$f" .hlsl).cso"
+		if [ ! -f "$o" ] || [ "$f" -nt "$o" ] || [ -n "$(find "$root/src/gpu/shaders" -name '*.hlsli' -newer "$o")" ]; then
 			"$DXC" -T cs_6_2 -E main -Fo "$o" "$f" -O3 -HV 2018 -WX >/dev/null
 		fi
 	done
-	cp "$VKP_DIR/d3d12.dll" "$VKP_DIR/d3d12core.dll" "$OUT/"
+	cp "$VKP_DIR/d3d12.dll" "$VKP_DIR/d3d12core.dll" "$dir/"
 }
 
-if want tests; then
-	echo "== P4.1 tests: superslm_tests.exe from build.bat's command"
-	PARSED="$(python3 -I "$HERE/p41_parse_build_bat.py" build.bat)"
-	SRCS_BAT="$(sed -n 1p <<<"$PARSED")"; DEFS_BAT="$(sed -n 2p <<<"$PARSED")"; INCS_BAT="$(sed -n 3p <<<"$PARSED")"
-	FLAGS="-std=c++20 -O2 $INCS_BAT $DEFS_BAT -DNOMINMAX -DWIN32_LEAN_AND_MEAN -include d3d12.h -include d3d12sdklayers.h"
-	shaders
-	OBJ="$OUT/obj/tests"; mkdir -p "$OBJ"
+# build_tests ROOT DIR: superslm_tests.exe from ROOT's own build.bat command (sources, /D, /I), built in ROOT
+# into DIR. Same flags, compiler and link line for the branch and for the base tag: one build config.
+build_tests() {
+	local root="$1" dir="$2" parsed srcs defs incs flags obj
+	parsed="$(python3 -I "$HERE/p41_parse_build_bat.py" "$root/build.bat")"
+	srcs="$(sed -n 1p <<<"$parsed")"; defs="$(sed -n 2p <<<"$parsed")"; incs="$(sed -n 3p <<<"$parsed")"
+	flags="-std=c++20 -O2 $incs $defs -DNOMINMAX -DWIN32_LEAN_AND_MEAN -include d3d12.h -include d3d12sdklayers.h"
+	shaders "$root" "$dir"
+	obj="$dir/obj/tests"; mkdir -p "$obj"
 	# shellcheck disable=SC2086
-	if ! printf '%s\n' $SRCS_BAT | xargs -P "$JOBS" -I{} bash -c \
-		'o="$1/$(echo "$2" | tr / _).o"; [ "$o" -nt "$2" ] && exit 0; '"$CXX $FLAGS"' -w -c "$2" -o "$o" || { echo "COMPILE FAILED: $2"; exit 1; }' _ "$OBJ" {}; then
-		FAILED+=(tests-compile)
-	elif ! "$CXX" -O2 "$OBJ"/*.o -o "$OUT/superslm_tests.exe" -ld3d12 -ldxgi -ldxguid -lshlwapi -lpsapi \
-		-static -static-libgcc -static-libstdc++ >"$OUT/superslm_tests.link.log" 2>&1; then
-		echo "FAIL tests: link (see $OUT/superslm_tests.link.log)"; sed -n '1,20p' "$OUT/superslm_tests.link.log"
-		FAILED+=(tests-link)
+	(cd "$root" && printf '%s\n' $srcs | xargs -P "$JOBS" -I{} bash -c \
+		'o="$1/$(echo "$2" | tr / _).o"; [ "$o" -nt "$2" ] && exit 0; '"$CXX $flags"' -w -c "$2" -o "$o" || { echo "COMPILE FAILED: $2"; exit 1; }' _ "$obj" {}) \
+		|| { echo "FAIL tests: compile in $root"; return 1; }
+	"$CXX" -O2 "$obj"/*.o -o "$dir/superslm_tests.exe" -ld3d12 -ldxgi -ldxguid -lshlwapi -lpsapi \
+		-static -static-libgcc -static-libstdc++ >"$dir/superslm_tests.link.log" 2>&1 \
+		|| { echo "FAIL tests: link (see $dir/superslm_tests.link.log)"; sed -n '1,20p' "$dir/superslm_tests.link.log"; return 1; }
+}
+
+# run_tests ROOT DIR: DIR/superslm_tests.exe under Wine from ROOT (the shader staleness check walks up to
+# ROOT/src/gpu/shaders), with the CI fixtures; log in DIR/superslm_tests.log.
+run_tests() {
+	local root="$1" dir="$2"
+	start_xvfb; wine_env
+	set +e
+	(cd "$root" && "$WINE" "$dir/superslm_tests.exe" >"$dir/superslm_tests.log" 2>&1)
+	local rc=$?
+	set -e
+	tail -3 "$dir/superslm_tests.log" | sed 's/^/    /'
+	return $rc
+}
+total_checks() { sed -n 's/^superslm tests: \([0-9]*\) checks.*/\1/p' "$1" | tail -1; }
+
+if want tests; then
+	echo "== P4.1 tests: superslm_tests.exe from build.bat's command, on the branch and on $BASE"
+	# The base tag's own suite, built the same way from a detached worktree of $BASE and run in the same session:
+	# its total check count is the pin. The suite's count depends on the host (the sha256 hardware-path cells run
+	# only where the CPU has the SHA extensions), so a count pinned in a file would go red on a host change and
+	# green on a real drop that happened to coincide with one; the tag measured here, now, cannot.
+	BT="$OUT/base-tree"
+	if [ ! -d "$BT/src" ]; then
+		git worktree remove --force "$BT" 2>/dev/null || rm -rf "$BT"
+		git worktree add --detach "$BT" "$BASE" >/dev/null
+	fi
+	[ "$(git -C "$BT" rev-parse HEAD)" = "$(git rev-parse "$BASE^{commit}")" ] || { echo "FAIL tests: $BT is not $BASE"; exit 1; }
+	if ! build_tests "$REPO" "$OUT"; then
+		FAILED+=(tests-build)
+	elif ! build_tests "$BT" "$BT/out/mr-p41"; then
+		FAILED+=(tests-base-build)
 	elif [ "$RUN" = 1 ]; then
 		# The fixtures CI points the suite at (.github/workflows/tests.yml): generated, never committed.
 		FIX="$OUT/fixtures"; mkdir -p "$FIX/dt" "$FIX/sfd"
@@ -109,24 +146,33 @@ if want tests; then
 		[ -n "$(ls "$FIX/sfd")" ] || python3 tools/gen_schema_fast_decode_fixture.py "$FIX/sfd" >/dev/null
 		export SUPERSLM_PAGED_KV_FIXTURE_DIR="$FIX" SUPERSLM_DECODE_THREADING_FIXTURE_DIR="$FIX/dt" \
 			SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR="$FIX/sfd"
-		start_xvfb; wine_env
-		set +e
-		"$WINE" "$OUT/superslm_tests.exe" >"$OUT/superslm_tests.log" 2>&1
-		rc=$?
-		set -e
-		tail -5 "$OUT/superslm_tests.log" | sed 's/^/    /'
+		echo "   branch:"; rc=0; run_tests "$REPO" "$OUT" || rc=$?
+		echo "   $BASE:"; brc=0; run_tests "$BT" "$BT/out/mr-p41" || brc=$?
+		LOG="$OUT/superslm_tests.log"; BLOG="$BT/out/mr-p41/superslm_tests.log"
+		N="$(total_checks "$LOG")"; BN="$(total_checks "$BLOG")"
 		# Ruling 2 (rulings-mr1.md): no failure beyond the base tag's own under Wine. The baseline file pins the
 		# base tag's three sfd_cells_x failure lines (1.X4, 5.X4, 11.X3) verbatim; any other FAIL line, a changed
 		# or missing baseline line, or a run that did not reach its totals line is red.
 		BASELINE="$HERE/p41_wine_baseline_v1.15.0.txt"
-		grep "^FAIL" "$OUT/superslm_tests.log" >"$OUT/superslm_tests.failures" || true
-		if ! grep -q "^superslm tests: [0-9]* checks" "$OUT/superslm_tests.log"; then
-			echo "FAIL tests: the run did not reach its totals line (exit $rc, log $OUT/superslm_tests.log)"; FAILED+=(tests)
-		elif diff -u "$BASELINE" "$OUT/superslm_tests.failures" >"$OUT/superslm_tests.failures.diff"; then
-			echo "PASS tests (exit $rc; failures are exactly the base tag's $(wc -l <"$BASELINE") pinned sfd_cells_x lines)"
+		grep "^FAIL" "$LOG" >"$OUT/superslm_tests.failures" || true
+		ok=1
+		if [ -z "$N" ]; then
+			echo "FAIL tests: the branch run did not reach its totals line (exit $rc, log $LOG)"; ok=0
+		elif [ -z "$BN" ]; then
+			echo "FAIL tests: the $BASE run did not reach its totals line (exit $brc, log $BLOG)"; ok=0
 		else
-			echo "FAIL tests: failures differ from the base tag's pinned set ($OUT/superslm_tests.failures.diff):"
-			sed -n '3,30p' "$OUT/superslm_tests.failures.diff" | sed 's/^/    /'
+			if ! diff -u "$BASELINE" "$OUT/superslm_tests.failures" >"$OUT/superslm_tests.failures.diff"; then
+				echo "FAIL tests: failures differ from the base tag's pinned set ($OUT/superslm_tests.failures.diff):"
+				sed -n '3,30p' "$OUT/superslm_tests.failures.diff" | sed 's/^/    /'; ok=0
+			fi
+			# A silent drop (a suite skipped, a cell gone) is red: the branch runs every check the tag runs here.
+			if [ "$N" != "$BN" ]; then
+				echo "FAIL tests: the branch ran $N checks, $BASE ran $BN under the same build and host"; ok=0
+			fi
+		fi
+		if [ $ok = 1 ]; then
+			echo "PASS tests (exit $rc; $N checks = $BASE's $BN on this host; failures are exactly the base tag's $(wc -l <"$BASELINE") pinned sfd_cells_x lines)"
+		else
 			FAILED+=(tests)
 		fi
 	fi
