@@ -311,10 +311,6 @@ enum class SslmGpuStatus : uint32_t {
      * dedicated sequence has before its context cap. The rows that fit are committed (h of them, h = 0
      * included, when nothing changes); the call's comment gives the resting state. */
     SSLM_GPU_CONTEXT_CAP_EXCEEDED,
-    /* BRANCH-PROVISIONAL (multi-row GPU passes, unreleased; this ordinal is not stable). sslm_gpu_seq_embed_rows
-     * found no context headroom: the sequence is at its context cap, so not one row is admitted. Nothing
-     * changes. Becomes 1.17's context-cap status when the branch rebases onto 1.17.0. */
-    SSLM_GPU_ROWS_CAP_EXCEEDED,
     /* BRANCH-PROVISIONAL (multi-row GPU passes, unreleased; this ordinal is not stable). sslm_gpu_seq_save on
      * a sequence with an open row chunk (sslm_gpu_seq_embed_rows): nothing is written. Close the chunk (finish
      * its layers, or sslm_gpu_seq_rows_abandon) and save again. Takes the next free ordinal at release. */
@@ -634,7 +630,7 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
  * A larger `struct_size` is accepted and the bytes past sizeof(SslmGpuRowsSpec) are never read.
  * Admission: `*out_admitted` receives the longest admitted prefix of the tokens, capped by the
  * context's headroom and, for a budgeted (pooled) sequence, by its budget limit. When nothing fits,
- * the call refuses with the cap's status and writes nothing: SSLM_GPU_ROWS_CAP_EXCEEDED at the context
+ * the call refuses with the cap's status and writes nothing: SSLM_GPU_CONTEXT_CAP_EXCEEDED at the context
  * cap, SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below the cap.
  * Effects: the sequence's ready-for-logits state is cleared (an abandon or failure restores it); its
  * schema binding and walk state are untouched. A count of 1 behaves exactly as sslm_gpu_seq_embed_token
@@ -677,7 +673,9 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
  * sslm_gpu_seq_bind_adapter, sslm_gpu_seq_adopt_prefix and every G5 bridge entry point
  * (SslmGpuSeqSetSchemaForG5Bridge, SslmGpuSeqPrefillPromptForG5Bridge,
  * SslmGpuSeqPrefillSchemaContentForG5Bridge, SslmGpuSeqFinishTokenForG5Bridge,
- * SslmGpuSeqDecodeStepForG5Bridge) return SSLM_BUSY with nothing changed. sslm_gpu_seq_save returns
+ * SslmGpuSeqDecodeStepForG5Bridge), and 1.17's sslm_gpu_seq_jump_forward, sslm_gpu_seq_embed_schema_token and
+ * sslm_gpu_seq_forced_tokens (the walk the chunk will advance is not at rest), return SSLM_BUSY with nothing
+ * changed; sslm_gpu_seq_ready_for_logits is admitted. sslm_gpu_seq_save returns
  * SSLM_GPU_ROWS_CHUNK_OPEN with nothing written (it succeeds again once the chunk closes).
  * sslm_gpu_seq_read_prefill_final_hidden is admitted and returns the snapshot unchanged.
  * sslm_gpu_seq_reset closes the chunk (the handle then equals a freshly reset one), and

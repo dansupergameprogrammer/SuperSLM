@@ -26,7 +26,7 @@
 //            SSLM_BATCH_BUDGET_EXHAUSTED and its chunk is unchanged; the next call carries it to full depth, and
 //            every member equals its twin (fed at the whole depth per call);
 //   statuses save with a chunk open (SSLM_GPU_ROWS_CHUNK_OPEN, the buffer and size untouched), admission capped by
-//            the context's headroom, and SSLM_GPU_ROWS_CAP_EXCEEDED at the cap with nothing written.
+//            the context's headroom, and SSLM_GPU_CONTEXT_CAP_EXCEEDED at the cap with nothing written.
 //
 // --refusal-only runs just the refusal cases (with --rope-positions the clean grid's later rows would refuse too).
 //
@@ -442,7 +442,7 @@ void StatusCase(const Env& e, bool pooled) {
 	admitted = -7;
 	const SslmGpuStatus cap = sslm_gpu_seq_embed_rows(e.ctx, p.chunk, &spec, &admitted);
 	// A pooled sequence's budget (32) is below the model's cap: its limit binds, with the budget's status.
-	const SslmGpuStatus want = pooled ? SSLM_GPU_KV_BUDGET_EXCEEDED : SSLM_GPU_ROWS_CAP_EXCEEDED;
+	const SslmGpuStatus want = pooled ? SSLM_GPU_KV_BUDGET_EXCEEDED : SSLM_GPU_CONTEXT_CAP_EXCEEDED;
 	if (cap != want || admitted != -7 || !Save(e, p.chunk, &after) || FirstDiff(before, after) >= 0) {
 		std::snprintf(why, sizeof why, "at the cap -> %d, admitted %d", static_cast<int>(cap), admitted);
 		return Report(false, name, why);

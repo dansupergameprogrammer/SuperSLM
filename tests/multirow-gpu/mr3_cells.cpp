@@ -133,7 +133,7 @@ std::string F(const char* fmt, ...) {
 	return b;
 }
 const char* N(S s) {
-	if (s == MR3_CAP_STATUS) return "CAP(provisional)";
+	if (s == MR3_CAP_STATUS) return "CONTEXT_CAP";
 	if (s == MR3_CHUNK_OPEN_STATUS) return "CHUNK_OPEN(provisional)";
 	static thread_local char buf[8][24];
 	static thread_local int at = 0;

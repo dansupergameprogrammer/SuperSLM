@@ -20,9 +20,9 @@ static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_RESTORE_PRODUCER_MISMATC
 // Schema skip-ahead on the GPU (1.17.0, unreleased): the two statuses appended after it.
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_FORCED_TABLE_ABSENT) == 31);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_CONTEXT_CAP_EXCEEDED) == 32);
-// Multi-row GPU (branch-provisional, plan §3.7 and errata E-2): the cap and chunk-open refusals, appended last.
-static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_ROWS_CAP_EXCEEDED) == 33);
-static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_ROWS_CHUNK_OPEN) == 34);
+// Multi-row GPU (branch-provisional, plan §3.7 and errata E-2): the chunk-open refusal, appended last (R-17: the cap
+// refusal is 1.17's SSLM_GPU_CONTEXT_CAP_EXCEEDED).
+static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_ROWS_CHUNK_OPEN) == 33);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_SHADER_DIR_INVALID) == 19);
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_SHADER_DIR_CONFLICT) == 20);
 
@@ -62,7 +62,6 @@ constexpr bool AllNamed(SslmGpuStatus status) {
         case SslmGpuStatus::SSLM_RESTORE_PRODUCER_MISMATCH:
         case SslmGpuStatus::SSLM_GPU_FORCED_TABLE_ABSENT:
         case SslmGpuStatus::SSLM_GPU_CONTEXT_CAP_EXCEEDED:
-        case SslmGpuStatus::SSLM_GPU_ROWS_CAP_EXCEEDED:
         case SslmGpuStatus::SSLM_GPU_ROWS_CHUNK_OPEN:
             return true;
     }

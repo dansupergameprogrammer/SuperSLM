@@ -4147,6 +4147,7 @@ SslmGpuStatus sslm_gpu_seq_forced_tokensImpl(SslmGpuContext* ctx, SslmGpuSequenc
 	SeqDecodeClaim claim(seq);
 	if (!claim.held()) return SSLM_BUSY;
 	if (seq->state() == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
+	if (RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6 (R-17): the walk the chunk will advance is not at rest
 	if (seq->bound_schema_index < 0) {
 		*out_count = 0;
 		*out_accepting = 0;
@@ -5491,6 +5492,7 @@ SslmGpuStatus sslm_gpu_seq_jump_forwardImpl(SslmGpuContext* ctx, SslmGpuSequence
 	const SeqDecodeClaim claim(seq);
 	if (!claim.held()) return SSLM_BUSY;
 	if (seq->state() == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
+	if (RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6 (R-17): a chunk is open
 	// (6) The entry shape (§7.3's table).
 	const uint32_t L = model->num_hidden_layers;
 	const bool ready_shape = seq->ready_for_logits || seq->layer_index == L;  // ready, or the primed row (G30)
@@ -5624,6 +5626,7 @@ SslmGpuStatus sslm_gpu_seq_embed_schema_tokenImpl(SslmGpuContext* ctx, SslmGpuSe
 	const SeqDecodeClaim claim(seq);
 	if (!claim.held()) return SSLM_BUSY;
 	if (seq->state() == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
+	if (RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6 (R-17): a chunk is open
 	SslmGpuModelHandle* model = seq->model;
 	if (token < 0 || token >= model->vocab_size) return SSLM_TOKEN_ID_OUT_OF_RANGE;
 	if (seq->bound_schema_index < 0) return SSLM_SEQUENCE_REJECTED;
@@ -7988,14 +7991,14 @@ SslmGpuStatus sslm_gpu_seq_embed_rowsImpl(SslmGpuContext* ctx, SslmGpuSequenceHa
 		if (spec->tokens[r] < 0 || spec->tokens[r] >= model->vocab_size) return SSLM_TOKEN_ID_OUT_OF_RANGE;
 	}
 	// Admission: the longest prefix within the context's headroom and, pooled, the budget limit. Zero admitted
-	// returns the cap's status: §3.7's branch-provisional SSLM_GPU_ROWS_CAP_EXCEEDED at the cap (1.17's
-	// context-cap status after R-17), SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below it.
+	// returns the cap's status: 1.17's SSLM_GPU_CONTEXT_CAP_EXCEEDED at the cap (plan §3.7, R-17),
+	// SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below it, as sslm_gpu_seq_jump_forward does.
 	const int64_t p0 = seq->context_length;
 	const int64_t headroom = seq->context_cap - p0;
 	const int64_t limit_room =
 	    (seq->pool != nullptr && seq->limit < seq->context_cap) ? seq->limit - p0 : std::numeric_limits<int64_t>::max();
 	const int64_t admitted = std::max<int64_t>(0, std::min<int64_t>({spec->count, headroom, limit_room}));
-	if (admitted == 0) return headroom <= 0 ? SSLM_GPU_ROWS_CAP_EXCEEDED : SSLM_GPU_KV_BUDGET_EXCEEDED;
+	if (admitted == 0) return headroom <= 0 ? SSLM_GPU_CONTEXT_CAP_EXCEEDED : SSLM_GPU_KV_BUDGET_EXCEEDED;
 	const uint32_t M = static_cast<uint32_t>(admitted);
 
 	auto chunk = std::make_unique<GpuRowsChunk>();

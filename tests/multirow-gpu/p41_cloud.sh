@@ -72,13 +72,15 @@ mkdir -p "$OUT/shaders" "$OUT/obj"
 FAILED=()
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 ORD_CELLS=(tests/t2791-gpu-prefill-read-red-suite/cell_status_ordinals.cpp tests/t2956-token-finish-red-suite/cell_status_ordinals.cpp)
+# Errata E-3 (R-17): 1.17's G0.2 status-mirror checker admits the branch-provisional status after 31 and 32.
+E3_FILE=tests/schema-fast-decode-gpu/check_gpu_status_mirrors.py
 
 if want unmodified; then
 	echo "== P4.1 unmodified: the suite's sources and build.bat's superslm_tests command against $BASE"
 	ok=1
-	if ! git diff --quiet "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}"; then
+	if ! git diff --quiet "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}" ":(exclude)$E3_FILE"; then
 		echo "    tests/ outside tests/multirow-gpu differs from $BASE:"
-		git diff --stat "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}" | sed 's/^/        /'
+		git diff --stat "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}" ":(exclude)$E3_FILE" | sed 's/^/        /'
 		ok=0
 	fi
 	# The ordinal cells may only gain the appended statuses: every pin and case line of the tag's copy stays.
@@ -215,8 +217,14 @@ if want tests; then
 		# Ruling 2 (rulings-mr1.md): no failure beyond the base tag's own under Wine. The baseline file pins the
 		# base tag's three sfd_cells_x failure lines (1.X4, 5.X4, 11.X3) verbatim; any other FAIL line, a changed
 		# or missing baseline line, or a run that did not reach its totals line is red.
-		BASELINE="$HERE/p41_wine_baseline_v1.15.0.txt"
+		# The pin is per base (R-17: the base is 1.17's branch head until 1.17.0 is tagged); with none committed
+		# for this base, the base run's own FAIL lines are written as the pin (commit it), as P4.2 does.
+		BASELINE="$HERE/p41_wine_baseline_$BASE.txt"
 		grep "^FAIL" "$LOG" >"$OUT/superslm_tests.failures" || true
+		if [ ! -f "$BASELINE" ] && [ -n "$BN" ]; then
+			echo "   no pin $BASELINE; writing it from $BASE's run (commit it)"
+			grep "^FAIL" "$BLOG" >"$BASELINE" || true
+		fi
 		ok=1
 		if [ -z "$N" ]; then
 			echo "FAIL tests: the branch run did not reach its totals line (exit $rc, log $LOG)"; ok=0

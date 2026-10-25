@@ -64,8 +64,12 @@ def states_ordinal(text: str, name: str, value: int) -> bool:
 def main() -> int:
     names = gpu_enumerators()
     failures = []
-    if names[-len(NEW) - 1:] != [LAST, *NEW]:
-        failures.append(f"include/superslm/gpu_1p0.h: the enum ends {names[-3:]}, want {[LAST, *NEW]}")
+    # Multi-row GPU plan errata E-2 (extended at R-17): a branch-provisional status may be appended after the two;
+    # they must sit immediately after SSLM_RESTORE_PRODUCER_MISMATCH, at 31 and 32.
+    at = names.index(LAST) if LAST in names else -1
+    if at < 0 or names[at:at + len(NEW) + 1] != [LAST, *NEW]:
+        failures.append(f"include/superslm/gpu_1p0.h: {[LAST, *NEW]} are not consecutive at 30..32: "
+                        f"{names[at:at + len(NEW) + 1] if at >= 0 else names[-3:]}")
     mirrors = []
     for path in sorted(ROOT.rglob("*")):
         rel = path.relative_to(ROOT).as_posix()

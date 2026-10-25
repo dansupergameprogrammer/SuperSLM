@@ -443,7 +443,7 @@ do {
   It admits the longest prefix of the tokens that fits the context's
   headroom and, for a budgeted sequence, its budget limit, and reports that
   count in `*out_admitted`. When nothing fits, it returns
-  `SSLM_GPU_ROWS_CAP_EXCEEDED` at the context cap, or
+  `SSLM_GPU_CONTEXT_CAP_EXCEEDED` at the context cap, or
   `SSLM_GPU_KV_BUDGET_EXCEEDED` at a budget limit below the cap. A sequence
   that is Submitted, mid-token, or already has a chunk open returns
   `SSLM_BUSY`. A bad spec returns `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`: a null
@@ -474,7 +474,10 @@ do {
   closes the chunk. `sslm_gpu_seq_rows_abandon` does the same on request,
   and returns `SSLM_OK` with no change when no chunk is open.
 - **Other verbs while a chunk is open.** Token embedding, adapter binding,
-  prefix adoption and every schema/prefill bridge return `SSLM_BUSY`.
+  prefix adoption, every schema/prefill bridge, `sslm_gpu_seq_jump_forward`,
+  `sslm_gpu_seq_embed_schema_token` and `sslm_gpu_seq_forced_tokens` return
+  `SSLM_BUSY` (the forced-text query because the walk the chunk will advance
+  is not at rest). `sslm_gpu_seq_ready_for_logits` is allowed.
   `sslm_gpu_seq_save` returns `SSLM_GPU_ROWS_CHUNK_OPEN` with nothing
   written. Reading the prefill hidden state is allowed, and returns the
   snapshot unchanged. `sslm_gpu_seq_reset` closes the chunk, and
@@ -617,12 +620,13 @@ dedicated sequence for more rows than fit before its context cap; the rows that 
 committed. Both names are also appended to the CPU's `SSLM_STATUS_ENUM_LIST`, so the two
 enums keep one ordinal space; no CPU call returns either.
 
-Two cover multi-row prompt reading (unreleased and provisional, ordinals 33
-and 34 on the branch only; see
+One covers multi-row prompt reading (unreleased and provisional: appended
+after the schema skip-ahead pair on the branch only, and given the next free
+number at release; see
 [Multi-row prompt reading](#multi-row-prompt-reading-unreleased)):
-`SSLM_GPU_ROWS_CAP_EXCEEDED`, an `sslm_gpu_seq_embed_rows` at the context cap
-that admits no row; and `SSLM_GPU_ROWS_CHUNK_OPEN`, a save refused while a
-row chunk is open.
+`SSLM_GPU_ROWS_CHUNK_OPEN`, a save refused while a row chunk is open. An
+`sslm_gpu_seq_embed_rows` at the context cap that admits no row returns
+1.17's `SSLM_GPU_CONTEXT_CAP_EXCEEDED`.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 diverge on one refusal: when a device-side domain guard refuses one of the admitted

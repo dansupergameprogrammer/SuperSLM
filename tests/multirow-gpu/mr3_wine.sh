@@ -9,8 +9,9 @@
 # Fixtures are MR2's (out/mr2/fixtures, or MR3_FIXTURES), made by mr2_wine.sh's helpers when absent.
 #
 # Legs (each printed PASS or FAIL; exit 0 only when every leg run passes):
-#   contract  include/superslm/gpu_1p0.h publishes plan §4.1's verbs and types, and the two branch-provisional statuses
-#             (§3.7, mr3_entry.h) appended after SSLM_RESTORE_PRODUCER_MISMATCH (30), each marked provisional on its line.
+#   contract  include/superslm/gpu_1p0.h publishes plan §4.1's verbs and types, 1.17's SSLM_GPU_CONTEXT_CAP_EXCEEDED (the
+#             cap refusal since R-17), and the branch-provisional SSLM_GPU_ROWS_CHUNK_OPEN (§3.7, mr3_entry.h) appended
+#             after it, marked provisional on its line.
 #   cells     mr3_cells.exe on pkv_def and pkv_qk (MR3_CELLS=2.1,7.6 runs a subset; MR3_CYCLES sets 1.1's count, default
 #             1000; MR3_RACES sets 3.1's free-running count, default 10000). Built with -DMR3_UNPUBLISHED until the
 #             contract leg passes (see mr3_entry.h).
@@ -76,8 +77,12 @@ else:
     if "SSLM_RESTORE_PRODUCER_MISMATCH" not in names: miss.append("the enum has no SSLM_RESTORE_PRODUCER_MISMATCH (30)")
     else:
         after = names[names.index("SSLM_RESTORE_PRODUCER_MISMATCH") + 1:]
-        for want in ["SSLM_GPU_ROWS_CAP_EXCEEDED", "SSLM_GPU_ROWS_CHUNK_OPEN"]:
+        if "SSLM_GPU_CONTEXT_CAP_EXCEEDED" not in after: miss.append("no 1.17 SSLM_GPU_CONTEXT_CAP_EXCEEDED (R-17's cap status)")
+        if "SSLM_GPU_ROWS_CAP_EXCEEDED" in names: miss.append("SSLM_GPU_ROWS_CAP_EXCEEDED survives R-17")
+        for want in ["SSLM_GPU_ROWS_CHUNK_OPEN"]:
             if want not in after: miss.append(want + " is not appended after SSLM_RESTORE_PRODUCER_MISMATCH")
+            elif "SSLM_GPU_CONTEXT_CAP_EXCEEDED" in after and after.index(want) < after.index("SSLM_GPU_CONTEXT_CAP_EXCEEDED"):
+                miss.append(want + " is not appended after 1.17's statuses")
             else:
                 line = next(l for l in lines if re.match(r"\s*" + want + r"\b", l))
                 # the marker may sit on the enumerator's line or in the comment block directly above it
@@ -91,7 +96,7 @@ PY
 PUBLISHED=0
 if contract >"$OUT/contract.txt"; then PUBLISHED=1; fi
 if want contract; then
-	if [ $PUBLISHED = 1 ]; then echo "PASS contract (gpu_1p0.h publishes §4.1 and both provisional statuses)"
+	if [ $PUBLISHED = 1 ]; then echo "PASS contract (gpu_1p0.h publishes §4.1, 1.17's cap status and the provisional CHUNK_OPEN)"
 	else cat "$OUT/contract.txt"; echo "FAIL contract"; FAILED+=(contract); fi
 fi
 
