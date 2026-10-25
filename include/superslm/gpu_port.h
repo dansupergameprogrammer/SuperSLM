@@ -1098,6 +1098,9 @@ enum class SslmGpuStatus : uint32_t;
 //     what is faulted).
 void SslmGpuAllocCounterResetForTest() noexcept;
 uint32_t SslmGpuAllocCountForTest() noexcept;
+// Multi-row plan cell 1.1: the bytes of the device buffers (and the multi-row row sets' descriptor heaps) the
+// library holds now, counted where they are created and uncounted when D3D12 destroys them.
+uint64_t SslmGpuLiveDeviceBytesForTest() noexcept;
 void ArmGpuAllocFaultAtOccurrence(uint32_t k, long hr) noexcept;
 bool SslmGpuAllocInBundleForTest(uint32_t k) noexcept;
 // The next removed-device query the fault classifier makes (harness::DeviceReportedRemoved,

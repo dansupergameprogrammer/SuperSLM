@@ -22,6 +22,7 @@
 
 #include <wrl/client.h>
 
+#include "multirow_rows_host.h"
 #include "superslm/gpu_1p0.h"
 #include "superslm/gpu_port.h"
 
@@ -175,12 +176,11 @@ superslm::SslmForwardStatus RunRowsSliceGpuFinish(GpuInFlightToken&& inflight, c
 // The sticky tag's status (superslm_gpu.cpp's DecodeStickyTag, which the one-row finish returns).
 superslm::SslmForwardStatus DecodeRowsStickyTag(int64_t tag);
 
-// The context's recorder state (plan §3.4, §8): the row-set free list and the seams MR2's cells read.
+// The context's recorder state (plan §3.4, §8): the row-set free list and open-chunk count (the portable
+// rows_host::RowSetPool, multirow_rows_host.h, which cell 3.3 runs under TSan), and the seams' counters under `mu`.
 struct GpuRowsContextState {
-	std::mutex mu;
-	std::vector<std::unique_ptr<GpuRowSet>> free_sets;
-	uint32_t sets_total = 0;  // sets this context owns: on the free list plus held by open chunks
-	uint32_t chunks_open = 0, chunks_open_peak = 0;
+	rows_host::RowSetPool<GpuRowSet> pool;
+	std::mutex mu;  // the counters below
 	uint64_t widened_lists = 0, allocations = 0;
 	uint32_t last_widened_list_dispatches = 0, max_widened_list_dispatches = 0;
 	std::atomic<int32_t> armed_failure_slice{-1};  // set only through the test-only seam (cell 5.3)

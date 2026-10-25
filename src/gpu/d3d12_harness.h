@@ -75,6 +75,50 @@ inline GpuTestSeamState& TestSeamState() {
 	static GpuTestSeamState state;
 	return state;
 }
+
+// Multi-row plan cell 1.1 (MR3): the bytes of the device objects the harness holds now
+// (SslmGpuLiveDeviceBytesForTest). TrackLiveDeviceBytesForTest adds `bytes` and attaches a private-data
+// token to `obj` whose final Release, when D3D12 destroys the object, subtracts them again.
+inline std::atomic<int64_t>& LiveDeviceBytesForTest() {
+	static std::atomic<int64_t> bytes{0};
+	return bytes;
+}
+class LiveDeviceBytesToken final : public IUnknown {
+public:
+	explicit LiveDeviceBytesToken(int64_t bytes) : bytes_(bytes) {}
+	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override {
+		if (out == nullptr) return E_POINTER;
+		if (IsEqualIID(riid, IID_IUnknown)) {
+			*out = static_cast<IUnknown*>(this);
+			AddRef();
+			return S_OK;
+		}
+		*out = nullptr;
+		return E_NOINTERFACE;
+	}
+	ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
+	ULONG STDMETHODCALLTYPE Release() override {
+		const ULONG r = --refs_;
+		if (r == 0) {
+			LiveDeviceBytesForTest() -= bytes_;
+			delete this;
+		}
+		return r;
+	}
+
+private:
+	std::atomic<ULONG> refs_{1};
+	int64_t bytes_;
+};
+inline void TrackLiveDeviceBytesForTest(ID3D12Object* obj, uint64_t bytes) {
+	// {5D1F0C0E-6B53-4C2B-9E61-1A7C3D2B4E01}: this seam's private-data slot.
+	static const GUID kSlot = {0x5d1f0c0e, 0x6b53, 0x4c2b, {0x9e, 0x61, 0x1a, 0x7c, 0x3d, 0x2b, 0x4e, 0x01}};
+	if (obj == nullptr) return;
+	LiveDeviceBytesToken* token = new LiveDeviceBytesToken(static_cast<int64_t>(bytes));
+	LiveDeviceBytesForTest() += static_cast<int64_t>(bytes);
+	if (FAILED(obj->SetPrivateDataInterface(kSlot, token))) LiveDeviceBytesForTest() -= static_cast<int64_t>(bytes);
+	token->Release();  // the object holds the token's only remaining reference (or none, on failure)
+}
 #endif
 
 // A D3D12 call that failed with E_OUTOFMEMORY. It derives from std::runtime_error, so a catch
@@ -690,6 +734,9 @@ public:
 		if (SUCCEEDED(hr)) state_tracking::OnCreate(out->Get(), bytes, heap, state, at);
 #endif
 		if (SUCCEEDED(hr) && debug_layer_enabled) NameBufferBySite(out->Get(), at, heap);
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+		if (SUCCEEDED(hr)) TrackLiveDeviceBytesForTest(out->Get(), bytes);
+#endif
 		return hr;
 	}
 
