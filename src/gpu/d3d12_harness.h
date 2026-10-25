@@ -914,8 +914,12 @@ public:
 	              "paged-KV plan §4 item 1 records the composed root signature at 60 DWORDs");
 	static_assert(kComposedRootSignatureDwords <= 64, "D3D12 caps a root signature at 64 DWORDs");
 
-	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
-		D3D12_ROOT_PARAMETER ps[1 + kComposedResourceBindingCount + 1]{};
+	// The composed signature's root parameters, 0 through kComposedRootParamKvPageConstants. Filled here
+	// once and serialized by MakeRootSigComposed below; the multi-row plan's widened recorder
+	// (multirow_wide.inl, built only under SUPERSLM_MULTIROW_WIDE) serializes the same parameters with
+	// one descriptor table appended, so the two signatures cannot drift on any shared parameter.
+	static constexpr UINT kComposedRootParamCount = 1 + kComposedResourceBindingCount + 1;
+	static void FillComposedRootParams(D3D12_ROOT_PARAMETER (&ps)[kComposedRootParamCount]) {
 		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 		// T-2432 (Track A step 9): grown 27 -> 28. The 28th value (index 27) carries Q_WIDTH
 		// (num_attention_heads * head_dim) for q_proj_gemm_site.hlsl/o_proj_gemm_site.hlsl
@@ -982,9 +986,13 @@ public:
 		static_assert(kComposedRootParamKvPageTable == 1 + kComposedResourceBindingCount - 1 &&
 		                  kComposedRootParamKvPageConstants == 1 + kComposedResourceBindingCount,
 		              "the G2 parameters follow the 14 pre-G2 descriptors, in this order");
+	}
 
+	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
+		D3D12_ROOT_PARAMETER ps[kComposedRootParamCount]{};
+		FillComposedRootParams(ps);
 		D3D12_ROOT_SIGNATURE_DESC rs{};
-		rs.NumParameters = 1 + kComposedResourceBindingCount + 1;
+		rs.NumParameters = kComposedRootParamCount;
 		rs.pParameters = ps;
 		ComPtr<ID3DBlob> blob, err;
 		HRESULT hr = D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
