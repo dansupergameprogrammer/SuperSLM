@@ -151,7 +151,7 @@ endif()
 
 add_executable(superslm_tests tests/test_main.cpp tests/test_slm18x_saturation_census.cpp
 	tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp
-	tests/test_decode_threading.cpp tests/test_decode_threading_d1.cpp)
+	tests/test_decode_threading.cpp tests/test_decode_threading_d1.cpp tests/test_batched_threading.cpp)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
 superslm_add_schema_fast_decode_cells(superslm_tests)
 if(MSVC)
@@ -385,7 +385,7 @@ target_compile_definitions(superslm_scalar_forced_seams PUBLIC SUPERSLM_FORCE_SC
 target_compile_definitions(superslm_scalar_forced_seams PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
 add_executable(superslm_decode_threading_scalar_forced EXCLUDE_FROM_ALL
 	tests/decode_threading_standalone_main.cpp tests/test_decode_threading.cpp
-	tests/test_decode_threading_d1.cpp)
+	tests/test_decode_threading_d1.cpp tests/test_batched_threading.cpp)
 target_link_libraries(superslm_decode_threading_scalar_forced PRIVATE superslm_scalar_forced_seams)
 target_include_directories(superslm_decode_threading_scalar_forced PRIVATE tests)
 # Schema fast-decode plan (rev 1.2.1) §9: the scalar tier's run of the M1/J1 red suite, on the same
@@ -527,7 +527,7 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	add_executable(superslm_tests_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tests/test_main.cpp
 		tests/test_slm18x_saturation_census.cpp tests/test_slm19x_schema_damped_greedy.cpp
 		tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp tests/test_decode_threading.cpp
-		tests/test_decode_threading_d1.cpp)
+		tests/test_decode_threading_d1.cpp tests/test_batched_threading.cpp)
 	target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
 	superslm_add_schema_fast_decode_cells(superslm_tests_${_sslm_tier_lower}_forced)
 	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests)

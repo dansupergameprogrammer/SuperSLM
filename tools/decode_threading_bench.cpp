@@ -19,6 +19,12 @@
 //       896, k + v 2 x 128, intermediate 4864), on synthetic weights for `--layers` layers (so the
 //       weights stream from memory, not cache), serial against the split at the library's minimum
 //       work, through the reference pool. The mechanism's cost alone, off the box; not a B-step.
+//   decode_threading_bench - batched [--rows 2,4,8,64] [--tasks 2,4] [--layers 24] [--pairs 15]
+//       No artifact: tiled-matmul slice 2's threaded batched projections. The seven projections of one
+//       layer at Qwen2.5-0.5B's shapes, M rows at a time, for `--layers` layers of synthetic weights,
+//       serial (GemmInt8Accumulate) against the column split (GemmDispatch with the batched hook) at
+//       the library's minimum work, through the reference pool. GEMM time only (no attention, no
+//       funnel); every output is checked equal. Not a B-step.
 //
 // Every figure is indicative outside the box: the plan's gate readings are the box's (§7).
 #include <algorithm>
@@ -384,14 +390,76 @@ int Groups(int argc, char** argv) {
 	return 0;
 }
 
+int Batched(int argc, char** argv) {
+	const std::vector<int> rows = ParseList(Arg(argc, argv, "--rows", "2,4,8,64"));
+	const std::vector<int> tasks = ParseList(Arg(argc, argv, "--tasks", "2,4"));
+	const int layers = std::atoi(Arg(argc, argv, "--layers", "24"));
+	const int pairs = std::atoi(Arg(argc, argv, "--pairs", "15"));
+	struct Proj {
+		size_t k, n;
+	};
+	const Proj projs[] = {{896, 896}, {896, 128}, {896, 128}, {896, 896}, {896, 4864}, {896, 4864}, {4864, 896}};
+	constexpr size_t kProjs = 7;
+	std::vector<std::vector<int8_t>> w(static_cast<size_t>(layers) * kProjs);
+	uint32_t seed = 12345;
+	for (size_t i = 0; i < w.size(); ++i) {
+		w[i].resize(projs[i % kProjs].k * projs[i % kProjs].n);
+		for (int8_t& b : w[i]) {
+			seed = seed * 1664525u + 1013904223u;
+			b = static_cast<int8_t>(static_cast<int>(seed >> 24) - 128);
+		}
+	}
+	const int max_rows = *std::max_element(rows.begin(), rows.end());
+	std::vector<int8_t> x(static_cast<size_t>(max_rows) * 4864);
+	for (size_t i = 0; i < x.size(); ++i) x[i] = static_cast<int8_t>(static_cast<int>(i * 37 % 255) - 127);
+	std::vector<int64_t> out_a(static_cast<size_t>(max_rows) * 4864), out_b(out_a.size());
+	auto pass = [&](size_t m, const sslm_parallel_for* pf, bool* equal) {
+		const superslm::GemmThreading th{nullptr, pf};
+		const auto t0 = std::chrono::steady_clock::now();
+		for (int l = 0; l < layers; ++l) {
+			for (size_t p = 0; p < kProjs; ++p) {
+				const Proj& pr = projs[p];
+				const int8_t* wt = w[static_cast<size_t>(l) * kProjs + p].data();
+				superslm::GemmDispatch(th, x.data(), wt, m, pr.k, pr.n, out_b.data());
+				if (equal && l == layers - 1) {
+					superslm::GemmInt8Accumulate(x.data(), wt, m, pr.k, pr.n, out_a.data());
+					*equal = *equal && std::equal(out_a.begin(), out_a.begin() + m * pr.n, out_b.begin());
+				}
+			}
+		}
+		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / layers;
+	};
+	for (int m : rows) {
+		for (int mt : tasks) {
+			ReferenceParallelFor pool(std::max(0, mt - 1));
+			sslm_parallel_for pf = pool.Hook(mt);
+			pf.reserved = SSLM_PARALLEL_FOR_PREFILL;
+			std::vector<double> serial, split;
+			bool equal = true;
+			for (int i = 0; i < pairs; ++i) {
+				serial.push_back(pass(static_cast<size_t>(m), nullptr, nullptr));
+				split.push_back(pass(static_cast<size_t>(m), &pf, &equal));
+			}
+			const Stats a = Summarize(serial), b = Summarize(split);
+			std::printf("batched rows %d max_tasks %d layers %d n %d serial_ms_per_layer_median %.4f iqr %.4f..%.4f "
+			            "split_ms_per_layer_median %.4f iqr %.4f..%.4f speedup %.2f outputs_equal %d\n",
+			            m, mt, layers, pairs, a.median, a.q1, a.q3, b.median, b.q1, b.q3, a.median / b.median,
+			            equal ? 1 : 0);
+		}
+	}
+	std::printf("batched complete\n");
+	return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
 	if (argc < 3) {
-		std::fprintf(stderr, "usage: %s ARTIFACT verify|time|onetoken [options], or %s - groups [options]\n", argv[0], argv[0]);
+		std::fprintf(stderr, "usage: %s ARTIFACT verify|time|onetoken [options], or %s - groups|batched [options]\n", argv[0], argv[0]);
 		return 2;
 	}
 	if (std::strcmp(argv[2], "groups") == 0) return Groups(argc, argv);
+	if (std::strcmp(argv[2], "batched") == 0) return Batched(argc, argv);
 	Engine e;
 	if (!e.Open(argv[1], 64)) return 2;
 #if defined(SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)

@@ -271,19 +271,23 @@ struct sslm_workspace_s {
 	sslm_config config{};
 	// The caller's parallel-for hook (sslm_workspace_set_parallel_for), copied in; `run == NULL`
 	// means none. Read by sslm_decode_stepImpl's logits step (LogitsSiteParallel) and, when
-	// `reserved` carries SSLM_PARALLEL_FOR_MATVEC, by the layer loops' one-row projections
-	// (MatvecThreading, below).
+	// `reserved` carries SSLM_PARALLEL_FOR_MATVEC, by the layer loops' one-row projections, and when
+	// it carries SSLM_PARALLEL_FOR_PREFILL, by the batched pass's projections (MatvecThreading, below).
 	sslm_parallel_for parallel_for{};
 };
 
 namespace {
 // Decode-threading plan §3.4: the one place the `reserved` bits are read. The forward pass sees
 // only the GemmThreading this builds: `row` is the workspace's hook iff the host set
-// SSLM_PARALLEL_FOR_MATVEC, and `batched` stays null (the batched-prefill bit is not in this build).
+// SSLM_PARALLEL_FOR_MATVEC, and `batched` iff it set SSLM_PARALLEL_FOR_PREFILL (tiled-matmul plan
+// slice 2).
 superslm::GemmThreading MatvecThreading(const sslm_workspace_s* ws) {
 	superslm::GemmThreading t;
 	if (ws != nullptr && (ws->parallel_for.reserved & SSLM_PARALLEL_FOR_MATVEC) != 0u) {
 		t.row = &ws->parallel_for;
+	}
+	if (ws != nullptr && (ws->parallel_for.reserved & SSLM_PARALLEL_FOR_PREFILL) != 0u) {
+		t.batched = &ws->parallel_for;
 	}
 	return t;
 }
@@ -2601,11 +2605,19 @@ using PrefillPrePassFn = sslm_status (*)(void* ctx, int32_t admit_count);
 // and down each carry hidden_size * intermediate_size weight bytes). A hook with max_tasks < 2 or no
 // `run`, or a model below the minimum work per task, would run the one-row passes serially, which is
 // slower than the batched pass, so it keeps the batched pass. The cheap tests come first, so a
-// prefill (split_max_rows 0) reads nothing else.
+// prefill (split_max_rows 0) reads nothing else. Tiled-matmul plan slice 2: when the batched pass
+// itself threads (bit 0 set, and the same largest projection splits at admit_count rows under
+// BatchedGemmSplit's rule), the batched pass is kept: it keeps the weight reuse and the threads.
 bool JumpSplitEngages(const superslm::SslmModelConfig& c, const sslm_workspace_s* ws, int32_t admit_count,
                       int32_t split_max_rows) {
 	if (split_max_rows < 2 || admit_count < 2 || admit_count > split_max_rows) return false;
 	const superslm::GemmThreading threading = MatvecThreading(ws);
+	if (threading.batched != nullptr &&
+	    superslm::BatchedGemmSplit(threading.batched, static_cast<size_t>(admit_count), c.hidden_size,
+	                               c.intermediate_size)
+	            .task_count >= 2) {
+		return false;
+	}
 	return threading.row != nullptr &&
 	       superslm::MatvecGroupSplit(threading.row, c.hidden_size, c.intermediate_size).task_count >= 2;
 }

@@ -79,7 +79,7 @@ int main(int argc, char** argv) {
     sslm_parallel_for reserved{};
     reserved.run = &Inline;
     reserved.max_tasks = 2;
-    reserved.reserved = 1;
+    reserved.reserved = 4;  // bit 2: defined by no plan (tiled-matmul plan §5.3; bit 0 is implemented)
     if (sslm_workspace_set_parallel_for(ws, &reserved) != SSLM_INVALID_ARGUMENT ||
         sslm_gpu_context_set_host_parallel_for(gpu, &reserved) !=
             kInvalidHook) return 11;
@@ -90,7 +90,8 @@ int main(int argc, char** argv) {
             kInvalidHook) return 12;
     // Decode-threading plan rev 1.2 §3.7 / §8 2.2 (S1, F3): both setters accept the bit this
     // library implements (SSLM_PARALLEL_FOR_MATVEC, bit 1; the GPU setter ignores it) and reject
-    // any other. The reserved = 1 block above stays unchanged: bit 0 is not implemented here.
+    // any other. Tiled-matmul plan slice 2 (§5.3): bit 0 (SSLM_PARALLEL_FOR_PREFILL) is implemented
+    // too, so the block above refuses bit 2 instead of bit 0, and both bits are accepted below.
     // Placed after the null-run block so the two blocks above keep their lines.
 #if defined(SSLM_PARALLEL_FOR_MATVEC)
     sslm_parallel_for matvec{};
@@ -99,7 +100,16 @@ int main(int argc, char** argv) {
     matvec.reserved = SSLM_PARALLEL_FOR_MATVEC;
     if (sslm_workspace_set_parallel_for(ws, &matvec) != SSLM_OK ||
         sslm_gpu_context_set_host_parallel_for(gpu, &matvec) != SslmGpuStatus::SSLM_OK) return 14;
-    for (uint32_t bits : std::array<uint32_t, 4>{4u, 3u, 0x80000000u, 0xFFFFFFFFu}) {
+#if defined(SSLM_PARALLEL_FOR_PREFILL)
+    for (uint32_t bits : std::array<uint32_t, 2>{SSLM_PARALLEL_FOR_PREFILL,
+                                                 SSLM_PARALLEL_FOR_PREFILL | SSLM_PARALLEL_FOR_MATVEC}) {
+        sslm_parallel_for both = matvec;
+        both.reserved = bits;
+        if (sslm_workspace_set_parallel_for(ws, &both) != SSLM_OK ||
+            sslm_gpu_context_set_host_parallel_for(gpu, &both) != SslmGpuStatus::SSLM_OK) return 16;
+    }
+#endif
+    for (uint32_t bits : std::array<uint32_t, 4>{4u, 5u, 0x80000000u, 0xFFFFFFFFu}) {
         sslm_parallel_for other = matvec;
         other.reserved = bits;
         if (sslm_workspace_set_parallel_for(ws, &other) != SSLM_INVALID_ARGUMENT ||

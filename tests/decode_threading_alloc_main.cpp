@@ -1,4 +1,5 @@
-// Decode-threading plan (rev 1.2) §8 7.4 (F12): the one-row split adds no heap allocation. The
+// Decode-threading plan (rev 1.2) §8 7.4 (F12): the one-row split adds no heap allocation. Tiled-matmul
+// plan slice 2, cell 5.3: no task body of the batched split allocates (BatchedNoTaskAllocation). The
 // counting global operator new of tests/t2138-abi-red-suite/dim7_contract_red.cpp:64, reused in its
 // own executable (it replaces operator new for the whole process), with a hook that allocates
 // nothing: per decode token and per one-token prefill call, count(bit 1 on) <= count(bit 1 off).
@@ -19,9 +20,14 @@
 #include "../src/forward/parallel_split.h"
 
 static long long g_new_calls = 0;
+// Tiled-matmul plan slice 2, cell 5.3: allocations made while a task body runs (the hook below sets
+// the flag around each invocation; the tasks run inline, so a plain flag is exact).
+static bool g_in_task = false;
+static long long g_task_new_calls = 0;
 
 void* operator new(std::size_t size) {
 	++g_new_calls;
+	if (g_in_task) ++g_task_new_calls;
 	if (void* p = std::malloc(size ? size : 1)) return p;
 	throw std::bad_alloc{};
 }
@@ -30,6 +36,7 @@ void* operator new[](std::size_t size) { return operator new(size); }
 // and the free below then releases memory that malloc never gave out (ASan: alloc-dealloc-mismatch).
 void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
 	++g_new_calls;
+	if (g_in_task) ++g_task_new_calls;
 	return std::malloc(size ? size : 1);
 }
 void* operator new[](std::size_t size, const std::nothrow_t& t) noexcept { return operator new(size, t); }
@@ -111,6 +118,59 @@ Counts Measure(sslm_model model, uint32_t bits) {
 	return out;
 }
 
+// Cell 5.3 (tiled-matmul plan slice 2): no task of a batched split allocates. Runs every task inline
+// with the flag above set, so any allocation inside a task body is counted.
+struct TaskWatchHook {
+	int calls = 0;
+	static void Run(void* host_ctx, int32_t task_count, sslm_task_fn task, void* task_ctx) {
+		++static_cast<TaskWatchHook*>(host_ctx)->calls;
+		for (int32_t i = 0; i < task_count; ++i) {
+			g_in_task = true;
+			task(task_ctx, i);
+			g_in_task = false;
+		}
+	}
+};
+
+void BatchedNoTaskAllocation(sslm_model model) {
+	const uint32_t blocks = 2;
+	const size_t psize = blocks * sslm_kv_block_size(model) + sslm_kv_pool_overhead_size(model, blocks);
+	void* pool_buf = ::operator new(psize, std::align_val_t(SSLM_ABI_ALIGNMENT_BYTES));
+	sslm_kv_pool pool = nullptr;
+	CHECK_MSG(sslm_kv_pool_create(model, pool_buf, psize, blocks, &pool) == SSLM_OK, "5.3 pool");
+	const sslm_config cfg{1, 16, 2, 0u};
+	const size_t wsz = sslm_workspace_size(model, &cfg);
+	void* ws_buf = ::operator new(wsz, std::align_val_t(SSLM_ABI_ALIGNMENT_BYTES));
+	sslm_workspace ws = nullptr;
+	CHECK_MSG(sslm_workspace_create(model, &cfg, ws_buf, wsz, &ws) == SSLM_OK, "5.3 workspace");
+	TaskWatchHook hook;
+	const sslm_parallel_for pf{&TaskWatchHook::Run, &hook, 4, SSLM_PARALLEL_FOR_PREFILL | SSLM_PARALLEL_FOR_MATVEC};
+	CHECK_MSG(sslm_workspace_set_parallel_for(ws, &pf) == SSLM_OK, "5.3 install");
+	sslm_seq seq = nullptr;
+	CHECK_MSG(sslm_seq_create(model, &pool, &seq) == SSLM_OK, "5.3 seq");
+	g_task_new_calls = 0;
+	superslm::test::ResetBatchedRunCalls();
+	// Calls of 2, 7 (the loop path), 8 and 33 rows (the tiled path on AVX2 and AVX-512 tiers).
+	int32_t pos = 0;
+	for (int32_t n : {2, 7, 8, 33}) {
+		std::vector<int32_t> toks;
+		for (int32_t i = 0; i < n; ++i, ++pos) toks.push_back((pos * 37 + 11) % 256);
+		int32_t consumed = 0;
+		const sslm_status st = sslm_prefill(model, seq, toks.data(), n, n, SSLM_SPAN_PROMPT, ws, &consumed);
+		CHECK_MSG(st == SSLM_OK && consumed == n, "5.3 prefill of %d: status %d", n, static_cast<int>(st));
+	}
+	CHECK_MSG(superslm::test::BatchedRunCalls() >= 4 * 14 && hook.calls >= 4 * 14,
+	          "5.3 preamble: %zu batched run calls, %d hook calls", superslm::test::BatchedRunCalls(), hook.calls);
+	CHECK_MSG(g_task_new_calls == 0, "5.3: %lld allocations inside batched task bodies", g_task_new_calls);
+	std::printf("5.3: %zu batched run calls, %lld allocations inside task bodies\n",
+	            superslm::test::BatchedRunCalls(), g_task_new_calls);
+	sslm_seq_release(seq);
+	sslm_workspace_destroy(ws);
+	sslm_kv_pool_destroy(pool);
+	::operator delete(ws_buf, std::align_val_t(SSLM_ABI_ALIGNMENT_BYTES));
+	::operator delete(pool_buf, std::align_val_t(SSLM_ABI_ALIGNMENT_BYTES));
+}
+
 }  // namespace
 
 int main() {
@@ -142,6 +202,9 @@ int main() {
 				CHECK_MSG(on.decode[i] <= off.decode[i], "7.4 decode token %zu: %lld allocations on, %lld off", i,
 				          on.decode[i], off.decode[i]);
 			}
+			superslm::test::SetMinMacsPerTask(1);  // every batched projection of F-DEF threads
+			BatchedNoTaskAllocation(model);
+			superslm::test::ResetMinMacsPerTask();
 			std::printf("7.4: per decode token %lld allocations off, %lld on; per one-token prefill %lld off, %lld on\n",
 			            off.decode.back(), on.decode.back(), off.prefill.back(), on.prefill.back());
 			sslm_model_unmap(model);

@@ -3904,7 +3904,8 @@ std::vector<sfd::LayerRowsEntry> Q6cPasses() {
 	return v;
 }
 
-enum class Q6cArm { kNoHook, kBit1, kBit0 };
+// kBit01: bits 0 and 1 (tiled-matmul plan slice 2), under which the batched pass itself threads.
+enum class Q6cArm { kNoHook, kBit1, kBit0, kBit01 };
 
 struct SpanRun {
 	bool ok = false;
@@ -3929,7 +3930,9 @@ SpanRun Q6cSpan(const Sfd& f, uint32_t state, int32_t budget, Q6cArm arm, const 
 	h.threads = threads;
 	if (!rig.ok) return o;
 	if (arm != Q6cArm::kNoHook) {
-		sslm_parallel_for pf = h.Pf(arm == Q6cArm::kBit1 ? SSLM_PARALLEL_FOR_MATVEC : 0u);
+		sslm_parallel_for pf = h.Pf(arm == Q6cArm::kBit1    ? SSLM_PARALLEL_FOR_MATVEC
+		                            : arm == Q6cArm::kBit01 ? SSLM_PARALLEL_FOR_PREFILL | SSLM_PARALLEL_FOR_MATVEC
+		                                                    : 0u);
 		if (null_run) pf.run = nullptr;
 		const sslm_status st = sslm_workspace_set_parallel_for(rig.W(), &pf);
 		CHECK_MSG(st == SSLM_OK, "[Q6C] installing a hook (max_tasks %d, run %s) == %d", max_tasks,
@@ -4019,6 +4022,24 @@ void Cell_Q6C_1() {
 			          bit0.run_calls);
 			CHECK_MSG(Q6cShapeIs(plain.passes, m, false), "[Q6C.1 M %zu %s, no hook] S-LAYERROWS %s", m, how,
 			          Q6cShape(plain.passes).c_str());
+			// Tiled-matmul plan slice 2: with bit 0 too, and every batched projection above the (lowered)
+			// minimum multiply-adds, the batched pass threads, so no M splits: one pass of M rows, with `run`
+			// called, and the same status, forced ids and blob.
+			if (m >= 2) {
+				superslm::test::SetMinMacsPerTask(1);
+				superslm::test::ResetBatchedRunCalls();
+				const SpanRun bit01 = Q6cSpan(f, at, budget, Q6cArm::kBit01, nullptr, -1, /*threads=*/true);
+				const size_t batched_runs = superslm::test::BatchedRunCalls();
+				superslm::test::ResetMinMacsPerTask();
+				CHECK_MSG(bit01.ok && bit01.j.st == SSLM_OK && bit01.j.count == int32_t(m) && bit01.j.forced == want &&
+				              bit01.blob == plain.blob,
+				          "[Q6C.1 M %zu %s, bits 0 and 1] status %d count %d forced %s, blob %s the no-hook pass's", m,
+				          how, static_cast<int>(bit01.j.st), bit01.j.count, Str(bit01.j.forced).c_str(),
+				          bit01.blob == plain.blob ? "equals" : "differs from");
+				CHECK_MSG(Q6cShapeIs(bit01.passes, m, false) && batched_runs > 0,
+				          "[Q6C.1 M %zu %s, bits 0 and 1] S-LAYERROWS %s, %zu batched run calls; want one threaded pass "
+				          "of M rows", m, how, Q6cShape(bit01.passes).c_str(), batched_runs);
+			}
 		}
 	}
 }
@@ -4870,6 +4891,7 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("5.X6", Cell_X_5_6);
 	run("5.X7", Cell_X_5_7);
 	run("8.X1", Cell_X_8_1);
+	run("8.X1b", Cell_X_8_1b);
 	run("8.X2", Cell_X_8_2);
 	run("8.X3", Cell_X_8_3);
 	run("8.X4", Cell_X_8_4);

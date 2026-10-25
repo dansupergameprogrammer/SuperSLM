@@ -1178,6 +1178,69 @@ void GemmInt8AccumulateColsWidened(const int16_t* activations16, size_t widened_
 	}
 }
 
+ColsTaskPlan PlanColsTasks(size_t num_tokens, size_t in_channels) {
+	ColsTaskPlan plan;
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	const GemmTier tier = ActiveGemmTier();
+	if (DispatchGemmPath(tier, num_tokens) == GemmPath::kTiled) {
+		internal::MaybeThrowInjectedTiledGemmAllocFault();  // test seam (cell 5.1); empty in production
+		plan.tiled = true;
+		plan.widened_stride = (in_channels + 1) / 2 * 2;
+		plan.pack_bytes = (tier == GemmTier::kAvx512 ? 32 : 16) * plan.widened_stride;
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+		// Cell 11.1: one count per GEMM call that runs the tiled kernel, as RunTiledGemm counts.
+		(tier == GemmTier::kAvx512 ? superslm_test::g_tiled_entry_invocations_avx512
+		                           : superslm_test::g_tiled_entry_invocations_avx2)
+		    .fetch_add(1, std::memory_order_relaxed);
+#endif
+	}
+#else
+	(void)num_tokens;
+	(void)in_channels;
+#endif
+	return plan;
+}
+
+void WidenActivationsForCols(const int8_t* activations, size_t num_tokens, size_t in_channels,
+                             int16_t* activations16, size_t widened_stride) noexcept {
+	for (size_t t = 0; t < num_tokens; ++t) {
+		const int8_t* src = activations + t * in_channels;
+		int16_t* dst = activations16 + t * widened_stride;
+		for (size_t k = 0; k < in_channels; ++k) dst[k] = static_cast<int16_t>(src[k]);
+	}
+}
+
+void GemmInt8AccumulateColsTask(const ColsTaskPlan& plan, const int8_t* activations,
+                                const int16_t* activations16, const int8_t* weights,
+                                size_t num_tokens, size_t in_channels, size_t out_channels,
+                                size_t j_begin, size_t j_end, int64_t* out_acc,
+                                int8_t* pack) noexcept {
+	if (j_begin >= j_end) return;
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	if (plan.tiled) {
+		if (ActiveGemmTier() == GemmTier::kAvx512) {
+			TiledGemmAvx512(activations16, plan.widened_stride, weights, num_tokens, in_channels,
+			                out_channels, j_begin, j_end, out_acc, pack);
+		} else {
+			TiledGemmAvx2(activations16, plan.widened_stride, weights, num_tokens, in_channels,
+			              out_channels, j_begin, j_end, out_acc, pack);
+		}
+		return;
+	}
+#else
+	(void)activations16;
+	(void)pack;
+	(void)plan;
+#endif
+	// The one-cell-at-a-time loop, exactly GemmInt8AccumulateCols's below the tiled path.
+	for (size_t j = j_begin; j < j_end; ++j) {
+		const int8_t* const weight_row = weights + j * in_channels;
+		for (size_t t = 0; t < num_tokens; ++t) {
+			out_acc[t * out_channels + j] = DotRow(activations + t * in_channels, weight_row, in_channels);
+		}
+	}
+}
+
 }  // namespace detail
 
 void NarrowAccumulatorToI32(const int64_t* wide_row, size_t n, int32_t* out_i32) {

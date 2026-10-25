@@ -1114,8 +1114,9 @@ SUPERSLM_API SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chu
 
 // Decode-threading plan rev 1.2 (§3.4): which parallel-for hook, if any, a layer loop's one-row
 // (M = 1) projections may split their output rows across. `row` is the hook when the host set
-// SSLM_PARALLEL_FOR_MATVEC on it, else null; `batched` is reserved for the batched-prefill split
-// (SSLM_PARALLEL_FOR_PREFILL, tiled-matmul plan slice 2) and is null in this build. The ABI layer
+// SSLM_PARALLEL_FOR_MATVEC on it, else null; `batched` is the hook a projection of two or more rows
+// may split its output columns across (tiled-matmul plan slice 2) when the host set
+// SSLM_PARALLEL_FOR_PREFILL on it, else null. The ABI layer
 // builds this from the workspace's hook and its `reserved` bits; forward-pass code never reads
 // `reserved`. All-null (the default) is the serial path.
 struct GemmThreading {
