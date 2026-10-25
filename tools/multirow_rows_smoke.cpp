@@ -20,9 +20,11 @@
 //            retry equal to its twin;
 //   seams    after warm-up no slice allocates, and the free list never holds more sets than chunks were open.
 // MR3 (the published verbs, plan §4.1 to §4.6):
-//   batch    sslm_decode_step_batch_gpu over a plain member, an M = 5 chunk and an M = 1 chunk, one layer each per
-//            call: every member equals its twin; with the budget for two members only, the third reads
-//            SSLM_BATCH_BUDGET_EXHAUSTED and its chunk is unchanged;
+//   batch    sslm_decode_step_batch_gpu over a plain member, an M = 5 chunk and an M = 1 chunk. The budget is
+//            batch-wide and taken in array order, each member as many whole layers as remain (as the base batch
+//            plans a plain member): with the whole depth for two members only, the third reads
+//            SSLM_BATCH_BUDGET_EXHAUSTED and its chunk is unchanged; the next call carries it to full depth, and
+//            every member equals its twin (fed at the whole depth per call);
 //   statuses save with a chunk open (SSLM_GPU_ROWS_CHUNK_OPEN, the buffer and size untouched), admission capped by
 //            the context's headroom, and SSLM_GPU_ROWS_CAP_EXCEEDED at the cap with nothing written.
 //
@@ -362,10 +364,11 @@ void BatchCase(const Env& e, bool pooled) {
 	if (!a.ok || !b.ok || !c.ok || !a.Prefix(3) || !b.Prefix(3) || !c.Prefix(3)) return Report(false, name, "setup");
 	const int32_t tok_a = TokenAt(40, e.vocab);
 	const std::vector<int32_t> rows_b = RowTokens(3, 5, e.vocab), rows_c = RowTokens(4, 1, e.vocab);
-	if (OneRow(e, a.twin, tok_a, e.dpl) != SSLM_OK) return Report(false, name, "twin a");
+	const uint32_t depth = e.dpl * e.L;
+	if (OneRow(e, a.twin, tok_a, depth) != SSLM_OK) return Report(false, name, "twin a");
 	for (int32_t t : rows_b)
-		if (OneRow(e, b.twin, t, e.dpl) != SSLM_OK) return Report(false, name, "twin b");
-	if (OneRow(e, c.twin, rows_c[0], e.dpl) != SSLM_OK) return Report(false, name, "twin c");
+		if (OneRow(e, b.twin, t, depth) != SSLM_OK) return Report(false, name, "twin b");
+	if (OneRow(e, c.twin, rows_c[0], depth) != SSLM_OK) return Report(false, name, "twin c");
 	int32_t adm_b = 0, adm_c = 0;
 	SslmGpuRowsSpec sb{sizeof(SslmGpuRowsSpec), SSLM_GPU_ROWS_PROMPT, rows_b.data(), 5, 0};
 	SslmGpuRowsSpec sc{sizeof(SslmGpuRowsSpec), SSLM_GPU_ROWS_PROMPT, rows_c.data(), 1, 0};
@@ -377,24 +380,20 @@ void BatchCase(const Env& e, bool pooled) {
 	SslmGpuSequenceHandle* seqs[3] = {a.chunk, b.chunk, c.chunk};
 	const SslmGpuAdapterHandle* ads[3] = {e.adapter, e.adapter, e.adapter};
 	SslmGpuStatus st[3] = {};
-	// Budget for two members: the third (the M = 1 chunk) is exhausted and unchanged.
+	// The whole depth for two members: the third (the M = 1 chunk) is exhausted and unchanged.
 	int32_t open_c = -1;
-	if (sslm_decode_step_batch_gpu(e.ctx, seqs, ads, 3, 2 * e.dpl, st) != SSLM_OK || st[0] != SSLM_OK ||
+	if (sslm_decode_step_batch_gpu(e.ctx, seqs, ads, 3, 2 * depth, st) != SSLM_OK || st[0] != SSLM_OK ||
 	    st[1] != SSLM_OK || st[2] != SSLM_BATCH_BUDGET_EXHAUSTED || sslm_gpu_seq_rows_open(c.chunk, &open_c) != SSLM_OK ||
 	    open_c != 1 || *SslmGpuSeqHandleLayerIndexForBench(c.chunk) != 0) {
 		std::snprintf(why, sizeof why, "two-member budget -> %d %d %d, c open %d", static_cast<int>(st[0]),
 		              static_cast<int>(st[1]), static_cast<int>(st[2]), open_c);
 		return Report(false, name, why);
 	}
-	// c catches up alone, then every call advances all three by one layer.
-	if (Step(e, c.chunk, e.dpl) != SSLM_OK) return Report(false, name, "c catch-up");
-	for (uint32_t l = 1; l < e.L; ++l) {
-		if (sslm_decode_step_batch_gpu(e.ctx, seqs, ads, 3, 3 * e.dpl, st) != SSLM_OK || st[0] != SSLM_OK ||
-		    st[1] != SSLM_OK || st[2] != SSLM_OK) {
-			std::snprintf(why, sizeof why, "layer %u -> %d %d %d", l, static_cast<int>(st[0]), static_cast<int>(st[1]),
-			              static_cast<int>(st[2]));
-			return Report(false, name, why);
-		}
+	// The next call: a and b are at full depth (a's one-row token rests there, b's chunk closed), so only c runs.
+	SslmGpuSequenceHandle* rest[1] = {c.chunk};
+	if (sslm_decode_step_batch_gpu(e.ctx, rest, ads, 1, depth, st) != SSLM_OK || st[0] != SSLM_OK) {
+		std::snprintf(why, sizeof why, "c's call -> %d", static_cast<int>(st[0]));
+		return Report(false, name, why);
 	}
 	int32_t open_b = -1, committed_b = -1;
 	sslm_gpu_seq_rows_open(b.chunk, &open_b);
