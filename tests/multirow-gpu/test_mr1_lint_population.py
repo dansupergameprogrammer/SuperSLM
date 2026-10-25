@@ -96,6 +96,20 @@ class SpikePopulation(unittest.TestCase):
         self.assertTrue(any(m.WIDE_GEMM in b for b in rep.barriers))
         self.assertEqual(rep.wave_calls, [])
 
+    def test_must_reject_L1_literal_lanes(self):
+        for lit in m.HOST_LANE_LITERALS:
+            with self.subTest(literal=lit):
+                c = m.apply_host_lanes_mutant(self.ws, lit, m.scratch_dir("mr1-spike-l1-"))
+                self.assertTrue(any("lanes slot" in h for h in m.lint_host(c.gpu_root)))
+
+    def test_must_reject_G_foreign_macros(self):
+        g = m.apply_generator_macro_mutant(self.ws, m.scratch_dir("mr1-spike-g-"))
+        bad = []
+        for f in g.generated:
+            base = g.base_dir / f.name.replace("_wide.hlsl", ".hlsl")
+            bad += m.substitution_violations(base.read_text(encoding="utf-8"), f.read_text(encoding="utf-8"))
+        self.assertTrue(all(any(d in b for b in bad) for d in m.FOREIGN_MACROS))
+
 
 if __name__ == "__main__":
     unittest.main()
