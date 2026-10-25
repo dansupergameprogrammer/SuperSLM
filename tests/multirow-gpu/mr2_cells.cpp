@@ -856,7 +856,9 @@ void Cell53(const mr2::Model& m) {
 			if (!w.ok) { Check(false, tag); continue; }
 			SslmGpuKvPoolHandle* pool = pooled ? w.Pool(16) : nullptr;
 			SslmGpuSequenceHandle* a = pooled ? w.Pooled(pool, 64) : w.Dedicated(64);
-			SslmGpuSequenceHandle* t = w.Dedicated(64);
+			// The twin has a's KV layout: a pooled sequence saves an 'SLM6' budget blob and a dedicated one does not,
+			// so a pooled leg's twin is pooled too, from its own pool so a's pool page accounting stays a's alone.
+			SslmGpuSequenceHandle* t = pooled ? w.Pooled(w.Pool(16), 64) : w.Dedicated(64);
 			Check(Twin(w, a, Stream(0, 3, V, 26), Full(m), m) == S::SSLM_OK, tag + ": prefix");
 			const std::vector<uint8_t> entry = Blob(w, a, tag);
 			SslmGpuKvPoolStats ps0{}, ps1{};
