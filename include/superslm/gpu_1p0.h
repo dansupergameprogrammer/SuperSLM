@@ -304,12 +304,17 @@ enum class SslmGpuStatus : uint32_t {
      * GPU status before it; nothing changes and nothing is drawn. Exported, and unreleased until 1.16.0. */
     SSLM_RESTORE_PRODUCER_MISMATCH,
     /* Schema skip-ahead (1.17.0, unreleased), ordinal 31: sslm_gpu_seq_forced_tokens or sslm_gpu_seq_jump_forward
-     * on a model mapped without a forced-next table (its artifact carries no tokenizer section). Nothing
+     * on a model mapped without a forced-next table (its artifact carries no tokenizer section); since the
+     * multi-row passes, sslm_gpu_seq_embed_rows with SSLM_GPU_ROWS_SCHEMA_FORCED on such a model too. Nothing
      * changes. The GPU twin of the CPU verbs' SSLM_ARTIFACT_REJECTED, which this enum lacks. */
     SSLM_GPU_FORCED_TABLE_ABSENT,
-    /* Schema skip-ahead (1.17.0, unreleased), ordinal 32: sslm_gpu_seq_jump_forward asked for more rows than a
-     * dedicated sequence has before its context cap. The rows that fit are committed (h of them, h = 0
-     * included, when nothing changes); the call's comment gives the resting state. */
+    /* Schema skip-ahead (1.17.0, unreleased), ordinal 32: the context cap.
+     *   - sslm_gpu_seq_jump_forward asked for more rows than a dedicated sequence (or a pooled one whose limit
+     *     is its cap) has before its context cap. The rows that fit are committed (h of them, h = 0 included,
+     *     when nothing changes); the call's comment gives the resting state.
+     *   - sslm_gpu_seq_embed_rows (multi-row passes) with no headroom at all before the cap, on a dedicated
+     *     sequence or a pooled one whose limit is its cap: nothing is admitted and nothing is written. (A
+     *     pooled sequence stopped by a budget limit below its cap gets SSLM_GPU_KV_BUDGET_EXCEEDED instead.) */
     SSLM_GPU_CONTEXT_CAP_EXCEEDED,
     /* BRANCH-PROVISIONAL (multi-row GPU passes, unreleased; this ordinal is not stable). sslm_gpu_seq_save on
      * a sequence with an open row chunk (sslm_gpu_seq_embed_rows): nothing is written. Close the chunk (finish
