@@ -8,15 +8,22 @@
 #   --out      default <repo>/out/mr-p41 (under the repo: the engine's shader staleness check walks up to
 #              src/gpu/shaders)
 #   --skip-run build only
-#   --only     unmodified | tests | pkvg   run one leg
+#   --only     unmodified | suites | tests | pkvg   run one leg
 #   --with-pkvg  also run the pkvg leg (off by default: under lavapipe its lifetime cells, e.g. 1.9's 1,000
 #              prefix cycles, run for hours)
 # Each run uses its own WINEPREFIX (<out>/wineprefix-<pid>) unless WINEPREFIX is set.
 #
 # Legs, each printed PASS or FAIL, exit 0 only when every leg run passes:
-#   unmodified  `git diff <base> HEAD` is empty over tests/ (except tests/multirow-gpu/), and build.bat's
+#   unmodified  `git diff <base> HEAD` is empty over tests/ (except tests/multirow-gpu/ and the two ordinal cells
+#               below), and build.bat's
 #               superslm_tests compile command (sources, /D, /I) equals the tag's: the suite that runs is the
-#               tag's. build.bat may gain shader steps (the widened variants).
+#               tag's. build.bat may gain shader steps (the widened variants). The one allowed edit (errata E-2,
+#               rulings item 9, the precedent of 1948e1f2): t2791's and t2956's cell_status_ordinals.cpp gain the
+#               appended statuses. Every ordinal pin and switch case the tag's copies hold must still be there.
+#   suites      build.bat's T-2791 and T-2956 suites (the cells their .bat files build) compiled with mingw and
+#               -Werror=switch, standing in for MSVC's /we4062 on their exhaustive status switches. Before it, a
+#               control: the tag's cell_status_ordinals.cpp against this header must fail -Wswitch whenever the
+#               header has statuses the tag lacks (the leg can see the defect it exists for).
 #   tests       superslm_tests.exe, built from build.bat's own superslm_tests command (sources, /D and /I
 #               parsed from the file, so the cloud build follows the box build), run under Wine. Green when its
 #               FAIL lines are exactly p41_wine_baseline_v1.15.0.txt (the base tag's own three under Wine).
@@ -64,15 +71,23 @@ fi
 mkdir -p "$OUT/shaders" "$OUT/obj"
 FAILED=()
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
+ORD_CELLS=(tests/t2791-gpu-prefill-read-red-suite/cell_status_ordinals.cpp tests/t2956-token-finish-red-suite/cell_status_ordinals.cpp)
 
 if want unmodified; then
 	echo "== P4.1 unmodified: the suite's sources and build.bat's superslm_tests command against $BASE"
 	ok=1
-	if ! git diff --quiet "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu'; then
+	if ! git diff --quiet "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}"; then
 		echo "    tests/ outside tests/multirow-gpu differs from $BASE:"
-		git diff --stat "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' | sed 's/^/        /'
+		git diff --stat "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}" | sed 's/^/        /'
 		ok=0
 	fi
+	# The ordinal cells may only gain the appended statuses: every pin and case line of the tag's copy stays.
+	for c in "${ORD_CELLS[@]}"; do
+		missing="$(git show "$BASE:$c" | grep -E '^\s*(PIN\(|static_assert\(static_cast<uint32_t>|case )' | grep -vxF -f "$c" || true)"
+		if [ -n "$missing" ]; then
+			echo "    $c lost lines the tag's copy pins:"; sed 's/^/        /' <<<"$missing"; ok=0
+		fi
+	done
 	# build.bat may gain shader steps (the widened variants); the superslm_tests compile line may not change.
 	if ! diff <(git show "$BASE:build.bat" | python3 -I "$HERE/p41_parse_build_bat.py" -) \
 		<(python3 -I "$HERE/p41_parse_build_bat.py" build.bat) >/dev/null; then
@@ -80,6 +95,49 @@ if want unmodified; then
 		ok=0
 	fi
 	if [ $ok = 1 ]; then echo "PASS unmodified"; else echo "FAIL unmodified"; FAILED+=(unmodified); fi
+fi
+
+if want suites; then
+	echo "== P4.1 suites: the T-2791 and T-2956 cells compiled with -Werror=switch (MSVC's /we4062 here)"
+	ok=1
+	SFLAGS="-std=c++20 -Iinclude -Isrc -Isrc/gpu -DNOMINMAX -DWIN32_LEAN_AND_MEAN -Werror=switch -fsyntax-only"  # no -w: it silences -Werror=switch too
+	# Control: with statuses appended since the tag, the tag's own ordinal cells must fail here on -Wswitch.
+	if [ -n "$(git diff "$BASE" HEAD -- include/superslm/gpu_1p0.h | grep -E '^\+\s*SSLM_[A-Z0-9_]+,?\s*(//.*)?$')" ]; then
+		mkdir -p "$OUT/suites"
+		for c in "${ORD_CELLS[@]}"; do
+			t="$OUT/suites/tag_$(basename "$(dirname "$c")").cpp"; git show "$BASE:$c" >"$t"
+			# shellcheck disable=SC2086
+			if "$CXX" $SFLAGS "$t" >"$t.log" 2>&1 || ! grep -q "not handled in switch" "$t.log"; then
+				echo "    control: $BASE's $c compiles against this header: the leg cannot see a missing case"; ok=0
+			else
+				echo "    control: $BASE's $c fails -Wswitch against this header, as it must"
+			fi
+		done
+	fi
+	# The cells each .bat builds, parsed from its own list. Not compiled here: cell_prompt_guard_removal, whose
+	# ID3D12Device5 mingw-w64 11's d3d12.h lacks; it may hold no switch, which is checked.
+	t2791="$(grep -A3 '^for %%f in (cell_status_ordinals' tests/t2791-gpu-prefill-read-red-suite/build_red_suite.bat | tr -d '^\r' | sed -n 's/.*(\(.*\)/\1/p;s/^ *\(cell[^)]*\).*/\1/p' | tr '\n' ' ')"
+	t2956="$(grep -m1 '^for %%C in (' tests/t2956-token-finish-red-suite/build_cells.bat | sed 's/.*(\(.*\)).*/\1/')"
+	n=0
+	for cell in $t2791; do
+		f=tests/t2791-gpu-prefill-read-red-suite/$cell.cpp
+		if [ "$cell" = cell_prompt_guard_removal ]; then
+			grep -q 'switch' "$f" && { echo "    $f now holds a switch and is not compiled here"; ok=0; }
+			continue
+		fi
+		def=-DSUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION; [ "$cell" = cell_env_pins_shipping_leg ] && def=
+		# shellcheck disable=SC2086
+		"$CXX" $SFLAGS $def "$f" >"$OUT/suites.$cell.log" 2>&1 || { echo "    FAIL $f:"; grep -m5 'error' "$OUT/suites.$cell.log" | sed 's/^/        /'; ok=0; }
+		n=$((n + 1))
+	done
+	for cell in $t2956; do
+		f=tests/t2956-token-finish-red-suite/$cell.cpp
+		# shellcheck disable=SC2086
+		"$CXX" $SFLAGS -DT2956_CANDIDATE "$f" >"$OUT/suites.t2956.$cell.log" 2>&1 || { echo "    FAIL $f:"; grep -m5 'error' "$OUT/suites.t2956.$cell.log" | sed 's/^/        /'; ok=0; }
+		n=$((n + 1))
+	done
+	[ "$n" -ge 25 ] || { echo "    only $n cells parsed from the two .bat files"; ok=0; }
+	if [ $ok = 1 ]; then echo "PASS suites ($n cells, -Werror=switch)"; else echo "FAIL suites"; FAILED+=(suites); fi
 fi
 
 # shaders ROOT DIR: ROOT's src/gpu/shaders compiled into DIR/shaders, plus the vkd3d-proton DLLs into DIR.
