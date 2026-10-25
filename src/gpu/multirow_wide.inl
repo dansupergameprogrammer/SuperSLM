@@ -588,14 +588,26 @@ superslm::SslmForwardStatus RunRowsSliceGpuSubmit(
 	std::vector<size_t> kv_row_offsets;
 	uint32_t dispatch_query_index = 0;
 	uint32_t dispatch_count = 0;
+	// Prepare's per-call buffers come from the row set's kept ones (cell 1.2); a context's first slice, which
+	// has no row set yet, keeps them here and hands them to the row set it creates.
+	GpuWidePrepareReuse first_reuse;
+	GpuWidePrepareReuse* reuse = rs != nullptr ? &rs->prepare : &first_reuse;
+	struct ReuseScope {
+		explicit ReuseScope(GpuWidePrepareReuse* r) { g_wide_prepare_reuse = r; }
+		~ReuseScope() { g_wide_prepare_reuse = nullptr; }
+	};
 	try {
-		const superslm::SslmForwardStatus prep = PrepareGpuLayerLoopChunkOpenState(
-		    dev, row0, /*layers=*/nullptr, num_hidden_layers, slice.layers, hidden_size, head_dim, num_key_value_heads,
-		    intermediate_size, context_cap, kEmptyManifest, kv_view, workspace_size,
-		    paged_kv != nullptr ? paged_kv->table_resident : nullptr, paged_kv != nullptr && paged_kv->upload_table,
-		    /*coverage_tokens=*/slice.real_rows, external_kv_resident, io_external_kv_needs_resume_barrier,
-		    external_weights_resident, external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
-		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &state, q_width, model_generation);
+		superslm::SslmForwardStatus prep;
+		{
+			const ReuseScope reuse_scope(reuse);
+			prep = PrepareGpuLayerLoopChunkOpenState(
+			    dev, row0, /*layers=*/nullptr, num_hidden_layers, slice.layers, hidden_size, head_dim, num_key_value_heads,
+			    intermediate_size, context_cap, kEmptyManifest, kv_view, workspace_size,
+			    paged_kv != nullptr ? paged_kv->table_resident : nullptr, paged_kv != nullptr && paged_kv->upload_table,
+			    /*coverage_tokens=*/slice.real_rows, external_kv_resident, io_external_kv_needs_resume_barrier,
+			    external_weights_resident, external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
+			    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &state, q_width, model_generation);
+		}
 		if (prep != superslm::SslmForwardStatus::Ok) return prep;
 		if (slice.inject_allocation_failure) {
 			throw harness::GpuAllocationError("MR2 cell 5.3: injected slice allocation failure", E_OUTOFMEMORY);
@@ -610,10 +622,12 @@ superslm::SslmForwardStatus RunRowsSliceGpuSubmit(
 		if (rs == nullptr || !rs->Fits(seq_bytes, state.scratch_uav->GetDesc().Width,
 		                               state.work_scratch_uav->GetDesc().Width, kv_rb_bytes)) {
 			out_record->row_set_created = rs == nullptr;
+			GpuWidePrepareReuse kept = std::move(*reuse);
 			*io_row_set = MakeGpuRowSet(dev, seq_bytes, state.scratch_uav->GetDesc().Width,
 			                            state.work_scratch_uav->GetDesc().Width, kv_rb_bytes);
 			out_record->allocations += kGpuRowSetAllocations;
 			rs = io_row_set->get();
+			rs->prepare = std::move(kept);
 		}
 		const WidePipelines& pipes = GetOrBuildWidePipelines(dev, slice.variant_h, model_has_qk_norm);
 

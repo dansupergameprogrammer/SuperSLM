@@ -72,10 +72,25 @@ constexpr uint32_t kGpuRowsMaxRows = 8;
 // otherwise, the next one up.
 constexpr uint32_t GpuRowsVariantFor(uint32_t rows) { return rows <= 1 ? 1u : rows <= 2 ? 2u : rows <= 4 ? 4u : 8u; }
 
+// What PrepareGpuLayerLoopChunkOpenState allocates on every call, kept for the widened slices (cell 1.2: no
+// per-slice allocation after warm-up). The five constant uploads and the one-page table upload are reused while
+// their bytes are unchanged; the one-row SeqState, LayerScratch and WorkScratch buffers, which no widened shader
+// reads (BindWideRoot binds them only so every root descriptor is a valid address), are reused while their size
+// is unchanged. Held by the row set, so it moves with it through the context's free list.
+struct GpuWidePrepareReuse {
+	struct Upload {
+		Microsoft::WRL::ComPtr<ID3D12Resource> buf;
+		std::vector<uint8_t> bytes;
+	};
+	Upload layout, rope, model_const, silu, scratch_layout, page_table;
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_uav, scratch_uav, work_scratch_uav;
+};
+
 // One chunk's row buffers (plan §3.4, SF3): kGpuRowsMaxRows rows of each per-row buffer, so one set serves every
 // variant; the shader-visible table of their views; the read-backs; and the upload window the first slice
 // writes the rows' entry states through. Taken from the context's free list when a chunk's first slice is
-// recorded, returned to it when the chunk closes, so after warm-up no slice allocates (cell 1.2).
+// recorded, returned to it when the chunk closes, so after warm-up no slice allocates (cell 1.2): `prepare`
+// holds what Prepare would otherwise allocate on each slice.
 struct GpuRowSet {
 	Microsoft::WRL::ComPtr<ID3D12Resource> seq_rows, scratch_rows, work_rows, seq_readback, kv_readback, init_upload;
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap;
@@ -83,6 +98,7 @@ struct GpuRowSet {
 	uint64_t seq_stride = 0, scratch_stride = 0, work_stride = 0;
 	// Where seq_rows rests between submissions (COPY_DEST when new, COPY_SOURCE after every slice's read-back).
 	D3D12_RESOURCE_STATES seq_rows_state = D3D12_RESOURCE_STATE_COPY_DEST;
+	GpuWidePrepareReuse prepare;
 	bool Fits(uint64_t seq, uint64_t scratch, uint64_t work, uint64_t kv) const noexcept {
 		return seq_bytes >= seq && scratch_bytes >= scratch && work_bytes >= work && kv_readback_bytes >= kv;
 	}
