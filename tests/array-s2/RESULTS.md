@@ -18,7 +18,7 @@ in the 1.16.0 suites are listed under **Build**.
 | 4d Generation | 10/10 valid IntentDoc v2 documents; CPU and GPU streams identical 10/10 |
 | 4e Save/restore | 54/54 on CPU, 54/54 on GPU |
 | 4f Engine features | exact jump-forward identical 10/10; full finish identical 10/10; canonical jump-forward valid 10/10 but different 10/10 (cause below) |
-| 5 Mutants | 2/2 killed. The verifier caught neither: one was caught by (b) and (d), the other at map time |
+| 5 Mutants | 2/2 killed. The verifier at `e9d73750` caught neither: one was caught by (b) and (d), the other at map time. The verifier at `d7ebeaee` refuses offset_swap |
 
 ## Build
 
@@ -163,7 +163,7 @@ On GPU, every walk state after each token is in [walks_gpu.txt](results/walks_gp
 | Mutant | Mutation | `sslm_verify` | Step (b) | Step (d) | Caught by |
 |---|---|---|---|---|---|
 | accept_shift | accepting state 213 → 214 (of 635; the only accepting id) | accepted | 3/3 walks end non-accepting, CPU and GPU | runs end at a dead end, `accepting=0` | (b) and (d) |
-| offset_swap | CSR `state_offsets[1]=2` and `[2]=4` swapped | **accepted** | `sslm_model_map` refused it (status 4) and `sslm_gpu_model_map` refused it (status 8) | the same map refusal | (b) and (d), at map |
+| offset_swap | CSR `state_offsets[1]=2` and `[2]=4` swapped | **accepted** by the verifier at `e9d73750`; refused by the verifier at `d7ebeaee` | `sslm_model_map` refused it (status 4) and `sslm_gpu_model_map` refused it (status 8) | the same map refusal | (b) and (d), at map |
 
 ## Findings
 
@@ -174,6 +174,11 @@ On GPU, every walk state after each token is in [walks_gpu.txt](results/walks_gp
      artifact, which both runtime loaders refuse.
    - The attach command's promise that the verifier checks the new artifact does not extend to the one section it
      adds. A correct serializer never produces such an artifact; a corrupted one would ship as verified.
+   - **Fixed on this branch by `d7ebeaee`** (pushed from the cloud during this run). Re-checked on the box with
+     `sslm_verify` rebuilt from `d7ebeaee`:
+     - offset_swap: refused, `SchemaMasksRejected -- BadSchemaStateOffsets`;
+     - the attached artifact: accepted, same fingerprint;
+     - accept_shift: accepted, as expected, because it is structurally valid. (b) and (d) catch it.
 2. **Canonical jump-forward closes arrays early.**
    - Canonical mode admits a forced span on its own: `}` after `false`, and `":[` after `"conditions"`. It then
      leaves the array's continue-or-close choice to a fresh decode step.
