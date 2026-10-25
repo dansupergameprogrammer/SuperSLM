@@ -518,6 +518,9 @@ std::unique_ptr<GpuRowSet> MakeGpuRowSet(harness::Device& dev, uint64_t seq_byte
 	hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	SSLM_GPU_HR(dev.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rs->heap)));
 	const UINT inc = dev.dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+	harness::TrackLiveDeviceBytesForTest(rs->heap.Get(), uint64_t{hd.NumDescriptors} * inc);  // cell 1.1's seam
+#endif
 	const D3D12_CPU_DESCRIPTOR_HANDLE base = rs->heap->GetCPUDescriptorHandleForHeapStart();
 	ID3D12Resource* const bufs[3] = {rs->seq_rows.Get(), rs->scratch_rows.Get(), rs->work_rows.Get()};
 	const uint64_t strides[3] = {rs->seq_stride, rs->scratch_stride, rs->work_stride};

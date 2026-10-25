@@ -7251,6 +7251,11 @@ bool ZeroGpuPooledSeqReservePageRefcountForTest(SslmGpuSequenceHandle* seq) noex
 	return true;
 }
 
+uint64_t SslmGpuLiveDeviceBytesForTest() noexcept {
+	const int64_t b = superslm_gpu::harness::LiveDeviceBytesForTest().load();
+	return b > 0 ? static_cast<uint64_t>(b) : 0u;
+}
+
 uint32_t SslmGpuAllocCountForTest() noexcept {
 	superslm_gpu::harness::GpuTestSeamState& seam = superslm_gpu::harness::TestSeamState();
 	std::lock_guard<std::mutex> lock(seam.mutex);
@@ -7626,12 +7631,7 @@ SslmGpuStatus RowsUnmapTailTo(SslmGpuSequenceHandle* seq, uint32_t keep) {
 // Closes the chunk: its row set goes back to the context's free list (plan §3.4).
 void RowsDropChunkImpl(SslmGpuSequenceHandle* seq) {
 	if (seq->rows_chunk == nullptr) return;
-	superslm_gpu::GpuRowsContextState& rc = seq->ctx->rows;
-	{
-		const std::lock_guard<std::mutex> lock(rc.mu);
-		if (seq->rows_chunk->row_set != nullptr) rc.free_sets.push_back(std::move(seq->rows_chunk->row_set));
-		if (rc.chunks_open > 0) --rc.chunks_open;
-	}
+	seq->ctx->rows.pool.ChunkClosed(std::move(seq->rows_chunk->row_set));
 	seq->rows_chunk.reset();
 }
 
@@ -7813,13 +7813,7 @@ SslmGpuStatus RowsDecodeStep(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, co
 		}
 	}
 	superslm_gpu::GpuRowsContextState& rc = ctx->rows;
-	if (c.row_set == nullptr) {
-		const std::lock_guard<std::mutex> lock(rc.mu);
-		if (!rc.free_sets.empty()) {
-			c.row_set = std::move(rc.free_sets.back());
-			rc.free_sets.pop_back();
-		}
-	}
+	if (c.row_set == nullptr) c.row_set = rc.pool.Take();
 #if defined(SUPERSLM_MULTIROW_WIDE)
 	// Cell 5.3's test-only trigger (sslm_gpu_test_only_mr2_arm_slice_alloc_failure).
 	const int32_t slice_index = static_cast<int32_t>(c.slice_ends.size());
@@ -7853,8 +7847,8 @@ SslmGpuStatus RowsDecodeStep(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, co
 	    /*q_width=*/static_cast<size_t>(model->num_attention_heads) * model->head_dim, model_generation,
 	    model->has_qk_norm, paged_ptr, &inflight, &record);
 	{
+		if (record.row_set_created) rc.pool.MadeOne();
 		const std::lock_guard<std::mutex> lock(rc.mu);
-		if (record.row_set_created) ++rc.sets_total;
 		rc.allocations += record.allocations;
 		if (inflight) {
 			++rc.widened_lists;
@@ -8035,10 +8029,7 @@ SslmGpuStatus sslm_gpu_seq_embed_rowsImpl(SslmGpuContext* ctx, SslmGpuSequenceHa
 	}
 	seq->rows_chunk = std::move(chunk);
 	{
-		superslm_gpu::GpuRowsContextState& rc = ctx->rows;
-		const std::lock_guard<std::mutex> lock(rc.mu);
-		++rc.chunks_open;
-		rc.chunks_open_peak = std::max(rc.chunks_open_peak, rc.chunks_open);
+		ctx->rows.pool.ChunkOpened();
 	}
 	*out_admitted = static_cast<int32_t>(M);
 	return SSLM_OK;
@@ -8071,15 +8062,16 @@ SslmGpuStatus sslm_gpu_test_only_mr2_seamsImpl(SslmGpuContext* ctx, SslmGpuMr2Se
 	SslmGpuMr2Seams s{};
 	s.submissions = superslm_gpu::harness::GetDevice().submission_counter();
 	superslm_gpu::GpuRowsContextState& rc = ctx->rows;
+	const auto pool = rc.pool.stats();
 	const std::lock_guard<std::mutex> lock(rc.mu);
 	s.widened_lists = rc.widened_lists;
 	s.last_widened_list_dispatches = rc.last_widened_list_dispatches;
 	s.max_widened_list_dispatches = rc.max_widened_list_dispatches;
 	s.allocations = rc.allocations;
-	s.row_buffer_sets = rc.sets_total;
-	s.row_buffer_free = static_cast<uint32_t>(rc.free_sets.size());
-	s.chunks_open = rc.chunks_open;
-	s.chunks_open_peak = rc.chunks_open_peak;
+	s.row_buffer_sets = pool.sets_total;
+	s.row_buffer_free = pool.free;
+	s.chunks_open = pool.chunks_open;
+	s.chunks_open_peak = pool.chunks_open_peak;
 	*out = s;
 	return SSLM_OK;
 }
