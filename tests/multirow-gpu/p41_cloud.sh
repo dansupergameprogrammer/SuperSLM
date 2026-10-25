@@ -57,6 +57,10 @@ if [ -z "$BASE" ]; then
 	BASE="$(git describe --tags --abbrev=0 --match 'v*' HEAD)"
 fi
 export WINEPREFIX="${WINEPREFIX_P41:-$OUT/wineprefix-$$}"
+# A prefix this run made (not a caller's) is removed at exit, with its per-model children: each is a full Wine tree.
+if [ -z "${WINEPREFIX_P41:-}" ]; then
+	trap 'for p in "$WINEPREFIX" "$WINEPREFIX"-*; do [ -d "$p" ] && { WINEPREFIX="$p" /usr/lib/wine/wineserver -k 2>/dev/null || true; rm -rf "$p"; }; done; true' EXIT
+fi
 mkdir -p "$OUT/shaders" "$OUT/obj"
 FAILED=()
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }

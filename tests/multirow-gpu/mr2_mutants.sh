@@ -58,6 +58,10 @@ if ! grep -rqs "sslm_gpu_seq_embed_rows" src/gpu/*.cpp src/gpu/*.inl; then
 fi
 mkdir -p "$OUT"
 export WINEPREFIX="${WINEPREFIX_MR2:-$OUT/wineprefix-$$}"
+# A prefix this run made (not a caller's) is removed at exit, with its per-model children: each is a full Wine tree.
+if [ -z "${WINEPREFIX_MR2:-}" ]; then
+	trap 'for p in "$WINEPREFIX" "$WINEPREFIX"-*; do [ -d "$p" ] && { WINEPREFIX="$p" /usr/lib/wine/wineserver -k 2>/dev/null || true; rm -rf "$p"; }; done; true' EXIT
+fi
 start_xvfb; wine_env
 
 # shader_mutant NAME SED-SCRIPT FILE-GLOB: copy the cells' exe and shaders, apply SED to the widened sources the glob
@@ -93,7 +97,7 @@ must_red() {
 	shift 2
 	for m in "$@"; do
 		set +e
-		"$WINE" "$OUT/$name/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" --adapter="$FIX/pkv_def_r4.adp" \
+		WINEPREFIX="$WINEPREFIX-$m" "$WINE" "$OUT/$name/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" --adapter="$FIX/pkv_def_r4.adp" \
 			--cells="$cells" --partitions=5 >"$OUT/$name/$m.log" 2>&1
 		rc=$?
 		set -e
@@ -154,7 +158,7 @@ if want MX15; then
 fi
 # host_mutant NAME FILE OLD NEW: the cells' objects with FILE's one exact OLD replaced by NEW (must occur once) in a
 # copy of the tree, the translation unit that compiles FILE rebuilt with mr2_wine.sh's flags, relinked.
-CFLAGS="-std=c++20 -O2 -Iinclude -Isrc -Isrc/gpu -Itests -Itests/multirow-gpu -DNOMINMAX -DWIN32_LEAN_AND_MEAN -include d3d12.h -include d3d12sdklayers.h -DSUPERSLM_MULTIROW_WIDE"
+CFLAGS="-std=c++20 -O2 -Iinclude -Isrc -Isrc/gpu -Itests -Itests/multirow-gpu -DNOMINMAX -DWIN32_LEAN_AND_MEAN -include d3d12.h -include d3d12sdklayers.h -DSUPERSLM_MULTIROW_WIDE -DSUPERSLM_GPU_ALLOC_FAULT_INJECTION"
 host_mutant() {
 	local name="$1" file="$2" d="$OUT/$1" tu
 	rm -rf "$d"; mkdir -p "$d/tree"
@@ -191,6 +195,13 @@ if want MX20; then host_mutant MX20 $G 'for (uint32_t r = 0; r <= f; ++r) counte
 	'for (uint32_t r = 0; r < k; ++r) counters[i] += rows[r].counters[i];  // MX20' && must_red MX20 6.6 pkv_def pkv_qk; fi
 if want MX21; then host_mutant MX21 $G 'copy_row(static_cast<uint32_t>(j), refusing_end);' \
 	'(void)refusing_end;  // MX21' && must_red MX21 6.6 pkv_def pkv_qk; fi
+# The code review's mutants (poirot-mr2.md S1, S2), kept as the suite's own:
+#   P2  CommitPrefix's page cover p0 + k instead of p0 + f + 1 (one position short on a refusal)  -> 6.6 (page edge)
+#   P5  the M = 1 rollback does not restore row p0's mirror bytes                                 -> 5.3m
+if want P2; then host_mutant P2 $G 'std::min<int64_t>(c.p0 + static_cast<int64_t>(f) + 1, seq->context_cap)' \
+	'std::min<int64_t>(c.p0 + static_cast<int64_t>(k), seq->context_cap)' && must_red P2 6.6 pkv_def pkv_qk; fi
+if want P5; then host_mutant P5 $G $'\tif (e.mirror_taken) {\n\t\tuint8_t* base' $'\tif (false) {  // P5\n\t\tuint8_t* base' \
+	&& must_red P5 5.3m pkv_def pkv_qk; fi
 if [ ${#FAILED[@]} -eq 0 ]; then echo "mutants: PASS"; exit 0; fi
 echo "mutants: FAIL (${FAILED[*]})"
 exit 1

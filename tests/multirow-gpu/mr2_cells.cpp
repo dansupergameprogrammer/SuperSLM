@@ -7,7 +7,8 @@
 // (plan §7 grading rule). "Per-layer" is DispatchesPerLayer: 24, or 25 on pkv_qk.
 //
 // Cells (plan §7; [cloud] parts only, box parts are named in the record):
-//   1.2   no recorder allocation after warm-up; the row-buffer free list never exceeds the peak of open chunks
+//   1.2   no device allocation per widened slice after warm-up, on the harness allocation-count seam (plan §8; built
+//         with SUPERSLM_GPU_ALLOC_FAULT_INJECTION); the row-buffer free list never exceeds the peak of open chunks
 //   1.4   three open chunks (M 8, 3, 5) interleaved one layer at a time, a fourth sequence's one-row slice between
 //   1.5   one handle: refused chunk (j = 2), reset, M = 8, M = 3, each equal to its twin   [needs *_refuse fixture]
 //   4.1   M 1..8 x {dedicated, pooled} x {no adapter, pkv_def_r4.adp on pkv_def}           (cloud matrix)
@@ -16,6 +17,9 @@
 //   4.6b  padded rows at the edges (M 3/5/6/7; p0 + M = budget, and on a page boundary) on a pool shared with a
 //         second sequence and a shared prefix: the whole device pool equals the twin world's
 //   5.3   an allocation failure at slice k: SSLM_GPU_ALLOCATION_FAILED, the handle back at entry, a retry is equal
+//   5.3m  an M = 1 chunk (the one-row body, which writes row p0's mirror at every finish) rolled back after its first
+//         slice, by rows_abandon and by a harness allocation fault: the whole dedicated SLM5 (mirror included) is back
+//         at entry, and a retry equals the twin
 //   6.1   per-row byte equality: M 1..8 x start offset s 0..7, blob, finish token and post-finish blob (+ 4.10 hashes)
 //   6.2   chunk invariance: random partitions of a 512-token stream into chunks of 1..8, random slice budgets in
 //         [1, L] x per-layer; the final blob and a 64-token continuation equal the twin's
@@ -49,6 +53,12 @@
 #include "mr2_common.h"
 #include "mr2_entry.h"
 #include "superslm/sslm_abi.h"
+
+// The harness allocation-count seam (include/superslm/gpu_port.h; compiled with SUPERSLM_GPU_ALLOC_FAULT_INJECTION):
+// every device allocation passes through one counted primitive.
+void SslmGpuAllocCounterResetForTest() noexcept;
+uint32_t SslmGpuAllocCountForTest() noexcept;
+void ArmGpuAllocFaultAtOccurrence(uint32_t k, long hr) noexcept;
 
 namespace {
 
@@ -553,8 +563,9 @@ void RefusalRun(const mr2::Model& rm, const std::vector<int32_t>& toks, int p0, 
 	World w(rm, Shaders());
 	if (!w.ok) { Check(false, tag + ": world"); return; }
 	SslmGpuSequenceHandle *a, *b;
+	SslmGpuKvPoolHandle* pa = nullptr;
 	if (pooled) {  // pools sized so no page is ever recycled in the run
-		a = w.Pooled(w.Pool(16), 64);
+		a = w.Pooled(pa = w.Pool(16), 64);
 		b = w.Pooled(w.Pool(16), 64);
 	} else {
 		a = w.Dedicated(64);
@@ -576,6 +587,20 @@ void RefusalRun(const mr2::Model& rm, const std::vector<int32_t>& toks, int p0, 
 	BlobEq(Blob(w, a, tag), Blob(w, b, tag), tag + " (whole " + (pooled ? "SLM6" : "SLM5") + ")");
 	Check(mr2::ReadCounters(a) == mr2::ReadCounters(b),
 	      F("%s: counters %s, twin %s", tag.c_str(), mr2::ReadCounters(a).Str().c_str(), mr2::ReadCounters(b).Str().c_str()));
+	if (pooled) {
+		// Pages (plan §3.5): the close keeps exactly the pages holding positions <= p0 + j, as the twin does. A
+		// blob cannot show a page one short or one over (a budget reserves its pages up front); the holder can.
+		SslmGpuKvPoolStats st{};
+		st.struct_size = sizeof st;
+		sslm_gpu_kv_pool_stats(pa, &st);
+		const int64_t B = st.page_positions;
+		const uint32_t want = B > 0 ? static_cast<uint32_t>((p0 + j + 1 + B - 1) / B) : 0;
+		uint32_t ma = 0, mb = 0;
+		Check(sslm_gpu_test_only_mr2_holder_mapped(a, &ma) == S::SSLM_OK && sslm_gpu_test_only_mr2_holder_mapped(b, &mb) == S::SSLM_OK &&
+		          ma == mb && ma == want,
+		      F("%s: holder maps %u pages, twin %u, want %u (positions through p0 + j = %d, B = %lld)", tag.c_str(), ma, mb, want,
+		        p0 + j, (long long)B));
+	}
 }
 
 void Cell66(const mr2::Model& m) {
@@ -599,6 +624,27 @@ void Cell66(const mr2::Model& m) {
 		const RefusalStream rs = FindRefusalStream(rm, probe, p0, j, j + 2);
 		if (!rs.ok) { Check(false, F("%s two-refusal j%d: no stream", rm.base().c_str(), j)); continue; }
 		RefusalRun(rm, rs.toks, p0, j, true, false, F("%s two-refusal j%d,k%d", rm.base().c_str(), j, j + 2));
+	}
+	// Refusals on a page's edge (review S1, mutant P2): row j at the first position of a page (p0 + j = B, where a
+	// cover of p0 + k instead of p0 + f + 1 drops the refusing row's page) and at a page's last (p0 + j = B - 1).
+	{
+		SslmGpuKvPoolStats st{};
+		st.struct_size = sizeof st;
+		SslmGpuKvPoolHandle* pp = probe.Pool(4);
+		if (pp) sslm_gpu_kv_pool_stats(pp, &st);
+		const int B = static_cast<int>(st.page_positions);
+		Check(B > 7, F("%s: page positions %d (the edge cases need B > 7)", rm.base().c_str(), B));
+		for (int j : {2, 5})
+			for (int last = 0; last <= 1; ++last) {
+				const int pe = last ? B - 1 - j : B - j;
+				if (B <= 7 || pe < 0) continue;
+				const RefusalStream rs = FindRefusalStream(rm, probe, pe, j);
+				if (!rs.ok) { Check(false, F("%s page-edge j%d p0 %d: no refusal stream", rm.base().c_str(), j, pe)); continue; }
+				for (int per_layer = 1; per_layer >= 0; --per_layer)
+					RefusalRun(rm, rs.toks, pe, j, per_layer, true,
+					           F("%s page-edge j%d at %s (p0 %d) %s pooled", rm.base().c_str(), j, last ? "B-1" : "B", pe,
+					             per_layer ? "one layer per call" : "whole depth per call"));
+			}
 	}
 	// Post-refusal saturation (MX5's fixture) is every j < 7 above: every row of the pkv fixtures saturates
 	// (6.7 checks it), so the rows after j carry deltas a sum over all rows would include.
@@ -719,15 +765,27 @@ void Cell12(const mr2::Model& m) {
 	if (!w.ok) { Check(false, "world"); return; }
 	SslmGpuSequenceHandle* a = w.Dedicated(512);
 	int at = 0;
-	CleanClose(RunChunk(w, a, Stream(at, 8, V, 17), [&](int) { return m.dpl(); }), a, 8, "warm-up");
-	at += 8;
-	const SslmGpuMr2Seams s0 = Seams(w);
-	for (int M : {8, 3, 5, 2, 7, 8, 4, 6}) {
-		CleanClose(RunChunk(w, a, Stream(at, M, V, 17), [&](int) { return m.dpl(); }), a, M, F("chunk M%d", M));
+	// Warm-up: one chunk at each widened variant (H 8, 4, 2).
+	for (int M : {8, 3, 2}) {
+		CleanClose(RunChunk(w, a, Stream(at, M, V, 17), [&](int) { return m.dpl(); }), a, M, F("warm-up M%d", M));
 		at += M;
 	}
+	// Graded on the harness's own allocation count (plan §7 1.2 "allocation seam", §8): the recorder's bookkeeping
+	// decides nothing. Only this world runs between the reset and the read.
+	const SslmGpuMr2Seams s0 = Seams(w);
+	SslmGpuAllocCounterResetForTest();
+	int slices = 0;
+	for (int M : {8, 3, 5, 2, 7, 8, 4, 6}) {
+		const ChunkRun r = RunChunk(w, a, Stream(at, M, V, 17), [&](int) { return m.dpl(); });
+		CleanClose(r, a, M, F("chunk M%d", M));
+		slices += r.slices;
+		at += M;
+	}
+	const uint32_t allocs = SslmGpuAllocCountForTest();
 	const SslmGpuMr2Seams s1 = Seams(w);
-	Check(s1.allocations == s0.allocations, F("%llu recorder allocations after warm-up (want 0)",
+	Check(allocs == 0, F("%u device allocations over %d widened slices after warm-up (%.1f per slice; harness seam, want 0)",
+	                     allocs, slices, slices ? double(allocs) / slices : 0.0));
+	Check(s1.allocations == s0.allocations, F("%llu recorder row-buffer allocations after warm-up (want 0)",
 	                                          (unsigned long long)(s1.allocations - s0.allocations)));
 	// Three chunks open at once, then closed: the free list never exceeds the peak.
 	SslmGpuSequenceHandle* x[3] = {w.Dedicated(64), w.Dedicated(64), w.Dedicated(64)};
@@ -892,6 +950,41 @@ void Cell53(const mr2::Model& m) {
 			BlobEq(Blob(w, a, tag), Blob(w, t, tag), tag + ": retry");
 		}
 }
+// 5.3m (review S2): an M = 1 chunk runs the one-row body, which writes row p0's K/V mirror rows at each slice's finish,
+// so its rollback must restore them (the recorder snapshots row p0's mirror bytes for M = 1). Dedicated, so the
+// whole SLM5 (the workspace mirror included) shows a row the rollback left behind.
+void Cell53m(const mr2::Model& m) {
+	g_cell = "5.3m";
+	const int32_t V = m.vocab();
+	if (m.layers() < 2) { Check(false, "the cell needs L >= 2 (a slice that leaves the chunk open)"); return; }
+	for (int fault = 0; fault <= 1; ++fault) {
+		const std::string tag = F("%s M1 %s", m.base().c_str(), fault ? "allocation fault at slice 1" : "rows_abandon after slice 0");
+		World w(m, Shaders());
+		if (!w.ok) { Check(false, tag + ": world"); continue; }
+		SslmGpuSequenceHandle* a = w.Dedicated(64);
+		SslmGpuSequenceHandle* t = w.Dedicated(64);
+		const std::vector<int32_t> pre = Stream(0, 3, V, 29), row = Stream(3, 1, V, 29);
+		Check(Twin(w, a, pre, Full(m), m) == S::SSLM_OK && Twin(w, t, pre, Full(m), m) == S::SSLM_OK, tag + ": prefix");
+		const std::vector<uint8_t> entry = Blob(w, a, tag);
+		int32_t adm = 0;
+		Check(EmbedRows(w, a, row.data(), 1, &adm) == S::SSLM_OK && adm == 1, tag + ": embed_rows M = 1");
+		Check(mr2::Slice(w, a, m.dpl()) == S::SSLM_OK && RowsOpen(a) == 1, tag + ": slice 0 (one layer, chunk still open)");
+		if (fault) {
+			ArmGpuAllocFaultAtOccurrence(1, static_cast<long>(E_OUTOFMEMORY));
+			const S st = mr2::Slice(w, a, m.dpl());
+			ArmGpuAllocFaultAtOccurrence(0, 0);
+			Check(st != S::SSLM_OK, F("%s: slice 1 returned %s under an armed allocation fault", tag.c_str(), mr2::Name(st)));
+		} else {
+			Check(sslm_gpu_seq_rows_abandon(w.ctx, a) == S::SSLM_OK, tag + ": rows_abandon");
+		}
+		Check(RowsOpen(a) == 0 && LastCommitted(a) == 0,
+		      F("%s: rows_open %d, last_rows_committed %d after the rollback", tag.c_str(), RowsOpen(a), LastCommitted(a)));
+		BlobEq(Blob(w, a, tag), entry, tag + ": rolled back to entry (whole SLM5, row p0's mirror included)");
+		CleanClose(RunChunk(w, a, row, [&](int) { return m.dpl(); }), a, 1, tag + " retry");
+		Check(Twin(w, t, row, Full(m), m) == S::SSLM_OK, tag + ": twin");
+		BlobEq(Blob(w, a, tag), Blob(w, t, tag), tag + ": retry");
+	}
+}
 void Cell11r(const mr2::Model& m) {
 	g_cell = "1.1r";
 	const int32_t V = m.vocab();
@@ -1034,7 +1127,7 @@ int main(int argc, char** argv) {
 	}
 	const std::vector<std::pair<const char*, void (*)(const mr2::Model&)>> cells = {
 	    {"6.1", Cell61}, {"6.3", Cell63}, {"6.4", Cell64}, {"6.7", Cell67}, {"4.1", Cell41}, {"4.6", Cell46},
-	    {"4.6b", Cell46b}, {"6.6", Cell66}, {"1.5", Cell15}, {"1.2", Cell12}, {"1.4", Cell14}, {"5.3", Cell53},
+	    {"4.6b", Cell46b}, {"6.6", Cell66}, {"1.5", Cell15}, {"1.2", Cell12}, {"1.4", Cell14}, {"5.3", Cell53}, {"5.3m", Cell53m},
 	    {"1.1r", Cell11r}, {"6.8", Cell68}, {"4.2", Cell42}, {"6.2", Cell62}};
 	if (instrument) {
 		mr2::Model im;
