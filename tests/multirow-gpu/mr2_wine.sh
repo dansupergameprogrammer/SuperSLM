@@ -6,7 +6,8 @@
 #   --out   default <repo>/out/mr2 (under the repo: the engine's shader staleness check walks up to src/gpu/shaders)
 #   --base  the base tag P4.2 anchors to (default MR_BASE_TAG, else the newest v* tag that is an ancestor of HEAD)
 #   --only  p42 | wave | cells | mutants   (default: p42,wave,cells)
-# Each run uses its own WINEPREFIX (<out>/wineprefix-<pid>) unless WINEPREFIX_MR2 is set.
+# Each run uses its own WINEPREFIX (<out>/wineprefix-<pid>, or WINEPREFIX_MR2), and the cells and instruments use one per
+# model under it (<prefix>-<model>), so each model's runs have their own wineserver and concurrent runs never share one.
 #
 # Legs (each printed PASS or FAIL; exit 0 only when every leg run passes):
 #   p42      P4.2: mr2_p42_capture.exe built from the BASE TAG's tree (a detached worktree) and from the branch, on
@@ -49,6 +50,10 @@ done
 cd "$REPO"
 [ -n "$BASE" ] || BASE="$(git describe --tags --abbrev=0 --match 'v*' HEAD)"
 export WINEPREFIX="${WINEPREFIX_MR2:-$OUT/wineprefix-$$}"
+# A prefix this run made (not a caller's) is removed at exit, with its per-model children: each is a full Wine tree.
+if [ -z "${WINEPREFIX_MR2:-}" ]; then
+	trap 'for p in "$WINEPREFIX" "$WINEPREFIX"-*; do [ -d "$p" ] && { WINEPREFIX="$p" /usr/lib/wine/wineserver -k 2>/dev/null || true; rm -rf "$p"; }; done; true' EXIT
+fi
 mkdir -p "$OUT"
 want() { case ",$ONLY," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 FAILED=()
@@ -165,13 +170,17 @@ fi
 # ------------------------------------------------------------------------------------------------ cells
 if want cells; then
 	STUB=()
-	EXTRA="-DSUPERSLM_MULTIROW_WIDE"
+	# SUPERSLM_GPU_ALLOC_FAULT_INJECTION: the harness allocation-count seam 1.2 grades on (plan §8) and 5.3m arms.
+	EXTRA="-DSUPERSLM_MULTIROW_WIDE -DSUPERSLM_GPU_ALLOC_FAULT_INJECTION"
 	if ! grep -rqs "sslm_gpu_seq_embed_rows" src/gpu/*.cpp src/gpu/*.inl; then
 		STUB=(tests/multirow-gpu/mr2_stub.cpp)
 		EXTRA="$EXTRA -DMR2_STUB"
 		echo "cells: src/ defines no recorder entry; building against mr2_stub.cpp (red-unimplemented)"
 	fi
 	shaders "$REPO" "$OUT/cells/shaders" wide
+	# Objects are reused by mtime, so a change of flags clears them (a stamp records the flags they were built with).
+	OBJD="$OUT/cells/obj"; [ ${#STUB[@]} -eq 0 ] || OBJD="$OBJD-stub"
+	if [ "$(cat "$OBJD.flags" 2>/dev/null)" != "$FLAGS $EXTRA" ]; then rm -rf "$OBJD"; mkdir -p "$OUT/cells"; echo "$FLAGS $EXTRA" >"$OBJD.flags"; fi
 	build "$REPO" "$OUT/cells/obj$([ ${#STUB[@]} -gt 0 ] && echo -stub)" "$EXTRA" "$OUT/cells/mr2_cells.exe" \
 		tests/multirow-gpu/mr2_cells.cpp "${STUB[@]}"
 	if [ "$RUN" = 1 ]; then
@@ -181,7 +190,7 @@ if want cells; then
 		# The references first (no recorder involved; green before the recorder exists).
 		for m in pkv_def pkv_qk; do
 			set +e
-			"$WINE" "$OUT/cells/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" --instrument >"$OUT/instruments-$m.log" 2>&1
+			WINEPREFIX="$WINEPREFIX-$m" "$WINE" "$OUT/cells/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" --instrument >"$OUT/instruments-$m.log" 2>&1
 			rc=$?
 			set -e
 			grep -E "^(FAIL|RED|PASS)" "$OUT/instruments-$m.log" | tr -d '\r' | head -20 | sed 's/^/    /'
@@ -189,7 +198,7 @@ if want cells; then
 		done
 		for m in pkv_def pkv_qk; do
 			set +e
-			"$WINE" "$OUT/cells/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" --adapter="$FIX/pkv_def_r4.adp" \
+			WINEPREFIX="$WINEPREFIX-$m" "$WINE" "$OUT/cells/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" --adapter="$FIX/pkv_def_r4.adp" \
 				--partitions="${MR2_PARTITIONS:-200}" ${MR2_CELLS:+--cells=$MR2_CELLS} >"$OUT/cells-$m.log" 2>&1
 			rc=$?
 			set -e
