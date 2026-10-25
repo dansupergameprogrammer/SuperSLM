@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Multi-row GPU plan (rev 1.3.2), MR1 gate: "Wine one-layer smoke equal on pkv_def and pkv_qk", on the software
-# GPU (Wine + vkd3d-proton + lavapipe, tools/cloud_gpu/wine_gpu.sh; run its `setup` once first).
+# Multi-row GPU plan (rev 1.3.2): the builder's Wine smokes on the software GPU (Wine + vkd3d-proton + lavapipe,
+# tools/cloud_gpu/wine_gpu.sh; run its `setup` once first). MR1 gate: "Wine one-layer smoke equal on pkv_def and
+# pkv_qk" (multirow_wide_smoke.cpp). MR2: the recorder through its internal entry against the one-row twin
+# (multirow_rows_smoke.cpp; a development aid, the test author's suite grades the cells).
 #
-# Usage: tools/multirow_wide_smoke.sh [--out=DIR] [--jobs=N] [--build-only] [--quick]
+# Usage: tools/multirow_wide_smoke.sh [--out=DIR] [--jobs=N] [--build-only] [--quick] [--suite=mr1|mr2|all]
 #   --out    default <repo>/out/mr1-wide-smoke. Each run gets its own WINEPREFIX (<out>/wineprefix-<pid>)
 #            unless WINEPREFIX_MR1 names one.
-#   --quick  p0 = 3 only (multirow_wide_smoke.cpp's grid otherwise)
+#   --quick  the tools' reduced grids
+#   --suite  which smoke's legs run (default mr1)
 #
 # Builds the engine with -DSUPERSLM_MULTIROW_WIDE (the test-only widened host, src/gpu/multirow_wide.inl) and
 # tools/multirow_wide_smoke.cpp, compiles the one-row and widened shaders as build.bat does, writes the
@@ -20,13 +23,15 @@ OUT="$REPO/out/mr1-wide-smoke"
 JOBS=2
 RUN=1
 QUICK=()
+SUITE=mr1
 for a in "$@"; do
 	case "$a" in
 		--out=*) OUT="${a#--out=}" ;;
 		--jobs=*) JOBS="${a#--jobs=}" ;;
 		--build-only) RUN=0 ;;
 		--quick) QUICK=(--quick) ;;
-		*) sed -n '2,14p' "$0"; exit 2 ;;
+		--suite=*) SUITE="${a#--suite=}" ;;
+		*) sed -n '2,16p' "$0"; exit 2 ;;
 	esac
 done
 mkdir -p "$OUT/shaders" "$OUT/obj"
@@ -64,31 +69,48 @@ FLAGS="-std=c++20 -O2 -Iinclude -Isrc -Isrc/gpu -DNOMINMAX -DWIN32_LEAN_AND_MEAN
 ENGINE=()
 # shellcheck disable=SC2086
 for s in $SRCS; do case "$s" in src/*) ENGINE+=("$s") ;; esac; done
-printf '%s\n' "${ENGINE[@]}" tools/multirow_wide_smoke.cpp | xargs -P "$JOBS" -I{} bash -c \
-	'o="$1/$(echo "$2" | tr / _).o"; '"$CXX $FLAGS"' -w -c "$2" -o "$o" || { echo "COMPILE FAILED: $2"; exit 1; }' _ "$OUT/obj" {}
-"$CXX" -O2 "$OUT/obj"/*.o -o "$OUT/multirow_wide_smoke.exe" -ld3d12 -ldxgi -ldxguid -lshlwapi -lpsapi \
-	-static -static-libgcc -static-libstdc++
-echo "built $OUT/multirow_wide_smoke.exe (+ $(ls "$OUT"/shaders/*.cso | wc -l) shaders)"
+mkdir -p "$OUT/obj/tools"
+printf '%s\n' "${ENGINE[@]}" tools/multirow_wide_smoke.cpp tools/multirow_rows_smoke.cpp | xargs -P "$JOBS" -I{} bash -c \
+	'd="$1"; case "$2" in tools/*) d="$1/tools" ;; esac; o="$d/$(echo "$2" | tr / _).o"; '"$CXX $FLAGS"' -w -c "$2" -o "$o" || { echo "COMPILE FAILED: $2"; exit 1; }' _ "$OUT/obj" {}
+for t in multirow_wide_smoke multirow_rows_smoke; do
+	"$CXX" -O2 "$OUT/obj"/*.o "$OUT/obj/tools/tools_$t.cpp.o" -o "$OUT/$t.exe" -ld3d12 -ldxgi -ldxguid -lshlwapi -lpsapi \
+		-static -static-libgcc -static-libstdc++
+done
+echo "built $OUT/multirow_wide_smoke.exe and $OUT/multirow_rows_smoke.exe (+ $(ls "$OUT"/shaders/*.cso | wc -l) shaders)"
 [ "$RUN" = 1 ] || exit 0
 
 FIX="$OUT/fixtures"
 mkdir -p "$FIX"
-python3 tools/gen_paged_kv_fixture.py "$FIX" >/dev/null
+# The fixture writer is slow (it writes every variant); reuse MR_FIXTURES' or an earlier run's when present.
+for src in "${MR_FIXTURES:-}" "$REPO/out/mr-p41/fixtures" "$REPO/out/mr2/fixtures"; do
+	[ -n "$src" ] && [ -f "$src/pkv_def.sslm" ] && [ -f "$src/pkv_qk.sslm" ] && [ ! -f "$FIX/pkv_qk.sslm" ] && cp "$src"/pkv_def.sslm "$src"/pkv_qk.sslm "$FIX/"
+done
+[ -f "$FIX/pkv_def.sslm" ] && [ -f "$FIX/pkv_qk.sslm" ] || python3 tools/gen_paged_kv_fixture.py "$FIX" >/dev/null
 python3 tools/gen_multirow_adapter_fixture.py "$FIX/pkv_def.sslm" "$FIX/pkv_def_r4.adp" >/dev/null
 start_xvfb
 wine_env
 FAILED=()
 leg() {
-	local name="$1"; shift
+	local exe="$1" name="$2"; shift 2
 	set +e
-	"$WINE" "$OUT/multirow_wide_smoke.exe" "${QUICK[@]}" "$@" >"$OUT/$name.log" 2>&1
+	"$WINE" "$OUT/$exe.exe" "${QUICK[@]}" "$@" >"$OUT/$name.log" 2>&1
 	local rc=$?
 	set -e
 	grep -E '^(PASS|FAIL)' "$OUT/$name.log" | sed 's/^/    /'
 	tail -1 "$OUT/$name.log"
 	[ $rc = 0 ] || FAILED+=("$name")
 }
-leg pkv_def --model="$FIX/pkv_def.sslm"
-leg pkv_def_r4 --model="$FIX/pkv_def.sslm" --adapter="$FIX/pkv_def_r4.adp"
-leg pkv_qk --model="$FIX/pkv_qk.sslm"
-if [ ${#FAILED[@]} = 0 ]; then echo "MR1 Wine one-layer smoke: PASS"; else echo "MR1 Wine one-layer smoke: FAIL (${FAILED[*]})"; exit 1; fi
+for s in mr1 mr2; do
+	case "$SUITE" in "$s"|all) ;; *) continue ;; esac
+	exe=multirow_wide_smoke
+	[ "$s" = mr2 ] && exe=multirow_rows_smoke
+	leg "$exe" "$s-pkv_def" --model="$FIX/pkv_def.sslm"
+	leg "$exe" "$s-pkv_def_r4" --model="$FIX/pkv_def.sslm" --adapter="$FIX/pkv_def_r4.adp"
+	leg "$exe" "$s-pkv_qk" --model="$FIX/pkv_qk.sslm"
+	if [ "$s" = mr2 ]; then
+		# The close's refusal path: RoPE tables truncated to 12 positions, so every row at 12 or later refuses.
+		leg "$exe" mr2-refusal-pkv_def --model="$FIX/pkv_def.sslm" --refusal-only --rope-positions=12
+		leg "$exe" mr2-refusal-pkv_qk --model="$FIX/pkv_qk.sslm" --refusal-only --rope-positions=12
+	fi
+done
+if [ ${#FAILED[@]} = 0 ]; then echo "Multi-row Wine smoke ($SUITE): PASS"; else echo "Multi-row Wine smoke ($SUITE): FAIL (${FAILED[*]})"; exit 1; fi
