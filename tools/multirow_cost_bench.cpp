@@ -26,6 +26,7 @@
 //                            [--p0=16] [--out=PATH] [--json=PATH] [--csv=PATH [--csv-append]] [--model-name=NAME]
 //   --out   where the header is written (default: not written; the table is printed either way)
 //   --json  the per-run samples and summaries
+//   --quick 3 timed runs at p0 = 3 (tools/multirow_wide_smoke.sh --quick; never a box run)
 // Exit 0 when every run's chunk closed OK with all M rows committed.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -179,6 +180,7 @@ int main(int argc, char** argv) {
 		else if (a.rfind("--warmup=", 0) == 0) warmup = std::atoi(a.c_str() + 9);
 		else if (a.rfind("--p0=", 0) == 0) p0 = std::atoi(a.c_str() + 5);
 		else if (a == "--device-head") device_head = true;
+		else if (a == "--quick") runs = 3, p0 = 3;  // the Wine smoke's reduced form
 		else {
 			std::printf("usage: multirow_cost_bench --model=PATH [--shaders=DIR] [--adapter=PATH] [--device-head] "
 			            "[--runs=30] [--warmup=1] [--p0=16] [--out=PATH] [--json=PATH] [--csv=PATH [--csv-append]] [--model-name=NAME]\n");

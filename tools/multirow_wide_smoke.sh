@@ -99,7 +99,7 @@ leg() {
 	"$WINE" "$OUT/$exe.exe" "${QUICK[@]}" "$@" >"$OUT/$name.log" 2>&1
 	local rc=$?
 	set -e
-	grep -E '^(PASS|FAIL)' "$OUT/$name.log" | sed 's/^/    /'
+	{ grep -E '^(PASS|FAIL)' "$OUT/$name.log" || true; } | sed 's/^/    /'  # a log with no verdict lines is not an exit
 	tail -1 "$OUT/$name.log"
 	[ $rc = 0 ] || FAILED+=("$name")
 }
