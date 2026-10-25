@@ -37,6 +37,9 @@
 namespace {
 
 using S = ::SslmGpuStatus;
+// The sequence capacity: room for start + rows up to the MR1 smoke's MX1-host cases (p0 = 256 / query heads - 2,
+// plus 8 rows). mr1_wide_smoke.cpp's `ref` uses the same capacity, so its SLM5 bytes compare with these.
+constexpr int32_t kTwinSeqCap = 256;
 
 struct Args {
 	std::string model, out, shaders;
@@ -114,8 +117,8 @@ bool Capture(const Args& a, const superslm::SslmModelView& view, std::vector<Blo
 	st = sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model);
 	if (st != S::SSLM_OK || !model) return Fail("sslm_gpu_model_map", st);
 	SslmGpuSequenceHandle* seq = nullptr;
-	st = sslm_gpu_seq_create(ctx, model, 64, &seq);
-	if (st != S::SSLM_OK || !seq) return Fail("sslm_gpu_seq_create(cap 64)", st);
+	st = sslm_gpu_seq_create(ctx, model, kTwinSeqCap, &seq);
+	if (st != S::SSLM_OK || !seq) return Fail("sslm_gpu_seq_create(kTwinSeqCap)", st);
 
 	bool ok = true;
 	for (int i = 0; ok && i < a.start + a.rows; ++i) {
