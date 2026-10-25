@@ -14,11 +14,21 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **[1.13.1](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.13.1)**, a GPU fix release. A GPU page pool is
-now capped at the largest buffer D3D12 guarantees on the card (2 GiB on a card with 8 GB or more of video memory, a quarter of
-its video memory below that), and a larger request is refused before anything is allocated; on the AMD Radeon RX 7900 XTX a
-4 GiB pool used to make the driver drop the device. `sslm_gpu_kv_pool_max_page_count` reports the largest pool a card takes.
-See the [1.13.1 release note](docs/releases/1.13.1.md).
+Current release: **[1.16.0](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.16.0)**. The GPU
+backend gets the CPU's frozen-prefix save and restore: a host can save a frozen GPU prefix as an `SPX1` blob
+(`sslm_gpu_prefix_save`) and restore it instead of prefilling it again (`sslm_gpu_prefix_restore`). A GPU blob is
+bound to the engine version and the GPU (vendor and device) that wrote it. See the
+[1.16.0 release note](docs/releases/1.16.0.md).
+
+In 1.15.0 schema-bound decode got faster on the CPU. When a schema is bound, each token's last step scores only the
+tokens the schema allows, with the same tokens as before (1.37x on a 28-token order with a 0.5B model at one thread).
+Opt-in jump-forward writes the text a schema forces in one batched pass: its exact mode keeps the model's own tokens
+and gains only with a good draft, and its canonical mode changes the tokens. See the
+[1.15.0 release note](docs/releases/1.15.0.md).
+
+In 1.14.0 a host got CPU save and restore of a frozen shared prompt prefix as an `SPX1` blob (`sslm_prefix_save`,
+`sslm_prefix_restore`), so it can restore the prefix instead of prefilling it again. A blob is bound to the engine
+version that wrote it.
 
 In 1.13.0 the GPU backend got the same shared prompt prefixes
 and budgeted sequences the CPU got in 1.12.0: a cast of characters that share a world and persona

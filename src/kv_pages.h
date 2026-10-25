@@ -123,6 +123,13 @@ PageStatus HolderAdoptShare(PageHolder* dst, const PageHolder* src, uint32_t pag
 // map nothing yet. No pool mutex, no allocation; sets `dirty`.
 PageStatus HolderMapMaterialized(PageHolder* holder, uint32_t count);
 PageStatus HolderUnmapAll(PageHolder* holder);
+// Schema fast-decode plan rev 1.3.3 §5.10.4: the inverse of HolderMapNext for the table's tail. The
+// private entries [max(keep, shared + materialized), mapped) go back to the holder's own reserve, last
+// mapped pushed first, so the next HolderMapNext draws the same pages in the same order. `dirty` is
+// kept (a page a discarded row wrote is still poisoned when it leaves for the pool), a shared or
+// materialized leading entry is never unmapped, and `keep` >= mapped changes nothing. No pool mutex,
+// no allocation (each page came from this reserve, whose capacity holds it).
+PageStatus HolderUnmapTail(PageHolder* holder, uint32_t keep);
 PageStatus HolderRelease(PageHolder* holder);
 // Every page of the holder's private reserve back to the pool (refcount := 0, poisoned iff dirty),
 // its table untouched: a legacy prefix's first freeze (§3.4), and the ABI's reserve-drain seam

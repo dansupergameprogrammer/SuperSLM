@@ -1238,6 +1238,10 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
 // page_positions`, and for the chunk `context_length_start + chunk_tokens <= mapped_pages *
 // page_positions` -- else `KvPageUnmapped`. Attention reads the K/V rows one page run at a time
 // (§3.2 item 3); for the one-page view that is one run of the whole width, the call made before.
+// Schema fast-decode plan rev 1.3.3 §5.10.4: the chunk overload's appended `out_row_saturation_counts`,
+// when non-null, receives each row's share of the five saturation counters, 5 per row in the order kv,
+// kv_landing, k_channel_landing, rope_q, rope_k (`chunk_tokens * 5` entries, added to, so the caller
+// zeroes them). The totals are moved exactly as without it. Default nullptr: every caller is unchanged.
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
                                uint32_t layer_budget, size_t hidden_size, size_t head_dim,
                                size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
@@ -1256,7 +1260,8 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                            size_t q_width, uint64_t* out_kv_landing_saturation_count,
                                            uint64_t* out_k_channel_landing_saturation_count,
                                            uint64_t* out_rope_q_saturation_count,
-                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading);
+                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading,
+                                           uint64_t* out_row_saturation_counts = nullptr);
 
 // (design Sec31.2's own "int64-input, __int128-intermediate sibling of
 // the RoPE pair primitive, Q2.30 tables unchanged" -- Sec12 "Wide-RoPE
@@ -1533,6 +1538,31 @@ SslmForwardStatus LogitsSiteParallel(const int8_t* final_codes, size_t hidden_si
                                      const int8_t* head_weights, size_t vocab_size,
                                      int64_t* wide_logits, int32_t* out_logits,
                                      const sslm_parallel_for* pf);
+
+// Schema fast-decode plan (rev 1.2.1) §4.3, slice M1: the static exactness predicate of the
+// legal-row finish. True iff hidden_size * 16384 < INT32_MAX (|int8 * int8| <= 16384), i.e. iff
+// hidden_size <= 131,071. Under it no head row's dot can fall outside int32, so NarrowRowChecked
+// never rejects a row and no legal logit equals INT32_MIN; skipping the illegal rows then cannot
+// turn a whole-row rejection into a token. sslm_model_map computes each model's flag from it once.
+bool LegalRowFinishExact(size_t hidden_size) noexcept;
+
+// Schema fast-decode plan §4.1 steps 1-2 and §4.2, slice M1: the finish's logits over the legal rows
+// only. For each id in legal_ids[0, n) (ascending, each < vocab_size): wide_logits[id] =
+// GemmInt8AccumulateRow over head row `id` (the same dot LogitsSite computes for that row), then
+// out_logits[id] = that value through NarrowRowChecked. No other position of either array is
+// written; the decode step's maskers overwrite every illegal position with INT32_MIN before
+// anything reads the row (the schema's mask page equals its CSR row).
+// - Threading: serial when `pf` is null, `pf->run` is null or `pf->max_tasks <= 1`. Otherwise the
+//   legal list is split by SplitColumns over n at alignment 64 with no minimum work, and `run` is
+//   called iff n >= 1 (a one-task call included), as LogitsSiteParallel calls it for any V.
+// - n = 0 computes nothing, calls no hook, and returns Ok.
+// - A hook that omits, repeats or invents a task index returns ParallelForIncomplete and writes
+//   nothing to `out_logits`. Narrowing runs serially after `run` returns.
+// No heap allocation. Not exported (LogitsSiteParallel's note on the export slot applies).
+SslmForwardStatus LogitsSiteLegalRows(const int8_t* final_codes, size_t hidden_size,
+                                      const int8_t* head_weights, size_t vocab_size,
+                                      const uint32_t* legal_ids, size_t n, int64_t* wide_logits,
+                                      int32_t* out_logits, const sslm_parallel_for* pf);
 
 // C16 (master plan §6.8 row C16; §6.4 step 16): the pinned argmax
 // tie-break -- LOWEST token index. Caller-ensures `n >= 1` (the same

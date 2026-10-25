@@ -161,6 +161,31 @@ SUPERSLM_API sslm_status sslm_prefix_begin_budgeted(sslm_model model, sslm_kv_po
  * copied, and its state copied (including its schema binding and walk state); origin = the
  * parent's length. A child of a non-empty parent cannot bind a schema of its own. */
 SUPERSLM_API sslm_status sslm_prefix_begin_from(sslm_prefix parent, int32_t budget, sslm_prefix* out);
+/* Save a frozen prefix as canonical SPX1 bytes. A null or short buffer reports the exact size
+ * through *n and returns SSLM_BUFFER_TOO_SMALL. Null handles, an unfrozen prefix, or a prefix
+ * with nonzero layer_index return SSLM_INVALID_ARGUMENT without writing the buffer. Concurrent
+ * saves of a frozen prefix are allowed; releasing it during a save is caller undefined behavior. */
+SUPERSLM_API sslm_status sslm_prefix_save(sslm_prefix prefix, void* buf, size_t* n);
+/* Restore an SPX1 prefix for this backend, engine producer, model and KV precision. The hint is
+ * optional for fidelity. A nested blob (origin > 0) shares the hint's leading floor(origin/B) pages
+ * only when the hint is frozen, of `model` and of `*pool`, holds exactly origin positions, and its
+ * rows over those pages equal the blob's; the rest are drawn and filled from the blob, so the
+ * restore draws ceil(length/B) - floor(origin/B) pages. Any other hint, a null one, or a root blob
+ * restores privately (SSLM_OK, 0 shared). *out_shared_pages, when non-null, receives the count
+ * shared. Without a matching hint, a nested prefix requires ceil(length/B) free pages; exhaustion
+ * returns SSLM_KV_POOL_EXHAUSTED with no page drawn. Every refusal clears *out and returns every
+ * page drawn and every shared reference taken. The parent may be released after the restore.
+ * B is `pool`'s page size (the contiguous option's is the cap): SPX1 carries no page size, so a
+ * blob restores into a pool of any page size, and the restored prefix is then adoptable only from
+ * pools of that page size, as every prefix is (sslm_seq_adopt_prefix).
+ * The SHA-256 digest detects accidental change, not intentional editing: a recomputed digest can
+ * admit schema and walk state within model bounds, length within the context cap, origin within
+ * length, a valid current token, an int32 mantissa, any int64 exponent, any saturation counts,
+ * and arbitrary residual and KV bytes. Magic, backend, producer, model identity and precision
+ * must match exactly. Releasing a hint while restore reads it is caller undefined behavior. */
+SUPERSLM_API sslm_status sslm_prefix_restore(sslm_model model, sslm_kv_pool* pool, const void* buf,
+                                              size_t n, sslm_prefix parent_or_null, sslm_prefix* out,
+                                              uint32_t* out_shared_pages);
 /* Page counts of a pool (either create verb): page_count, free_pages, shared_pages and B. The
  * caller sets out->struct_size. A diagnostic for sizing admissions, read under the pool lock. */
 SUPERSLM_API sslm_status sslm_kv_pool_stats(sslm_kv_pool pool, sslm_kv_pool_stats_out* out);
@@ -181,3 +206,34 @@ SUPERSLM_API sslm_status sslm_seq_kv_stats(sslm_seq seq, sslm_seq_kv_stats_out* 
  * sslm_seq_restore is this verb with a NULL prefix. */
 SUPERSLM_API sslm_status sslm_seq_restore_shared(sslm_model model, sslm_kv_pool* pool, const void* blob, size_t size,
                                     sslm_prefix prefix_or_null, sslm_seq* out, uint32_t* out_shared_pages);
+/* Schema jump-forward (1.15.0). The forced chain of a schema-bound sequence's current walk state:
+ * from a state where the schema admits exactly one byte string before its next choice, the tokens
+ * that spell it, as the forced-next table built at model map gives them (docs/api.md). Read-only:
+ * writes up to `cap` ids (out_ids may be NULL when cap == 0); *out_count = the full chain length
+ * (may exceed cap), 0 when no schema is bound or the state is unforced; *out_accepting = 1 iff the
+ * walk state is accepting. Changes nothing, including bind eligibility. SSLM_ARTIFACT_REJECTED when
+ * the model has no table (an artifact without SCM1 or TOK1). */
+SUPERSLM_API sslm_status sslm_seq_forced_tokens(sslm_model model, sslm_seq seq,
+                                                int32_t* out_ids, int32_t cap, int32_t* out_count,
+                                                int32_t* out_accepting);
+/* Admits the pending choice token (one decode_step produced and has not yet embedded), if any, then
+ * forced-chain tokens, up to `chunk_budget` tokens in all, in one batched layer pass through the
+ * prefill path; writes the admitted *forced* ids to out_forced (cap >= chunk_budget required) and
+ * their count to *out_forced_count. `params` (NULL = greedy) is validated exactly as
+ * sslm_decode_step_v2 validates it; damped params feed the forced tokens to the anti-LM history.
+ * A no-op (OK, count 0) when no schema is bound or the state is unforced. A limit admits a prefix
+ * and returns the limit status, as sslm_prefill does. The host loop: call this until
+ * sslm_seq_forced_tokens reports 0, then decode_step (docs/api.md gives the contract).
+ * `opts` (1.15.0; NULL = canonical, the behaviour above): with mode SSLM_JUMP_EXACT the verb
+ * admits the pending token and a draft clipped to chunk_budget - 1 tokens and to the context
+ * room, truncated at its first out-of-range, special, byteless or illegal token; checks every
+ * drafted token with the decode step's finish; and keeps the pending token and the drafted
+ * tokens the model confirms, reporting the confirmed ones in out_forced. It returns SSLM_OK for
+ * any draft, and is a no-op (OK, count 0) when there is no pending token, the clipped draft is
+ * empty, or the model lacks the exact legal-row finish. The next decode_step produces the
+ * model's own next token (docs/api.md). */
+SUPERSLM_API sslm_status sslm_seq_jump_forward(sslm_model model, sslm_seq seq, int32_t chunk_budget,
+                                               const sslm_decode_params* params, /* NULL = greedy */
+                                               const sslm_jump_options* opts,     /* NULL = canonical */
+                                               sslm_workspace ws,
+                                               int32_t* out_forced, int32_t cap, int32_t* out_forced_count);

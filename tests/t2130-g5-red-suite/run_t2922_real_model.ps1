@@ -48,7 +48,7 @@ $Common = @('artifact.cpp','sha256.cpp','tokenizer.cpp','model.cpp','intmath.cpp
  'matmul.cpp','proof_manifest.cpp','trace_hook.cpp','forward\checked_chain_funnel.cpp',
  'forward\forward_sites.cpp','forward\parallel_split.cpp','decode_digest.cpp','damped_greedy_antilm.cpp',
  'damped_greedy_topk.cpp','damped_greedy_phaseD.cpp','damped_greedy_phaseD_loop.cpp','kv_pages.cpp',
- 'gpu\gpu_inflight_registry.cpp') |
+ 'gpu\gpu_inflight_registry.cpp','spx1_format.cpp') |
  ForEach-Object { Join-Path "$Engine\src" $_ }
 $Sources = @($Common) + @("$Engine\src\gpu\gpu_1p0.cpp", "$Engine\src\gpu\superslm_gpu.cpp",
  "$Engine\src\sslm_abi.cpp", "$Here\t2922_real_model_red.cpp")

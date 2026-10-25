@@ -1,0 +1,5 @@
+# plan 9.5 pins (rev 1.18.14, section 15.34): writer=1.14.0 commit=7585adac5da9773868b9e46379a02bb8efccf50b rule=PageRuleB(D,cap,1) L=B+13
+pkv_def fixture_sha256=994b58b49d3660bccfdd59dc6315028ea0203f37f4705d70eb7ce4dbecdb1db3 D=48 cap=4096 B=128 L=141 last_page=13/128 blob=1.14.0_pkv_def.spx1 size=54520 blob_sha256=979c6f18866384256279f8312f6888ac57b8b04e0493725752c28c79c1593bf3
+pkv_odd fixture_sha256=2a43398dd253c97e5b3da244e80faeae0a7ab305ff09116a6bbc02808ed76d2d D=48 cap=4100 B=256 L=269 last_page=13/256 blob=1.14.0_pkv_odd.spx1 size=103672 blob_sha256=50ea23f26a37da11db483c24284f668147c648461ac232e54dcc2c81b392a26e
+pkv_32k fixture_sha256=d45cabb1da261194a01d6b30b21374f025448e8b4c2e8c0289bc76fb9c045fbc D=48 cap=32768 B=256 L=269 last_page=13/256 blob=1.14.0_pkv_32k.spx1 size=103672 blob_sha256=2101c43f6ab08f93d03fea1b0dfb3b9b8969939ae5bb2e170ad5ea111a11b6b5
+pkv_qk fixture_sha256=1d04133d3e3563617584dbb37bdfbdb1b6c347a96fdea1b558fbd1f8c0e5540e D=128 cap=4096 B=64 L=77 last_page=13/64 blob=1.14.0_pkv_qk.spx1 size=79224 blob_sha256=053ca64406887ba7cb76fcd7715727fac46bbee44f49ae170e560b4d96c8e23a

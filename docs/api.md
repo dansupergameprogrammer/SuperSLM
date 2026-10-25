@@ -373,16 +373,32 @@ writes the size it needs to `*out_blob_size` and returns the status the
 - 1.12.0 and earlier refuse `SLM6` on its magic with
   `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`. GPU and CPU blobs are separate
   formats; neither backend restores the other's.
+- `sslm_gpu_prefix_save(ctx, prefix, blob, &size)` (1.16.0) writes a frozen
+  prefix as an `SPX1` blob, the CPU's precached-prefix layout with backend 1
+  and the adapter's vendor and device IDs as producer. It reads the pool's
+  host mirror and submits nothing. An unfrozen prefix, or one not at rest
+  after a whole token, is `SSLM_GPU_PREFIX_REJECTED`; a short buffer is
+  `SSLM_OUTPUT_BUFFER_TOO_SMALL` with the size written. Released in 1.16.0.
+- `sslm_gpu_prefix_restore(ctx, model, pool, blob, size, parent_or_null,
+  &prefix, &shared)` (1.16.0) validates the whole blob first (arguments,
+  Busy, size and magic, digest, backend, producer
+  (`SSLM_RESTORE_PRODUCER_MISMATCH`), model (`SSLM_RESTORE_MODEL_MISMATCH`),
+  then kv precision, schema and field domains, each
+  `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`), then draws `ceil(L/B) - s` pages
+  (`SSLM_GPU_KV_POOL_EXHAUSTED`, nothing drawn) and shares the parent's `s`
+  leading pages when it is a frozen prefix of this pool holding exactly the
+  blob's origin with equal rows; otherwise `s = 0`. A blob restores only on
+  the engine version and adapter that wrote it. Released in 1.16.0.
 
 **In flight.** `sslm_gpu_kv_pool_create`, `sslm_gpu_prefix_prefill`,
-`sslm_gpu_prefix_begin_from`, `sslm_gpu_seq_adopt_prefix` and
-`sslm_gpu_seq_restore_into_pool` submit GPU work: they are serialized as
+`sslm_gpu_prefix_begin_from`, `sslm_gpu_seq_adopt_prefix`,
+`sslm_gpu_seq_restore_into_pool` and `sslm_gpu_prefix_restore` submit GPU work: they are serialized as
 every submitting call is (below), and each returns `SSLM_BUSY`, changing
 nothing, while any sequence in the process is Submitted. Every guarded call
 on a pooled sequence has the same any-sequence scope, and a guarded call on
 a dedicated sequence, a model or an adapter returns `SSLM_BUSY` while a
 pooled sequence is Submitted. The other paged calls submit nothing and are
-never refused Busy.
+never refused Busy. (`sslm_gpu_prefix_restore` is new in 1.16.0.)
 
 **Speed.** On the NVIDIA RTX 2080 SUPER (one card, one driver),
 single-sequence decode through a pooled sequence's page table was no more
@@ -506,6 +522,13 @@ refused on the prefix's state (not frozen, another pool of the same model, prefi
 freeze, a schema bind it can no longer take); and
 `SSLM_GPU_PREFIX_SCHEMA_MISMATCH`, an adopt whose schema binding does not
 match the prefix's.
+
+One covers precached prefixes (1.16.0; ordinal 30):
+`SSLM_RESTORE_PRODUCER_MISMATCH`, an `SPX1` blob given to
+`sslm_gpu_prefix_restore` that another engine version wrote, or that was
+written on another adapter (its vendor or device ID differs from the
+context's). Nothing is drawn. The status was released in 1.16.0, with the
+GPU twins.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 diverge on one refusal: when a device-side domain guard refuses one of the admitted
@@ -650,6 +673,19 @@ silently accepted.
   defect) returns `SSLM_NUMERIC_STEP_REFUSED` rather than rejecting the
   model — safe to retry once the caller adjusts the parameters that
   triggered it.
+- A decode call that fails while finishing a sequence's token (any non-OK
+  status from the final norm, the logits, or damped greedy's scoring, and
+  `SSLM_ALLOCATION_FAILED`) leaves that sequence at the start of its finish:
+  its final hidden state is kept, its schema walk, `current_token` and
+  anti-LM history are as they were, and the next call runs the finish only.
+  A retry that succeeds produces what a call that never failed would have;
+  a deterministic refusal returns the same status every time and changes
+  nothing. When the call ran no layers for that sequence (the first token
+  after `sslm_prefill` or `sslm_seq_jump_forward`), the sequence is exactly
+  as it was before the call. In a batch, the sequences before the failing
+  one keep their advance and the ones after it are not touched. Before
+  1.15.0 such a failure could leave the sequence refused for good or
+  re-embedding its last token.
 - `sslm_workspace_set_parallel_for` (1.7.0) installs a host parallel-for hook
   on a workspace, or clears it with `NULL`. `sslm_decode_step` and
   `sslm_decode_step_v2` then split the token finish's logits rows across the
@@ -1012,6 +1048,56 @@ figures.
   so that the prefix's tokens and the continuation's tokens equal the whole
   text's tokens is the host's job.
 
+### Frozen-prefix save and restore (1.14.0 CPU ABI)
+
+`SSLM_HAS_PREFIX_SAVE_ABI` marks the availability of `sslm_prefix_save` and
+`sslm_prefix_restore`. Save accepts a frozen prefix and writes canonical `SPX1`
+bytes. Use the two-call buffer convention: a null or short buffer returns
+`SSLM_BUFFER_TOO_SMALL` and sets the exact byte count in `*n`. An unfrozen
+prefix is refused with `SSLM_INVALID_ARGUMENT`. A frozen prefix may be saved
+concurrently by multiple callers; releasing it during a save is caller
+undefined behavior.
+
+`SPX1` carries the CPU backend, producer version, model hash, KV precision,
+schema binding and walk state, current token, length and origin, hidden scale,
+five saturation counts, residual, and canonical K/V rows. Its exact size is
+`184 + hidden_size + length * bytes_per_token`. It omits page identities,
+page size, budget, and allocation history. The SHA-256 digest detects accidental
+changes to the bytes; it does not authenticate them. With a recomputed digest,
+an edited blob can choose any model-resolvable schema and valid walk state,
+length within the context cap, origin within length, valid current token,
+int32 mantissa, any int64 exponent, any saturation counts, and arbitrary
+residual and K/V bytes. Magic, backend, producer, model identity, and KV
+precision must match exactly.
+
+Restore accepts only a blob from this backend and producer. A producer version
+mismatch returns `SSLM_RESTORE_PRODUCER_MISMATCH`; model, precision, and schema
+mismatches have their distinct restore statuses. Every refusal clears `*out`.
+`parent_or_null` is a sharing hint. A nested blob (origin above 0) shares the
+hint's leading `floor(origin / B)` pages only when the hint is frozen, belongs
+to the same model and the same pool, holds exactly `origin` positions, and its
+rows over those pages, every layer, K and V, are byte-equal to the blob's. The
+restore then draws `ceil(length / B) - floor(origin / B)` pages and fills them
+from the blob, the parent's partial last page included, and reports the shared
+count through `*out_shared_pages`. A null or nonmatching hint, or a root blob,
+restores the same prefix privately (`SSLM_OK`, 0 shared) when the pool has
+`ceil(length / B)` free pages. The restored child holds its own references to
+the shared pages, so the parent may be released afterwards. A private nested
+restore may return `SSLM_KV_POOL_EXHAUSTED` even where building the nested
+prefix against its parent was admitted. `B` is the restore pool's page size
+(the contiguous pool option's is the context cap). `SPX1` carries no page size,
+so a blob restores into a pool of any page size; the restored prefix is then
+adoptable only from pools of that page size, as for every prefix. Releasing a hint while restore reads
+it is caller undefined behavior.
+
+Every blob written by this library and restored by the same release version
+(or the same development build) yields, on success, a prefix whose adopters
+emit the same tokens as adopters of the prefill-built prefix. Accidental byte
+changes are refused unless they collide under SHA-256. Development builds on
+one version line may accept one another's blobs, outside that fidelity promise.
+Model mapping refuses two schema names with the same nonzero FNV-1a 64-bit
+hash, or a name hashing to zero, so a saved schema hash resolves uniquely.
+
 ### Schema-constrained generation
 
 A schema is compiled offline (see [sslm_format.md](sslm_format.md)'s
@@ -1115,9 +1201,175 @@ names its limit.
 - The compiler also refuses a schema if the vocabulary leaves some reachable state
   unable to finish a document.
 
+#### The masked finish (1.15.0)
+
+When a schema is bound and the model's hidden size is at most 131,071, the
+token finish computes only the head rows of the tokens the schema allows at
+the sequence's current state, not all V rows. At that size no row's int8 dot
+product can leave int32, so no row could have been rejected and no allowed
+logit equals `INT32_MIN`; every other position is masked to `INT32_MIN`
+before argmax or damped-greedy scoring reads it, as before. Tokens, the
+damped-greedy anti-LM state and save blobs are identical to the full finish.
+The flag is computed once at `sslm_model_map`; a model above the bound keeps
+the full finish. Unbound and unconstrained decode are unchanged. With a
+parallel-for hook installed, the finish splits the allowed rows (n of them)
+rather than the vocabulary: `run` is called iff `max_tasks >= 2` and n >= 1,
+with the same alignment-64 rule over n (`parallel_for.h`). A hook that breaks
+exactly-once still fails the call with `SSLM_INVALID_ARGUMENT` and leaves the
+sequence ready to retry.
+
+#### Jump-forward (1.15.0)
+
+A state is *forced* when the schema admits exactly one byte string from it
+before its next real choice: the state is not accepting, every token it allows
+has bytes and none is a special token, they all start with one byte, and that
+byte's single-byte token is allowed. The forced text F of a state is that byte
+followed by the forced text of the state the byte leads to. A state on a cycle
+of forced states is treated as unforced. At `sslm_model_map`, for an artifact
+that carries both a schema section and a tokenizer, the engine builds a table
+holding, per schema and state, the first token of the forced chain: the first
+token of `Encode(F)` when that token is allowed and is a byte prefix of F,
+otherwise the longest allowed token that is a byte prefix of F. The forced
+chain is that token, then the chain of the state it leads to. The table costs
+8 bytes per state; an allocation failure while building it fails the map with
+`SSLM_ALLOCATION_FAILED`. Two verbs read it:
+
+- `sslm_seq_forced_tokens(model, seq, out_ids, cap, &count, &accepting)` is
+  read-only. It writes up to `cap` ids of the chain from the sequence's walk
+  state (`out_ids` may be NULL when `cap` is 0) and sets `count` to the full
+  chain length, which may exceed `cap`; 0 when no schema is bound or the state
+  is unforced. `accepting` is 1 iff the walk state is accepting. It changes
+  nothing, bind eligibility included. A null `out_count` or `out_accepting`, a
+  negative `cap`, or NULL ids with `cap > 0` is `SSLM_INVALID_ARGUMENT`.
+- `sslm_seq_jump_forward(model, seq, chunk_budget, params, opts, ws,
+  out_forced, cap, &forced_count)` (`opts` NULL, or mode
+  `SSLM_JUMP_CANONICAL`: *canonical mode*, described here; mode
+  `SSLM_JUMP_EXACT`: *exact mode*, below) admits the *pending* choice token, if there is one,
+  then chain tokens, up to `chunk_budget` tokens in all, in one batched layer
+  pass through the prefill path, and writes the admitted chain ids (never the
+  pending token) to `out_forced`. A token is pending when the last
+  `decode_step` produced it and nothing has embedded it yet (`layer_index`
+  0, not ready for logits, a token on record); after a prompt prefill, a
+  dead end or a hook failure the last token is already embedded and is not
+  pending. The pending token is not walked again (the decode step walked it).
+  `ws` may be NULL and supplies the parallel-for hook as for `sslm_prefill`,
+  so a one-token admission threads under `SSLM_PARALLEL_FOR_MATVEC` exactly as
+  a one-token prefill does. When a one-token pass would actually split across
+  `run` (the bit is set, and the task-count rule under *The token finish*
+  gives the model's largest projection, hidden size × intermediate size, two
+  or more tasks), an admission of 2 to 7 tokens runs as that many one-token
+  passes, each split the same way; the output is byte-identical to the
+  batched pass (chunk invariance). Eight or more tokens, and any call where a
+  one-token pass would run on the calling thread alone, run the one batched
+  pass. After any admission the sequence is ready for logits, and
+  `forced_token_count` rises by the chain tokens admitted only.
+  - **Refusals** change nothing: `SSLM_INVALID_ARGUMENT` for `chunk_budget <
+    1`, `cap < chunk_budget`, a null `out_forced_count` or `out_forced`, or a
+    sequence mid-token (`layer_index != 0`); `SSLM_ARTIFACT_REJECTED` when the
+    model has no table. A non-NULL `params` is validated exactly as
+    `sslm_decode_step_v2` validates it, returning the status decode returns.
+  - **No-op**: `SSLM_OK` with count 0 when no schema is bound or the state is
+    unforced; a pending token stays pending for `decode_step`. Every call that
+    passes validation, a no-op included, clears bind eligibility.
+  - **Limits** follow `sslm_prefill`. With headroom h left by the context cap
+    or the KV budget and k the tokens the call would admit: at h = 0 nothing
+    is admitted and the call returns the limit status; at 1 <= h < k the
+    pending token (if any) and the next chain tokens up to h are admitted and
+    the call returns the limit status; at h >= k all k are admitted with
+    `SSLM_OK`. In every partial case the next `decode_step` runs the finish
+    only. What the next `decode_step` does at h = 0 depends on whether a token
+    is pending: with one pending it must embed it, so it returns the same limit
+    status; with none (the sequence is already ready for logits, as a partial
+    admission leaves it) it runs the finish only and returns `SSLM_OK` with a
+    token, as `decode_step` does on a ready sequence without jump-forward.
+  - **Decode parameters.** NULL means greedy. Greedy parameters leave the
+    damped-greedy anti-LM state untouched. Damped parameters create or re-key
+    the state exactly as `sslm_decode_step_v2` would with the same parameters,
+    then feed it every chain token admitted, in order; this happens only once
+    every refusal check has passed and at least one chain token will be
+    admitted, so a refused, limit-only, no-op or pending-only call never
+    touches the history. A re-keyed state is installed only once a chain
+    token has been admitted, so a call that fails for any reason, an
+    allocation failure in the pass included, leaves the history and its order
+    as they were. Pass the same parameters to the verb and to
+    `sslm_decode_step_v2`, and the history is the output stream, as it is
+    without jump-forward. A failed create returns `SSLM_ALLOCATION_FAILED`
+    before any token is admitted, with the existing anti-LM state intact
+    (the same holds for `sslm_decode_step_v2`'s own create). Once tokens are
+    admitted, the verb can still return `SSLM_ALLOCATION_FAILED`, with
+    `*out_forced_count` > 0, when the anti-LM history update fails: those
+    tokens stay admitted, the history holds every forced token fed before the
+    failing one, and the state is valid for the next damped decode.
+  - **Concurrency.** The verb takes decode's posture on the sequence (it
+    consumes the token a concurrent `decode_step` would): a concurrent
+    `sslm_seq_release` or `decode_step` of the same sequence waits for it.
+
+**Exact mode** (1.15.0; `sslm_jump_options` with mode `SSLM_JUMP_EXACT`) is a
+verified jump-forward: its output, tokens and save blobs included, equals a run
+that never calls the verb.
+- **Options.** `struct_size` must be `sizeof(sslm_jump_options)`. `draft`
+  holds `draft_count` token ids, read during the call only; `draft` NULL with
+  `draft_count` 0 means the forced chain from the state after the pending
+  token, and a non-NULL `draft` with `draft_count` 0 is an empty draft. A
+  wrong `struct_size`, an unknown mode, a negative `draft_count`, a NULL
+  `draft` with `draft_count` > 0, or a draft in canonical mode is
+  `SSLM_INVALID_ARGUMENT`, checked before every other refusal, with nothing
+  changed (`*out_forced_count` unwritten, bind eligibility kept). The other
+  refusals are canonical mode's, in its order.
+- **What it does.** With a pending token p, the draft is clipped to
+  `chunk_budget - 1` tokens and to the rows the context cap and the KV budget
+  leave after p, then cut at its first token that is out of range, a special
+  id, byteless, or not allowed by the schema at its walk state. p and the k
+  drafted tokens left run in one pass; then the decode step's own finish
+  (greedy, or damped greedy under `params`) runs at each row in turn, and the
+  call keeps p and the drafted tokens up to the first one the model would not
+  have produced. Those confirmed tokens are written to `out_forced`
+  (`*out_forced_count` of them; never p). The sequence then rests ready for
+  logits at the last kept row, and the next `decode_step` produces the
+  model's own next token, its correction at a mismatch. `forced_token_count`
+  does not change: the kept tokens are the model's own. Rows the call did not
+  keep leave nothing behind: their pages go back to the sequence's reserve,
+  and their saturation counts are not added.
+- **Status.** `SSLM_OK` for any draft. It is a no-op (OK, count 0, nothing
+  changed but bind eligibility) when no schema is bound, no token is pending,
+  the model lacks the exact legal-row finish (`legal_row_finish`), no row is
+  left for p (the next `decode_step` returns the limit status), or the
+  clipped draft is empty (p stays pending). A failure before any row is kept
+  (an allocation failure, a broken parallel-for `run`, a page-map refusal, a
+  failed anti-LM create) returns its status with nothing changed. A failure
+  after a row is kept, inside a check's finish or a later one-row pass, ends
+  the check there: the verified rows are kept and the call returns `SSLM_OK`.
+- **Decode parameters.** As for canonical mode; pass `decode_step` the same
+  ones. Under damped parameters the anti-LM state is created or re-keyed only
+  when the pass has two or more rows, installed only once the check's first
+  finish has returned a token (a failed first finish leaves the old state and
+  order, as a failed `decode_step` does), and fed each confirmed token only,
+  so after the next `decode_step` the history equals a run without the verb.
+- **Threading.** Under the one-token split (see above), the call runs as
+  one-token passes with the check between them, so no rejected row is
+  computed; each confirmed token then costs about what a decode step costs.
+  A draft of 7 or more tokens gives a batched pass of 8 or more rows with
+  rollback instead, which the replay puts at 0.94-0.95x against a run without
+  the verb under that split. A draft pays at one thread, where the model must
+  accept about 60% or more of the drafted tokens to gain.
+- **No host loop is needed.** Any interleaving of the verb and `decode_step`,
+  and any `chunk_budget`, gives the output of a run without the verb.
+
+**The host loop.** On a sequence that uses jump-forward, call
+`sslm_seq_jump_forward` until `sslm_seq_forced_tokens` reports a count of 0
+(or a call returns a non-OK status), and only then call `decode_step`. Under
+this loop the tokens produced do not depend on `chunk_budget`: the chain is a
+function of the walk state alone, and the batched pass gives the same K/V as
+one token at a time. A `decode_step` at a forced state after a partial span
+lets the model choose among that state's allowed tokens instead: still
+schema-valid and deterministic, but a different stream. The engine states this
+loop and does not enforce it. The jump-forward verbs change no save format:
+the walk state, ready-for-logits and pending token are already in the blob,
+and the table is derived from the model.
+
 ### Status causes
 
-`sslm_status` carries one success value (`SSLM_OK`) plus 29 distinct
+`sslm_status` carries one success value (`SSLM_OK`) plus 30 distinct
 rejection causes (an internal sentinel past the last real value is never
 returned or accepted as an argument), in five groups: argument/precondition
 rejections (a bad argument, a buffer too small, a misaligned buffer);
@@ -1137,7 +1389,8 @@ otherwise valid model and valid params, `SSLM_NUMERIC_STEP_REFUSED`,
 schema-content span on an unbound sequence; a prefix or restore whose
 schema doesn't match; a fixed span the schema's own DFA cannot reach; a
 schema the offline compiler could not prove satisfiable), the shared
-`SSLM_GPU_SHADER_BINARY_STALE` deployment-mismatch cause, plus one
+`SSLM_GPU_SHADER_BINARY_STALE` deployment-mismatch cause, the
+`SSLM_RESTORE_PRODUCER_MISMATCH` producer-version refusal (ordinal 30), plus one
 process-level resource-exhaustion cause distinct from a caller-supplied
 buffer running out.
 

@@ -28285,6 +28285,8 @@ void RunAttnRowsiteCells(int& checks, int& failures);
 // Decode-threading plan: its steps' cells (tests/test_decode_threading.cpp).
 void RunDecodeThreadingCells(int& checks, int& failures);
 void RunDecodeThreadingD1Cells(int& checks, int& failures);
+// Schema fast-decode plan (rev 1.2.1), slices M1 and J1: the red suite (tests/test_schema_fast_decode.cpp).
+void RunSchemaFastDecodeCells(int& checks, int& failures);
 // GPU paged-KV plan step G3: cell 3.6h and the ledger's host-only cells
 // (tests/gpu-g3-core/g3_superslm_tests_adapter.cpp).
 void RunGpuLedgerG3Cells(int& checks, int& failures);
@@ -30164,6 +30166,7 @@ int main(int argc, char** argv) {
 	RunAttnRowsiteCells(GChecks, GFailures);
 	RunDecodeThreadingCells(GChecks, GFailures);
 	RunDecodeThreadingD1Cells(GChecks, GFailures);
+	RunSchemaFastDecodeCells(GChecks, GFailures);
 	RunGpuLedgerG3Cells(GChecks, GFailures);
 	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();

@@ -15,6 +15,9 @@
  *   calling thread. A fixed minimum of weight bytes caps the task count by the group's total
  *   weight bytes; it is not a floor on each task, and the last task can be smaller (docs/api.md
  *   gives the rule).
+ *   When a one-token pass would split (its largest projection reaches two or more tasks),
+ *   sslm_seq_jump_forward runs an admission of 2 to 7 tokens as that many one-token passes,
+ *   each split the same way (byte-identical output).
  * - Every other step, and every step of a prefill call that admits more than one token, ignores it.
  * A setter rejects any `reserved` bit this library does not implement, so a host that asks for a
  * step this build lacks is told so rather than silently ignored. The GPU backend accepts the
@@ -41,6 +44,12 @@
  * `max_tasks` and the library's named minimum-work constant only. Every row's value is an exact
  * integer sum computed on one thread, so the tokens produced are identical with any hook, any
  * `max_tasks`, any `reserved` bits, and no hook.
+ *
+ * The finish of a schema-bound sequence (1.15.0, CPU backend): when the model's hidden size is at
+ * most 131,071, the logits step computes only the head rows of the tokens the schema allows at the
+ * sequence's state, and the blocks split that list of rows, not the vocabulary: the same rule at
+ * alignment 64 over its length n. `run` is called iff max_tasks >= 2 and n >= 1, so a state that
+ * allows no token calls no `run`. Unbound and unconstrained decode split the vocabulary as before.
  *
  * docs/api.md carries a reference `run` over std::thread for hosts with no job system. */
 

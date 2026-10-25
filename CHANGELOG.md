@@ -2,7 +2,124 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
-## [Unreleased]
+## [1.16.0] - 2026-10-25
+
+Frozen-prefix save and restore on the GPU. `docs/releases/1.16.0.md` is the release note, and
+`docs/releases/1.16.0-verification.md` summarizes the test results. The two GPU verbs have been declared and
+exported since 1.14.0, labelled unreleased; 1.16.0 releases them with no change to their code, declarations or
+`SslmGpuStatus` ordinals. No CPU verb, struct layout, status ordinal or sequence save format changes, and no model
+artifact needs reconversion.
+
+- **Precached prefixes on the GPU: save and restore.** `sslm_gpu_prefix_save` writes a frozen GPU prefix as an
+  `SPX1` blob, the CPU's layout with backend 1 and the adapter's PCI vendor and device IDs as producer, read from
+  the pool's host mirror; it submits nothing and is never refused Busy. `sslm_gpu_prefix_restore` validates the
+  whole blob before it draws or shares any page (arguments, Busy, size and magic, digest, backend, producer, model,
+  KV precision, schema and field domains, in that order), draws `ceil(L/B) - s` pages, shares a frozen parent's `s`
+  leading pages when the parent holds exactly the blob's origin with equal rows, and uploads only the drawn pages.
+  Every refusal leaves the out-handle null and returns every drawn page, and changes nothing else unless it is
+  `SSLM_DEVICE_LOST`.
+- **`SSLM_RESTORE_PRODUCER_MISMATCH` on the GPU.** A GPU blob restores only on the engine version and the adapter
+  (vendor and device) that wrote it; any other is refused with this status, appended last in `SslmGpuStatus`.
+- **A blob is bound to the engine version that wrote it**, so `SPX1` blobs written by 1.14.0 or 1.15.0 are refused
+  by 1.16.0 with `SSLM_RESTORE_PRODUCER_MISMATCH`, on the CPU as on the GPU, and any later version, patch releases
+  included, refuses 1.16.0's. Rebuild cached prefixes after upgrading.
+- **Tested GPUs.** The GPU twins were tested on the NVIDIA GeForce RTX 2080 SUPER, the AMD Radeon RX 7900 XTX and the
+  AMD Radeon RX 7900 XT only (the XT and XTX share a PCI device ID). On the RTX 2080 SUPER and the RX 7900 XT, with
+  the 0.5B and 1.5B models, a prefix restore took 1.4–3.0 ms against 1,046–1,866 ms of prefill at 128 tokens, and
+  6.4–15.7 ms against 10,530–20,321 ms at 1,000 tokens.
+- **Known issue.** RTX 50-series (Blackwell) GPUs fail parts of the GPU test suite; under investigation; use the CPU backend there.
+
+## [1.15.0] - 2026-10-23
+
+Faster schema-bound decode on the CPU (schema fast-decode plan rev 1.3.6, slices M1, J1, TF and J1-X).
+`docs/releases/1.15.0.md` is the release note. Two C verbs are appended (55 C verbs in all), with one enum and one
+struct; no released declaration, struct layout, status ordinal or save format changes, and no artifact needs
+reconversion. The GPU backend is unchanged.
+
+- **Measured (Ryzen 9 3950X, MSVC, Qwen2.5-0.5B-Instruct, a 28-token order with `potion_shop_order`).** The masked finish
+  alone, tokens unchanged: 1,257 to 921 ms at one thread (1.37x), 711 to 560 ms at 4 tasks (1.27x). On top of it,
+  exact jump-forward with a draft learned from the model's earlier orders, tokens unchanged: 896.6 to 604.3 ms
+  (1.48x) at one thread; 16,676 to 12,878 ms (1.295x) over 20 other orders, one of them slower (0.82x); and no
+  gain at 4 tasks (0.996x). Exact mode with the engine's own draft (the canonical chain) is slower than off, 0.81x.
+  Canonical jump-forward writes 21 different tokens instead of 28 (1.96x against the masked finish alone), so its
+  output differs.
+- **Masked finish.** Under a bound schema, when the model's hidden size is at most 131,071 (computed once
+  at `sslm_model_map`), the token finish computes only the head rows of the tokens the schema allows at
+  the sequence's state, greedy and damped greedy. At that size no row's dot can leave int32, so tokens,
+  the anti-LM state and save blobs equal the full finish's. Unbound and unconstrained decode are
+  unchanged.
+- **The parallel-for hook under a bound schema** splits that list of allowed rows, not the vocabulary:
+  `run` is called iff `max_tasks >= 2` and the state allows at least one token (`parallel_for.h`). This
+  changes the documented partition, and the task count a host sees, for bound decode only.
+- **Jump-forward.** `sslm_model_map` builds a forced-next table from the schema section and the tokenizer
+  (8 bytes per state; an allocation failure fails the map with `SSLM_ALLOCATION_FAILED`). New verbs:
+  `sslm_seq_forced_tokens` (read-only: the forced chain at the sequence's walk state, and whether that
+  state is accepting) and `sslm_seq_jump_forward` (admits the pending choice token and forced-chain
+  tokens, up to a chunk budget, in one batched pass through the prefill path; partial admission follows
+  `sslm_prefill`; damped-greedy parameters feed the forced tokens to the anti-LM history). Both return
+  `SSLM_ARTIFACT_REJECTED` on an artifact without a table. `docs/api.md` states the host loop under
+  which the output does not depend on the chunk budget.
+- **Fix (decode step, damped greedy):** when a call named a new anti-LM order and the new state's
+  allocation failed, the old state had already been freed but was still referenced, so the next save
+  read freed memory and the next re-key or release freed it twice. The replacement is now created
+  before the old state is freed; a failed create returns `SSLM_ALLOCATION_FAILED` with the existing
+  state intact. The jump-forward verb shares this block, and installs a re-keyed state only after it
+  has admitted a forced token, so a failed call leaves the history and its order unchanged.
+- **Fix (damped greedy, anti-LM history):** an allocation failure inside the history update could leave
+  a context entry with no observations, and the next damped finish then divided by zero (SIGFPE). The
+  decode step on 1.14.0 and earlier has the same latent crash. The update now allocates everything it needs before it
+  publishes anything, so a failure leaves the state exactly as it was before that token, and the
+  penalty skips any context with no observations. The two internal hash tables' growth is now
+  exception-safe as well (a failed growth no longer empties the table).
+- **Fix (decode step, a failed finish; plan rev 1.3.3 §4.5):** when the token finish failed after the
+  sequence's layers had run (a final-norm or logits rejection, a damped-greedy domain rejection or
+  refusal, or an allocation failure), the sequence was left half-moved. After a call that ran layers it
+  rested at the last layer without its finish, and every later `sslm_decode_step` on it was refused with
+  `SSLM_ARTIFACT_REJECTED`; after the first token following a prompt or a jump-forward it rested as if
+  awaiting an embed, so the retry embedded the last token a second time; and an anti-LM history
+  allocation failure had already advanced the schema walk, so the retry emitted a different token. The
+  finish is now a transaction: everything that can fail runs before anything is published, and any
+  failure rests the sequence at the finish's entry, with its final hidden state kept and its walk,
+  `current_token` and anti-LM state as they were, the shape a broken parallel-for `run` already left. A
+  retry recomputes the finish only and equals a run that never failed; a deterministic refusal returns
+  the same status on every retry and changes nothing. In a batch, earlier sequences keep their advance,
+  as before. Success paths, tokens and save blobs are unchanged. There is no option to keep the old rest.
+- **Exact jump-forward (plan rev 1.3.3, slice J1-X).** `sslm_seq_jump_forward` takes a
+  `const sslm_jump_options* opts` argument after `params` (NULL options: the canonical behaviour above). New:
+  `sslm_jump_mode` and `sslm_jump_options`; no existing struct, status ordinal or save format changes. In exact mode the verb admits the pending token and a draft (the
+  host's, or the forced chain), checks each drafted token with the decode step's own finish, and keeps
+  only the tokens the model would have produced, so the output equals a run that never calls the verb.
+  It returns `SSLM_OK` for any draft; rejected rows' pages go back to the sequence's reserve and their
+  saturation counts are dropped. `docs/api.md` gives the refusals, the no-op cases and the threading cost.
+  Internally, `RunLayerLoopChunkBatched` gains an optional per-row saturation-count output and the page
+  module gains `HolderUnmapTail`.
+- **Tools:** `sslm_schema_fast_decode_bench` (`tools/schema_fast_decode_bench.cpp`), the box steps'
+  bench: extraction arms in interleaved pairs (off, on, the AA/2X/CB1 controls), cross-process pooling for
+  `main` against M1, span sizes, the batched pass for M tokens, the finish at chosen legal-row counts, and
+  the B4 quality runs (the on arm sealed apart); `tools/schema_fast_decode_box/run_box_step.ps1` drives
+  §10's steps B0-B4 on the box, one resumable step at a time.
+- **Tests:** the M1/J1 suite (`tests/test_schema_fast_decode.cpp`) runs against the real symbols; the
+  red round's stubs and the `SUPERSLM_SFD_RED_STUBS` option are removed. The TF and J1-X cells run against the real
+  symbols too; `SUPERSLM_SFD_TF_RED_STUBS` and `SUPERSLM_SFD_X_RED_STUBS` default to OFF (their stub files
+  compile empty).
+
+## [1.14.0] - 2026-10-23
+
+Frozen-prefix save and restore on the CPU. `docs/releases/1.14.0.md` is the release note.
+
+- **Precached prefixes on the CPU: save and restore** (`SSLM_HAS_PREFIX_SAVE_ABI`). `sslm_prefix_save` writes a
+  frozen prefix as a canonical `SPX1` blob; `sslm_prefix_restore` validates the whole blob before it draws or
+  shares any page, and restores a frozen prefix, optionally sharing pages with a parent prefix. The blob records its
+  producer (the engine version); a blob from another version is refused with the new
+  `SSLM_RESTORE_PRODUCER_MISMATCH` (ordinal 30). `include/superslm/sslm_version.h` carries the version, and a check
+  keeps it equal to CMake's.
+- **Model mapping refuses colliding schema name hashes.** A model whose schema names include two with the same
+  nonzero FNV-1a 64-bit hash, or one hashing to zero, is refused at map, on the CPU and the GPU alike, so a schema
+  hash saved in a blob resolves to one schema. The certified model artifacts still map (the E0 audit).
+- **GPU twins, unreleased until 1.16.0.** `sslm_gpu_prefix_save` and `sslm_gpu_prefix_restore` are declared and
+  exported, but no release promises them before 1.16.0.
+- **MSVC GEMM placement pin.** `src/matmul.cpp` gets its own image section, so the GEMM kernels' alignment no
+  longer moves with unrelated edits; `tools/msvc_pin/run-pinmap.ps1` checks the placement.
 
 ## [1.13.1] - 2026-10-19
 

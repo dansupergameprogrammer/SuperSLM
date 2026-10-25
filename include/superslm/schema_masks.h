@@ -303,7 +303,9 @@ inline bool SchemaMasksTable::Parse(const uint8_t* data, uint64_t size, uint32_t
 		std::string_view name(reinterpret_cast<const char*>(data + name_blob_off + name_off), name_len);
 		for (auto other : seen_names) {
 			if (other == name) return fail("DuplicateSchemaName");
+			if (Fnv1a64(other) == Fnv1a64(name)) return fail("DuplicateSchemaNameHash");
 		}
+		if (Fnv1a64(name) == 0) return fail("ZeroSchemaNameHash");
 		seen_names.push_back(name);
 
 		if (state_count == 0 || state_count > kMaxSchemaStates) return fail("BadSchemaStateCount");

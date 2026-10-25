@@ -16,6 +16,8 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace superslm::detail {
@@ -75,16 +77,11 @@ public:
     // mirrors "a vector is allocated only when a genuinely new context becomes
     // persistent table state" (damped_greedy_antilm.cpp's own comment).
     Value& FindOrEmplace(ContextView v) {
-        if (slots_.empty()) {
-            // First insert this table has ever received (fold round 27, mirrors
-            // GrowableIntMap::operator[]): allocate NOW, sized from the hint recorded
-            // at construction, never from Grow()'s own BucketCountFor(live_+1) formula
-            // below, which ignores the hint entirely.
-            mask_ = BucketCountFor(pending_hint_) - 1;
-            slots_.assign(mask_ + 1, Slot{});
-        } else if ((live_ + 1) * 2 > slots_.size()) {
-            Grow();
-        }
+        // The first allocation (sized from the hint recorded at construction, fold round 27,
+        // mirroring GrowableIntMap::operator[]) and every later growth run through
+        // ReserveForInsert, which changes nothing when it throws (schema fast-decode code
+        // review, re-check of finding 9).
+        ReserveForInsert();
         uint64_t i = HashContext(v) & mask_;
         for (uint64_t steps = 0; steps <= mask_; ++steps) {
             if (!slots_[i].occupied) {
@@ -97,6 +94,35 @@ public:
         }
         std::abort();  // unreachable: the allocate-on-first-insert branch and Grow() above
                         // always leave at least one empty slot on the probe path
+    }
+
+    // Makes room for one more context, so that EmplaceReserved cannot allocate. Strong
+    // guarantee: the new slot array is built in full before it replaces the old one, so a
+    // std::bad_alloc leaves the table exactly as it was. Sizes and the rehash order are the
+    // ones FindOrEmplace always used, so the layout is unchanged.
+    void ReserveForInsert() {
+        if (slots_.empty()) {
+            const uint64_t new_mask = BucketCountFor(pending_hint_) - 1;
+            std::vector<Slot> fresh(new_mask + 1);
+            slots_.swap(fresh);
+            mask_ = new_mask;
+        } else if ((live_ + 1) * 2 > slots_.size()) {
+            Grow();
+        }
+    }
+
+    // Inserts a context known to be absent, taking its already-built key and value. Allocates
+    // nothing and cannot fail once ReserveForInsert has run since the last insert: it only
+    // probes and moves. This is the commit step of AntiLmUpdate's two-phase update.
+    Value& EmplaceReserved(std::vector<int32_t>&& key, Value&& value) noexcept {
+        if (slots_.empty() || (live_ + 1) * 2 > slots_.size()) std::abort();  // not reserved
+        uint64_t i = HashContext(ContextView{key.data(), key.size()}) & mask_;
+        while (slots_[i].occupied) i = (i + 1) & mask_;
+        slots_[i].key = std::move(key);
+        slots_[i].value = std::move(value);
+        slots_[i].occupied = true;
+        ++live_;
+        return slots_[i].value;
     }
 
 private:
@@ -125,21 +151,32 @@ private:
         // that state, so this formula is never asked to size the table's FIRST
         // allocation.
         assert(!slots_.empty());
-        std::vector<Slot> old = std::move(slots_);
+        // Strong guarantee (schema fast-decode code review, re-check of finding 9): the only
+        // allocation is `fresh`, made before anything changes; the rehash below moves every
+        // key and value (the former body copied each key through FindOrEmplace, which could
+        // throw half-way with the old array already gone). It reinserts in the old slot
+        // order, so the resulting layout is unchanged.
         // Corrected fold round 26 (D-SLM4767/D-SLM4768), identical defect and identical
         // fix as GrowableIntMap::Grow() (Sec3.6, full derivation and termination proof
         // there): BucketCountFor already bakes in the <=50% headroom (Sec3.1); the
         // pre-fold-26 line here read BucketCountFor((live_+1)*2), doubling an already-
         // doubled argument (a quadrupling, uncommented at this call site through fold
-        // round 26). live_ is read before the reset two lines down -- still the
-        // pre-Grow() live count -- and this type never erases, so there is no tombstone
+        // round 26). live_ is the pre-Grow() live count (a rehash does not change it),
+        // and this type never erases, so there is no tombstone
         // term to account for, unlike Sec3.5's GrowableIntSet::Grow().
         uint64_t new_mask = BucketCountFor(live_ + 1) - 1;
-        slots_.assign(new_mask + 1, Slot{});
+        static_assert(std::is_nothrow_move_assignable<Slot>::value, "the rehash must not throw");
+        std::vector<Slot> fresh(new_mask + 1);
+        for (auto& s : slots_) {
+            if (!s.occupied) continue;
+            uint64_t i = HashContext(ContextView{s.key.data(), s.key.size()}) & new_mask;
+            while (fresh[i].occupied) i = (i + 1) & new_mask;
+            fresh[i].key = std::move(s.key);
+            fresh[i].value = std::move(s.value);
+            fresh[i].occupied = true;
+        }
+        slots_.swap(fresh);
         mask_ = new_mask;
-        live_ = 0;
-        for (auto& s : old) if (s.occupied)
-            FindOrEmplace(ContextView{s.key.data(), s.key.size()}) = std::move(s.value);
     }
     uint64_t pending_hint_;    // fold round 27: the hint, held until the first
                                // FindOrEmplace allocates from it; unused thereafter

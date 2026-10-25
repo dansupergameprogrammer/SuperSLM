@@ -40,6 +40,7 @@
 #include "superslm/trace_hook.h"
 #include "../src/forward/parallel_split.h"
 #include "../docs/parallel_for_reference.hpp"
+#include "schema_fast_decode/sfd_api.h"  // S-ROWS, for 8.1 (b) under a bound schema (plan rev 1.2.3)
 
 #if !defined(SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
 #error "test_decode_threading_d1.cpp needs a library built with SUPERSLM_ENABLE_MATVEC_TEST_SEAMS"
@@ -1565,10 +1566,59 @@ void TestCompositionCell81() {
 			}
 			rig.PrefillAll(s, prompt, 16);
 			rig.Install(threaded ? &hook : nullptr, SSLM_PARALLEL_FOR_MATVEC);
-			o[threaded].tokens = rig.DecodeN(s, schema ? 4 : 16, 0, SSLM_DECODE_MODE_DAMPED_GREEDY, &sts[threaded]);
+			if (!schema) {
+				o[threaded].tokens = rig.DecodeN(s, 16, 0, SSLM_DECODE_MODE_DAMPED_GREEDY, &sts[threaded]);
+				if (threaded) CHECK_MSG(hook.AllThreaded() && hook.counts.size() > 1, "8.1 damped preamble");
+			} else {
+				// Schema fast-decode plan rev 1.2.3 (§4.2, §13, §17.5): under a bound schema the finish's `run`
+				// call splits the legal list (M1), and a list of 64 rows or fewer is one task. One step at a
+				// time, so each step's last `run` call is its finish: every matvec call carries >= 2 tasks,
+				// and the finish carries SplitColumns(n, max_tasks, 64)'s count, n read from S-ROWS.
+				int total_calls = 0, bad_matvec = 0, bad_finish = 0, finishes = 0;
+				for (int i = 0; i < 4; ++i) {
+					hook.Clear();
+#if defined(SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS)
+					superslm::test::sfd::RowsLogReset();
+#endif
+					int32_t t = -2;
+					const sslm_status st =
+					    rig.Decode(&s, 1, static_cast<int32_t>(f.Layers()), &t, 0, SSLM_DECODE_MODE_DAMPED_GREEDY);
+					sts[threaded].push_back(st);
+					if (st != SSLM_OK) break;
+					o[threaded].tokens.push_back(t);
+					if (!threaded) continue;
+					total_calls += static_cast<int>(hook.counts.size());
+#if defined(SUPERSLM_ENABLE_SCHEMA_FAST_DECODE_TEST_SEAMS)
+					const size_t n = superslm::test::sfd::RowsLogCount() == 1
+					                     ? static_cast<size_t>(superslm::test::sfd::RowsLogAt(0))
+					                     : 0;
+					const size_t mt = static_cast<size_t>(hook.max_tasks);
+					size_t want = 0;  // the legal-list split: tasks = ceil(n / roundup(ceil(n / T), 64))
+					if (n > 0) {
+						const size_t t_cap = std::min<size_t>({mt, SSLM_PARALLEL_FOR_MAX_TASKS, (n + 63) / 64});
+						const size_t per = ((n + t_cap - 1) / t_cap + 63) / 64 * 64;
+						want = (n + per - 1) / per;
+					}
+					const size_t matvec_calls = hook.counts.size() - (want > 0 ? 1 : 0);
+					for (size_t c = 0; c < matvec_calls; ++c)
+						if (hook.counts[c] < 2) ++bad_matvec;
+					if (want > 0) {
+						++finishes;
+						if (hook.counts.empty() || static_cast<size_t>(hook.counts.back()) != want) ++bad_finish;
+					}
+#else
+					CHECK_MSG(false, "8.1 damped + schema: the library lacks the schema fast-decode seams (S-ROWS)");
+#endif
+				}
+				if (threaded) {
+					CHECK_MSG(total_calls > 1 && bad_matvec == 0, "8.1 damped + schema preamble: %d run calls, %d matvec "
+					          "calls below 2 tasks", total_calls, bad_matvec);
+					CHECK_MSG(finishes > 0 && bad_finish == 0, "8.1 damped + schema: %d of %d finish run calls do not "
+					          "carry the legal-list split's task count", bad_finish, finishes);
+				}
+			}
 			o[threaded].blob = rig.Save(s);
 			o[threaded].ctr = Ctr(s);
-			if (threaded) CHECK_MSG(hook.AllThreaded() && hook.counts.size() > 1, "8.1 damped preamble");
 		}
 		CHECK_MSG(!sts[0].empty() && sts[0][0] == SSLM_OK && sts[0] == sts[1] && o[0] == o[1],
 		          "8.1 damped greedy%s: threaded differs from no-hook (tokens %s vs %s)", schema ? " + schema" : "",

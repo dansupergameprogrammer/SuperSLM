@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -502,25 +503,12 @@ public:
     // own semantics, which is what entry.counts[token] += 1 (damped_greedy_antilm.cpp)
     // needs.
     Value& operator[](Key k) {
-        if (slots_.empty()) {
-            // First insert this table has ever received (fold round 25, S1): allocate
-            // NOW, sized from the hint recorded at construction -- not from Grow()'s
-            // own BucketCountFor(live_+1) formula below (fold round 26 correction,
-            // D-SLM4767/D-SLM4768 -- pre-fold-26 this line's own formula doubled an
-            // already-doubled argument), which ignores the hint entirely and, at
-            // live_ == 0, sizes for a population of 1 (BucketCountFor(1) = 2 slots)
-            // regardless of what the caller's hint asked for. This is the only call to
-            // BucketCountFor over pending_hint_'s own value; every allocation after this
-            // one goes through Grow(), exactly as before this fold -- only the TIMING of
-            // the first allocation changed, not its size (BucketCountFor(8) = 16, identical
-            // to the pre-fold-25 constructor's own eager result) or the growth curve after
-            // it (fold round 26 corrected that curve's own multiplier -- see Grow(), below
-            // -- this branch itself is unaffected, since it never calls Grow()).
-            mask_ = BucketCountFor(pending_hint_) - 1;
-            slots_.assign(mask_ + 1, Slot{});
-        } else if ((live_ + 1) * 2 > slots_.size()) {
-            Grow();
-        }
+        // The first allocation (sized from the hint recorded at construction, fold round 25,
+        // S1) and every later growth (Grow(), fold round 26's formula) run through
+        // ReserveForInsert, which changes nothing when it throws (schema fast-decode code
+        // review, re-check of finding 9). As before, the growth check runs before the probe,
+        // so a lookup of a present key can still grow the table.
+        ReserveForInsert();
         uint64_t i = Hash(k) & mask_;
         for (uint64_t steps = 0; steps <= mask_; ++steps) {
             if (!slots_[i].occupied) {
@@ -533,6 +521,23 @@ public:
         }
         std::abort();  // unreachable: the allocate-on-first-insert branch and Grow()
                         // above always leave at least one empty slot on the probe path
+    }
+
+    // Makes room for one more key, so that the next operator[] of a key not yet present
+    // allocates nothing and cannot throw. Strong guarantee (schema fast-decode code review,
+    // re-check of finding 9): the new slot array is built in full before it replaces the old
+    // one, so a std::bad_alloc here leaves the table exactly as it was. The first allocation is
+    // sized from the hint and every later one by Grow()'s formula, both unchanged, and the
+    // rehash reinserts in the same order as before, so the layout is the one the table had.
+    void ReserveForInsert() {
+        if (slots_.empty()) {
+            const uint64_t new_mask = BucketCountFor(pending_hint_) - 1;
+            std::vector<Slot> fresh(new_mask + 1);
+            slots_.swap(fresh);
+            mask_ = new_mask;
+        } else if ((live_ + 1) * 2 > slots_.size()) {
+            Grow();
+        }
     }
 
     // Non-mutating lookup -- mirrors entry.counts.find(token) != entry.counts.end().
@@ -565,13 +570,21 @@ private:
         // asked to size the table's FIRST allocation -- it only ever re-sizes an
         // already-populated one, exactly its pre-fold-25 role.
         assert(!slots_.empty());
-        std::vector<Slot> old = std::move(slots_);
+        // Strong guarantee (schema fast-decode code review, re-check of finding 9): the only
+        // allocation is `fresh`, made before anything changes; the rehash below only moves.
+        // It reinserts in the old slot order, as the former body's (*this)[s.key] loop did, so
+        // the resulting layout is unchanged.
         uint64_t new_mask = BucketCountFor(live_ + 1) - 1;  // corrected fold round 26
-        slots_.assign(new_mask + 1, Slot{});                 // (D-SLM4767/D-SLM4768):
-        mask_ = new_mask;                                    // BucketCountFor already
-        live_ = 0;                                           // bakes in the headroom --
-        for (auto& s : old) if (s.occupied) (*this)[s.key] = std::move(s.value);
-        // see the derivation immediately below this code block.
+        static_assert(std::is_nothrow_move_assignable<Slot>::value, "the rehash must not throw");
+        std::vector<Slot> fresh(new_mask + 1);               // (D-SLM4767/D-SLM4768):
+        for (auto& s : slots_) {                             // BucketCountFor already
+            if (!s.occupied) continue;                       // bakes in the headroom --
+            uint64_t i = Hash(s.key) & new_mask;             // see the derivation
+            while (fresh[i].occupied) i = (i + 1) & new_mask;  // immediately below.
+            fresh[i] = {s.key, std::move(s.value), true};
+        }
+        slots_.swap(fresh);
+        mask_ = new_mask;
     }
     uint64_t pending_hint_;    // fold round 25, S1: the hint, held until the first
                                // Insert allocates from it; unused thereafter (Grow()'s

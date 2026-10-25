@@ -2991,6 +2991,23 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // Decode-threading plan §3.4: the body is RunLayerLoopChunkBatchedImpl, which also takes the
 // GemmThreading every projection's GEMM passes to the one dispatch point (GemmDispatch). The
 // exported pre-existing signature forwards with none; the threaded overload below forwards its own.
+// Schema fast-decode plan rev 1.3.3 §5.10.4: the five per-sequence saturation counters in the order of
+// RunLayerLoopChunkBatched's per-row output (kv, kv_landing, k_channel_landing, rope_q, rope_k); a null
+// counter reads 0.
+constexpr size_t kRowSaturationCounters = 5;
+inline void ReadRowSaturationCounters(const uint64_t* kv, const uint64_t* kv_landing, const uint64_t* k_channel,
+                                      const uint64_t* rope_q, const uint64_t* rope_k, uint64_t* out) {
+	out[0] = kv ? *kv : 0;
+	out[1] = kv_landing ? *kv_landing : 0;
+	out[2] = k_channel ? *k_channel : 0;
+	out[3] = rope_q ? *rope_q : 0;
+	out[4] = rope_k ? *rope_k : 0;
+}
+
+// Schema fast-decode J1-X (MSVC one-thread A/B, 2026-10-21): the per-row attribution is a compile-time
+// specialization. kRowCounts = false is the pre-J1-X loop exactly (no per-token snapshot or test); only the
+// exact jump-forward's pass, which passes a per-row output, instantiates kRowCounts = true.
+template <bool kRowCounts>
 static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
                                             size_t chunk_tokens, const LayerWeights* layers,
                                             uint32_t num_hidden_layers, size_t hidden_size,
@@ -3008,7 +3025,8 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
                                             uint64_t* out_k_channel_landing_saturation_count,
                                             uint64_t* out_rope_q_saturation_count,
                                             uint64_t* out_rope_k_saturation_count,
-                                            const GemmThreading& threading) {
+                                            const GemmThreading& threading,
+                                            uint64_t* out_row_saturation_counts) {
 	// The same domain guards RunLayerLoopImpl's own top-of-function block performs (§9.3),
 	// restated here because this path has no single `SequenceLayerState` to validate against --
 	// `chunk_tokens` tokens share one `context_cap`/geometry, not `chunk_tokens` independent
@@ -3141,6 +3159,15 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 		for (size_t t = 0; t < chunk_tokens; ++t) {
 			const int64_t position = context_length_start + static_cast<int64_t>(t);
 			const size_t width = static_cast<size_t>(position) + 1;
+			// Schema fast-decode plan rev 1.3.3 §5.10.4: every saturation count this pass makes is made
+			// in this token's stage (the K/V landing, QK-norm and RoPE sites below), so its row's share
+			// is the counters' movement across that stage.
+			[[maybe_unused]] uint64_t row_before[kRowCounts ? kRowSaturationCounters : 1];
+			if constexpr (kRowCounts) {
+				ReadRowSaturationCounters(kv_saturation_count, out_kv_landing_saturation_count,
+				                          out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
+				                          out_rope_k_saturation_count, row_before);
+			}
 
 			// LandTokenKVRow is the SAME function RunLayerLoopImpl calls -- identical WSC1
 			// fold, LoRA delta-add, bias, and per-head landing (design §15.2's shared-code
@@ -3202,6 +3229,15 @@ static SslmForwardStatus RunLayerLoopChunkBatchedImpl(int8_t* hidden_codes_chunk
 					int8_t* const k_row =
 					    MutableKeyRow(view, l, num_key_value_heads, head_dim, kv_head, position);
 					for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
+				}
+			}
+			if constexpr (kRowCounts) {
+				uint64_t row_after[kRowSaturationCounters] = {};
+				ReadRowSaturationCounters(kv_saturation_count, out_kv_landing_saturation_count,
+				                          out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
+				                          out_rope_k_saturation_count, row_after);
+				for (size_t c = 0; c < kRowSaturationCounters; ++c) {
+					out_row_saturation_counts[t * kRowSaturationCounters + c] += row_after[c] - row_before[c];
 				}
 			}
 
@@ -3405,14 +3441,14 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             uint64_t* out_k_channel_landing_saturation_count,
                                             uint64_t* out_rope_q_saturation_count,
                                             uint64_t* out_rope_k_saturation_count) {
-	return RunLayerLoopChunkBatchedImpl(
+	return RunLayerLoopChunkBatchedImpl<false>(
 	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
 	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
 	    rope_tables, OnePageView(workspace, workspace_size, context_cap), option_g_fused_k_landing,
 	    kv_saturation_count,
 	    site_prefix, trace_hook_state, q_width, out_kv_landing_saturation_count,
 	    out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
-	    out_rope_k_saturation_count, GemmThreading{});
+	    out_rope_k_saturation_count, GemmThreading{}, nullptr);
 }
 
 // Decode-threading plan §3.4: the threaded sibling of the overload above (forward_sites.h).
@@ -3434,14 +3470,14 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                             uint64_t* out_rope_q_saturation_count,
                                             uint64_t* out_rope_k_saturation_count,
                                             const GemmThreading& threading) {
-	return RunLayerLoopChunkBatchedImpl(
+	return RunLayerLoopChunkBatchedImpl<false>(
 	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
 	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
 	    rope_tables, OnePageView(workspace, workspace_size, context_cap), option_g_fused_k_landing,
 	    kv_saturation_count,
 	    site_prefix, trace_hook_state, q_width, out_kv_landing_saturation_count,
 	    out_k_channel_landing_saturation_count, out_rope_q_saturation_count,
-	    out_rope_k_saturation_count, threading);
+	    out_rope_k_saturation_count, threading, nullptr);
 }
 
 // Paged-KV plan (rev 16.1) §3.2 item 2: the page-view overload (forward_sites.h). Both flat
@@ -3457,13 +3493,22 @@ SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedSc
                                            size_t q_width, uint64_t* out_kv_landing_saturation_count,
                                            uint64_t* out_k_channel_landing_saturation_count,
                                            uint64_t* out_rope_q_saturation_count,
-                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading) {
-	return RunLayerLoopChunkBatchedImpl(
+                                           uint64_t* out_rope_k_saturation_count, const GemmThreading& threading,
+                                           uint64_t* out_row_saturation_counts) {
+	if (out_row_saturation_counts) {
+		return RunLayerLoopChunkBatchedImpl<true>(
+		    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
+		    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
+		    rope_tables, view, option_g_fused_k_landing, kv_saturation_count, site_prefix, trace_hook_state,
+		    q_width, out_kv_landing_saturation_count, out_k_channel_landing_saturation_count,
+		    out_rope_q_saturation_count, out_rope_k_saturation_count, threading, out_row_saturation_counts);
+	}
+	return RunLayerLoopChunkBatchedImpl<false>(
 	    hidden_codes_chunk, hidden_scales, chunk_tokens, layers, num_hidden_layers, hidden_size,
 	    head_dim, num_key_value_heads, intermediate_size, context_cap, context_length_start,
 	    rope_tables, view, option_g_fused_k_landing, kv_saturation_count, site_prefix, trace_hook_state,
 	    q_width, out_kv_landing_saturation_count, out_k_channel_landing_saturation_count,
-	    out_rope_q_saturation_count, out_rope_k_saturation_count, threading);
+	    out_rope_q_saturation_count, out_rope_k_saturation_count, threading, nullptr);
 }
 
 // Master plan §6.4 steps 14-15's real two-step composition (T-1389; built
@@ -3525,6 +3570,65 @@ SslmForwardStatus LogitsSiteParallel(const int8_t* final_codes, size_t hidden_si
 	const SslmForwardStatus st = RunExactlyOnce(*pf, split.task_count, &LogitsTask, &ctx);
 	if (st != SslmForwardStatus::Ok) return st;
 	return NarrowRowChecked(wide_logits, vocab_size, out_logits);
+}
+
+// Schema fast-decode plan §4.3 (forward_sites.h): |dot| <= hidden * 16384 must stay below INT32_MAX.
+bool LegalRowFinishExact(size_t hidden_size) noexcept {
+	return hidden_size <= static_cast<size_t>(INT32_MAX) / size_t{16384};
+}
+
+namespace {
+
+// Call-local state of one LogitsSiteLegalRows call, as LogitsTaskCtx is for LogitsSiteParallel.
+struct LegalRowsTaskCtx {
+	const int8_t* final_codes;
+	size_t hidden_size;
+	const int8_t* head_weights;
+	const uint32_t* legal_ids;
+	size_t n;
+	int64_t* wide_logits;
+	size_t rows_per_task;
+};
+
+void LegalRowsDots(const LegalRowsTaskCtx& c, size_t begin, size_t end) noexcept {
+	for (size_t j = begin; j < end; ++j) {
+		const size_t id = c.legal_ids[j];
+		GemmInt8AccumulateRow(c.final_codes, c.head_weights + id * c.hidden_size, c.hidden_size, 1,
+		                      c.wide_logits + id);
+	}
+}
+
+void LegalRowsTask(void* ctx, size_t task_index) noexcept {
+	const LegalRowsTaskCtx& c = *static_cast<const LegalRowsTaskCtx*>(ctx);
+	const size_t begin = task_index * c.rows_per_task;
+	LegalRowsDots(c, begin, std::min(c.n, begin + c.rows_per_task));
+}
+
+}  // namespace
+
+SslmForwardStatus LogitsSiteLegalRows(const int8_t* final_codes, size_t hidden_size,
+                                      const int8_t* head_weights, size_t vocab_size,
+                                      const uint32_t* legal_ids, size_t n, int64_t* wide_logits,
+                                      int32_t* out_logits, const sslm_parallel_for* pf) {
+	(void)vocab_size;  // the caller's ids are each < vocab_size (forward_sites.h)
+	if (n == 0) return SslmForwardStatus::Ok;
+	LegalRowsTaskCtx ctx{final_codes, hidden_size, head_weights, legal_ids, n, wide_logits, n};
+	if (pf == nullptr || pf->run == nullptr || pf->max_tasks <= 1) {
+		LegalRowsDots(ctx, 0, n);
+	} else {
+		// §4.2: LogitsSiteParallel's split and rule for calling `run`, over the legal list.
+		const ColumnSplit split = SplitColumns(n, /*work=*/0, static_cast<size_t>(pf->max_tasks),
+		                                       /*align=*/64, /*min_work=*/0);
+		ctx.rows_per_task = split.rows_per_task;
+		const SslmForwardStatus st = RunExactlyOnce(*pf, split.task_count, &LegalRowsTask, &ctx);
+		if (st != SslmForwardStatus::Ok) return st;
+	}
+	for (size_t j = 0; j < n; ++j) {
+		const size_t id = legal_ids[j];
+		const SslmForwardStatus st = NarrowRowChecked(wide_logits + id, 1, out_logits + id);
+		if (st != SslmForwardStatus::Ok) return st;
+	}
+	return SslmForwardStatus::Ok;
 }
 
 // C16's pinned tie-break (master plan §6.8 row C16, D-SLM35, T-1389): scans

@@ -54,6 +54,11 @@ PageStatus HolderShareLeading(PageHolder* dst, const PageHolder* src, uint32_t p
 // and freed to the pool at 0 (§3.3's table, by provenance).
 PageStatus HolderUnmapAll(PageHolder* holder);
 
+// The tail's unmap (schema fast-decode plan rev 1.3.3 §5.10.4): private entries at or above
+// max(keep, the leading shared and materialized entries) back to the holder's own reserve, last
+// mapped pushed first; `dirty` kept. No pool mutex.
+PageStatus HolderUnmapTail(PageHolder* holder, uint32_t keep);
+
 // Release: every mapped page and the reserve, per §3.3's release rows. The holder is destroyed.
 PageStatus HolderRelease(PageHolder* holder);
 

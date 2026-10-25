@@ -165,6 +165,36 @@ inline void MaybeThrowInjectedTiledGemmAllocFault() {
 	}
 }
 
+// Schema fast-decode plan (rev 1.2.1) §11.0, three single-shot slots for the J1 cells. Each is
+// consulted on the calling thread, at one site only, and disarms itself when it fires; armed, the
+// site throws std::bad_alloc exactly as a failed allocation there would. src/bad_alloc_wrap.h
+// carries the src-side wrappers the J1 build adds beside the others; J1 consults all three.
+//   - forced-table build (cell 5.6): the forced-next table builder at CPU model map, before it
+//     allocates the per-schema table. The map then fails with SSLM_ALLOCATION_FAILED.
+//   - verb batched pass (cell 5.2): sslm_seq_jump_forward's admission, after every refusal check
+//     and before the batched layer pass writes any row.
+//   - anti-LM create (cell 8.6 (vi)): the shared EnsureAntiLm helper, as its create would fail
+//     (the verb's call only; the slot is consulted where AntiLmCreate is called from that helper).
+inline thread_local bool g_inject_forced_table_build_alloc_failure = false;
+inline thread_local bool g_inject_jump_forward_pass_alloc_failure = false;
+inline thread_local bool g_inject_anti_lm_create_alloc_failure = false;
+
+inline void MaybeThrowInjectedSingleShot(bool& slot) {
+	if (slot) {
+		slot = false;
+		throw std::bad_alloc();
+	}
+}
+inline void MaybeThrowInjectedForcedTableBuildAllocFault() {
+	MaybeThrowInjectedSingleShot(g_inject_forced_table_build_alloc_failure);
+}
+inline void MaybeThrowInjectedJumpForwardPassAllocFault() {
+	MaybeThrowInjectedSingleShot(g_inject_jump_forward_pass_alloc_failure);
+}
+inline void MaybeThrowInjectedAntiLmCreateAllocFault() {
+	MaybeThrowInjectedSingleShot(g_inject_anti_lm_create_alloc_failure);
+}
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_TESTS_SUPPORT_BAD_ALLOC_INJECTION_H

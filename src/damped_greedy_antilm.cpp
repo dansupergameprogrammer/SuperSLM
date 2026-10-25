@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "superslm/intmath.h"
+#include "detail/anti_lm_update.h"
 #include "detail/context_hash.h"
 
 namespace superslm {
@@ -72,14 +73,12 @@ public:
 
 	int max_order() const { return max_order_; }
 
-	struct ContextEntry {
-		// {1} added fold round 26 (D-SLM4769): a default member initializer sizing THIS
-		// declaration's own first allocation from T-2303's measured population, without
-		// touching GrowableIntMap's own class-level default (= 8, unchanged) -- see the
-		// construction-site sizing decision, design Sec3.6.
-		superslm::detail::GrowableIntMap<int32_t, int64_t, superslm::detail::MixKeyS32> counts{1};
-		int64_t total = 0;
-	};
+	// The entry type is AntiLmContextEntry (detail/anti_lm_update.h), named there so that a reservation
+	// can hold a new context's entry (schema fast-decode plan rev 1.3.3 §4.5). Its members, and so this
+	// class's layout, are unchanged: counts{1} is still the fold-round-26 construction-site hint
+	// (D-SLM4769), sized from T-2303's measured population, with GrowableIntMap's own class-level
+	// default (= 8) untouched -- see the construction-site sizing decision, design Sec3.6.
+	using ContextEntry = AntiLmContextEntry;
 
 	// tables_[i-1] holds order i's context -> {candidate counts, total}. Exact-key lookup
 	// only: every read below is a direct `find`, never a traversal of the map's own bucket
@@ -111,24 +110,96 @@ int32_t AntiLmHistoryTokenAt(const AntiLmState* state, std::size_t index) {
 	return state->history_[index];
 }
 
-void AntiLmUpdate(AntiLmState* state, int32_t token) {
+// Strong exception guarantee (schema fast-decode code review, re-check of finding 9). The former
+// body inserted a new context entry and only then allocated its counts table, so a std::bad_alloc
+// there left an entry with total == 0 (AntiLmPenalize then divided by it on the next damped
+// finish), and a throw at a later order left the earlier orders counted and the history short.
+// The update now runs in two phases:
+// 1. Every allocation the token needs, with nothing published: the history's capacity, room for
+//    one more context in each order whose context is new, that context's key and its counts table
+//    already holding {token: 1}, and room in each existing context's counts table. The growth
+//    checks are the ones the former body made, at the same points, so every table grows exactly
+//    when it did before.
+// 2. Publishing, which allocates nothing and cannot throw.
+// A throw in phase 1 leaves the state exactly as it was before this token.
+//
+// Schema fast-decode plan rev 1.3.3 §4.5 (slice TF): the two phases are now two functions,
+// AntiLmReserveUpdate and AntiLmApplyUpdate (detail/anti_lm_update.h), so the decode step's finish can
+// make phase 1 one of its fallible steps and phase 2 part of its no-throw commit. The bodies are the
+// former phases unchanged; AntiLmUpdate runs the two in sequence.
+void AntiLmReserveUpdate(AntiLmState* state, int32_t token, AntiLmPendingUpdate* pending) {
+	pending->state_ = nullptr;
 	const std::size_t hist_size = state->history_.size();
-	for (int order = 1; order <= state->max_order(); ++order) {
+	const int max_order = state->max_order();
+	AntiLmPendingUpdate::Order* prepared = pending->inline_;
+	if (max_order > AntiLmPendingUpdate::kInlineOrders) {
+		pending->heap_.clear();
+		pending->heap_.resize(static_cast<std::size_t>(max_order));  // may throw
+		prepared = pending->heap_.data();
+	} else {
+		for (int order = 1; order <= max_order; ++order) prepared[order - 1] = AntiLmPendingUpdate::Order{};
+	}
+	// Phase 1: may throw; publishes nothing.
+	state->history_.reserve(hist_size + 1);
+	for (int order = 1; order <= max_order; ++order) {
 		const std::size_t ctx_len = static_cast<std::size_t>(order - 1);
 		if (ctx_len > hist_size) continue;  // not enough history yet to form this order's context
 		const ContextView ctx_view{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
 		                              ctx_len};
 		auto& table = state->tables_[static_cast<size_t>(order - 1)];
+		AntiLmPendingUpdate::Order& prep = prepared[order - 1];
 		AntiLmState::ContextEntry* existing = table.Find(ctx_view);
-		if (!existing) {
-			state->retained_bytes_ += kContextBaseOverhead + ctx_view.size * kContextPerTokenOverhead;
+		if (existing) {
+			existing->counts.ReserveForInsert();
+		} else {
+			table.ReserveForInsert();
+			prep.key.assign(ctx_view.data, ctx_view.data + ctx_view.size);
+			prep.entry.counts[token] = 1;
+			prep.entry.total = 1;
+			prep.is_new = true;
 		}
-		AntiLmState::ContextEntry& entry = existing ? *existing : table.FindOrEmplace(ctx_view);
+	}
+	pending->orders_ = prepared;
+	pending->hist_size_ = hist_size;
+	pending->token_ = token;
+	pending->state_ = state;
+}
+
+void AntiLmApplyUpdate(AntiLmState* state, AntiLmPendingUpdate* pending) noexcept {
+	// A reserve for this state, with the state not updated since (detail/anti_lm_update.h).
+	if (pending->state_ != state || state->history_.size() != pending->hist_size_) std::abort();
+	const std::size_t hist_size = pending->hist_size_;
+	const int32_t token = pending->token_;
+	const int max_order = state->max_order();
+	AntiLmPendingUpdate::Order* prepared = pending->orders_;
+	// Phase 2: cannot throw (every table has room, every new entry is built, the history has
+	// capacity).
+	for (int order = 1; order <= max_order; ++order) {
+		const std::size_t ctx_len = static_cast<std::size_t>(order - 1);
+		if (ctx_len > hist_size) continue;
+		auto& table = state->tables_[static_cast<size_t>(order - 1)];
+		AntiLmPendingUpdate::Order& prep = prepared[order - 1];
+		if (prep.is_new) {
+			state->retained_bytes_ += kContextBaseOverhead + ctx_len * kContextPerTokenOverhead;
+			state->retained_bytes_ += kCandidateOverhead;
+			table.EmplaceReserved(std::move(prep.key), std::move(prep.entry));
+			continue;
+		}
+		const ContextView ctx_view{ctx_len ? state->history_.data() + hist_size - ctx_len : nullptr,
+		                              ctx_len};
+		AntiLmState::ContextEntry& entry = *table.Find(ctx_view);
 		if (!entry.counts.Find(token)) { state->retained_bytes_ += kCandidateOverhead; }
 		entry.counts[token] += 1;
 		entry.total += 1;
 	}
 	state->history_.push_back(token);
+	pending->state_ = nullptr;
+}
+
+void AntiLmUpdate(AntiLmState* state, int32_t token) {
+	AntiLmPendingUpdate pending;
+	AntiLmReserveUpdate(state, token, &pending);
+	AntiLmApplyUpdate(state, &pending);
 }
 
 namespace {
@@ -164,7 +235,10 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 		                      ctx_len};
 		const auto& table = state->tables_[static_cast<size_t>(order - 1)];
 		const AntiLmState::ContextEntry* entry = table.Find(ctx);
-		if (!entry) continue;  // context never observed -- order excluded, not zeroed
+		// Context never observed -- order excluded, not zeroed. An entry with no observation
+		// (total == 0) is the same case. AntiLmUpdate never publishes one; the check is a
+		// defence, so a damaged state can never reach the division below.
+		if (!entry || entry->total <= 0) continue;
 		++active_count;
 		raw_sum += Q15Pow(kBetaQ15, max_order - order);
 	}
@@ -184,7 +258,7 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 		                      ctx_len};
 		const auto& table = state->tables_[static_cast<size_t>(order - 1)];
 		const AntiLmState::ContextEntry* entry = table.Find(ctx);
-		if (!entry) continue;
+		if (!entry || entry->total <= 0) continue;  // as the first pass
 		++active_index;
 		const int64_t normalized_weight =
 		    (active_index == active_count)
