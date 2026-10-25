@@ -37,7 +37,7 @@
 #include <vector>
 
 #include "d3d12_harness.h"
-#include "multirow_wide.h"  // MR1 test-only declarations; empty unless SUPERSLM_MULTIROW_WIDE
+#include "multirow_wide.h"  // the multi-row recorder (plan rev 1.3.2 §3)
 #include "gpu_call_timing_snapshot.h"
 #include "shaders/kv_page_addr_model.h"
 #include "gpu_kv_pool_geometry.h"  // paged-KV G3: the coverage twin's chunk-wide form
@@ -2037,7 +2037,6 @@ uint32_t TableBackToCommonBarrier(const GpuLayerLoopChunkOpenState& state, D3D12
 }
 }  // namespace
 
-#if defined(SUPERSLM_MULTIROW_WIDE)
 // MR2 (cell 1.2): set by a widened slice around its call to PrepareGpuLayerLoopChunkOpenState, null otherwise.
 // While set, Prepare takes the buffers it would allocate from it (GpuWidePrepareReuse, multirow_wide.h).
 thread_local GpuWidePrepareReuse* g_wide_prepare_reuse = nullptr;
@@ -2066,7 +2065,6 @@ void WidePrepareKeepUav(Microsoft::WRL::ComPtr<ID3D12Resource> GpuWidePrepareReu
 	if (g_wide_prepare_reuse != nullptr) g_wide_prepare_reuse->*slot = buf;
 }
 }  // namespace
-#endif  // SUPERSLM_MULTIROW_WIDE
 
 // `dev` is the process's submission device, obtained once by the caller (harness::GetDevice()), so
 // one submission makes at most one attempt at a first-time device setup: a setup that ran out of
@@ -2819,18 +2817,11 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		g_resident_weights.src_stride = layout.stride;
 		g_resident_weights.generation = model_generation;  // (T-2577)
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	layout_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::layout, layout_bytes.data(), layout_bytes.size());
 	rope_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::rope, rope_info_bytes.data(), rope_info_bytes.size());
 	model_const_buf =
 	    WidePrepareUpload(dev, &GpuWidePrepareReuse::model_const, model_const_bytes.data(), model_const_bytes.size());
 	silu_lut_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::silu, silu_lut_bytes.data(), silu_lut_bytes.size());
-#else
-	layout_buf = dev.Upload(layout_bytes.data(), layout_bytes.size());
-	rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
-	model_const_buf = dev.Upload(model_const_bytes.data(), model_const_bytes.size());
-	silu_lut_buf = dev.Upload(silu_lut_bytes.data(), silu_lut_bytes.size());
-#endif
 	// T-2113 (B4): reuse the resident buffers on a hit -- `dev.Upload()` on a miss is a
 	// synchronous Map/memcpy/Unmap (`d3d12_harness.h`), fully realized before this call
 	// returns, so a cached resource is always valid content regardless of whether the command
@@ -2857,12 +2848,8 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		g_resident_rope.valid = true;
 		g_resident_rope.generation = model_generation;  // (T-2577)
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	scratch_layout_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::scratch_layout, scratch_layout_bytes.data(),
 	                                       scratch_layout_bytes.size());
-#else
-	scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
-#endif
 	// Paged-KV plan §4 items 1-2 (G2): the K/V page table the shaders read as KvPageTable (t10) -- the
 	// view's `mapped_pages` entries, one uint physical page each. Uploaded per call on the same
 	// UPLOAD-heap idiom as every other per-call SRV above and kept alive to the fence the same way
@@ -2874,13 +2861,8 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// after its Reset (below). Otherwise the buffer already holds the view's entries and is bound as is.
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_page_table_buf;
 	if (kv_table_resident == nullptr || kv_table_upload) {
-#if defined(SUPERSLM_MULTIROW_WIDE)
 		kv_page_table_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::page_table, kv_view.page_table,
 		                                      static_cast<size_t>(kv_view.mapped_pages) * sizeof(uint32_t));
-#else
-		kv_page_table_buf =
-		    dev.Upload(kv_view.page_table, static_cast<size_t>(kv_view.mapped_pages) * sizeof(uint32_t));
-#endif
 		upload_keep_alive.push_back(kv_page_table_buf);
 	}
 	if (kv_table_resident != nullptr && kv_table_upload) {
@@ -2899,19 +2881,14 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 		out_state->kv_table_uploaded = kv_table_resident;
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	// A kept SeqState is not re-initialised: no widened shader reads it (GpuWidePrepareReuse).
 	seq_uav = WidePrepareKeptUav(&GpuWidePrepareReuse::seq_uav, seq_bytes.size());
 	if (seq_uav == nullptr) {
 		seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
 		WidePrepareKeepUav(&GpuWidePrepareReuse::seq_uav, seq_uav);
 	}
-#else
-	seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
-#endif
 	harness::NameBuffer(seq_uav.Get(), L"SuperSLM SeqState");
 	// T-2101: no host content -- see the header comment at `kv_fast_hit`'s own declaration above.
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	scratch_uav = WidePrepareKeptUav(&GpuWidePrepareReuse::scratch_uav, scratch_layout.total);
 	if (scratch_uav == nullptr) {
 		scratch_uav = dev.MakeBuffer(scratch_layout.total, D3D12_HEAP_TYPE_DEFAULT,
@@ -2919,11 +2896,6 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		WidePrepareKeepUav(&GpuWidePrepareReuse::scratch_uav, scratch_uav);
 	}
-#else
-	scratch_uav = dev.MakeBuffer(scratch_layout.total, D3D12_HEAP_TYPE_DEFAULT,
-	                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-	                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-#endif
 	harness::NameBuffer(scratch_uav.Get(), L"SuperSLM LayerScratch");
 	// T-2101 (D-SLM3301/D-SLM3294): device-resident K/V. A cache hit reuses the SAME DEFAULT-heap
 	// buffer every call -- no pack, no upload -- and only needs a state transition back to
@@ -2984,7 +2956,6 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// assertions pass, because nothing upstream of this call has already
 	// done their job.
 	MaybeThrowInjectedO11AllocFault(kO11AllocInjectionSiteWorkScratchUav);
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	work_scratch_uav = WidePrepareKeptUav(&GpuWidePrepareReuse::work_scratch_uav, work_total);
 	if (work_scratch_uav == nullptr) {
 		work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
@@ -2992,11 +2963,6 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		                                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		WidePrepareKeepUav(&GpuWidePrepareReuse::work_scratch_uav, work_scratch_uav);
 	}
-#else
-	work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
-	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-#endif
 	harness::NameBuffer(work_scratch_uav.Get(), L"SuperSLM WorkScratch");
 
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
@@ -5493,10 +5459,8 @@ bool MapModelGpuResidencyWithInjection(uint64_t required_bytes) {
 	return true;  // every allocation call succeeded (including the N==0 vacuous case)
 }
 
-// Multi-row GPU plan (rev 1.3.2), slice MR1: the widened kernels' test-only host side. Compiled only under
-// SUPERSLM_MULTIROW_WIDE, which no shipped target defines (multirow_wide.h).
-#if defined(SUPERSLM_MULTIROW_WIDE)
+// Multi-row GPU plan (rev 1.3.2): the widened kernels' host side, the recorder (MR1's smoke one-shot only under
+// SUPERSLM_MULTIROW_WIDE, the multi-row test-seam build).
 #include "multirow_wide.inl"
-#endif
 
 }  // namespace superslm_gpu

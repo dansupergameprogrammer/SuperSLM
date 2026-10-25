@@ -1127,10 +1127,8 @@ if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 	# target and flags. src/gpu/shaders_wide holds the 19 generated non-GEMM sites
 	# (gen_wide_shaders.py, never edited by hand) and the one hand-written GEMM source, compiled
 	# once per GEMM site. Outputs are <site>_wide_h<H>.cso and <gemm>_gemm_wide_h<H>.cso beside the
-	# one-row shaders. Off by default: nothing the shipped library runs loads them (only the
-	# SUPERSLM_MULTIROW_WIDE test build does), so the default build and install tree stay the base's.
-	option(SUPERSLM_MULTIROW_WIDE_SHADERS "Build and stage the multi-row widened shader variants (test builds only)" OFF)
-	if(SUPERSLM_MULTIROW_WIDE_SHADERS)
+	# one-row shaders, staged and installed with them: since MR3 the shipped library loads them for
+	# sslm_gpu_seq_embed_rows chunks of two or more rows (include/superslm/gpu_1p0.h).
 	set(_sslm_wide_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders_wide")
 	file(GLOB _sslm_wide_site_srcs CONFIGURE_DEPENDS "${_sslm_wide_dir}/*_site_wide.hlsl")
 	set(_sslm_wide_jobs "")
@@ -1174,7 +1172,6 @@ if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 	unset(_sslm_wide_dir)
 	unset(_sslm_wide_site_srcs)
 	unset(_sslm_wide_jobs)
-	endif()
 
 	add_custom_target(superslm_gpu_shaders DEPENDS ${SUPERSLM_GPU_SHADER_OUTPUTS} ${SUPERSLM_GPU_SHADER_STAGED})
 

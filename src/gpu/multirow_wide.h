@@ -1,21 +1,17 @@
-// Multi-row GPU plan (rev 1.3.2), slices MR1 and MR2: the host side of the row-widened kernels. Everything here
-// exists only in a build that defines SUPERSLM_MULTIROW_WIDE; no shipped target defines it. The shipped library
-// is not byte-identical to the base: MR1 adds behaviour-neutral hooks to it (FillComposedRootParams, the bound-
-// resource fields of GpuLayerLoopChunkOpenState, and PackGpuSeqStateBytes, a new external symbol), and none of
-// the widened code. The widened .cso are built and staged only under the CMake option
-// SUPERSLM_MULTIROW_WIDE_SHADERS (default OFF), so the default install tree is the base's.
+// Multi-row GPU plan (rev 1.3.2): the host side of the row-widened kernels.
 //
-// MR1: the one-layer smoke. MR2 (plan §3.3 to §3.6, §9's MR2 row): the recorder (one widened submission per
-// layer slice), the per-chunk row buffers and their per-context free list, the close (CommitPrefix), the entry
-// snapshot and rollback, and the internal entry, which takes plan §4.1's public shapes so MR3 can publish the
-// same functions. MR2's entry stays behind this define until MR3 publishes the verbs and installs the shaders.
+// MR2 (plan §3.3 to §3.6) built the recorder (one widened submission per layer slice), the per-chunk row buffers
+// and their per-context free list, the close (CommitPrefix), and the entry snapshot and rollback. MR3 (§4.1 to
+// §4.6) publishes the verbs that reach it (include/superslm/gpu_1p0.h: sslm_gpu_seq_embed_rows,
+// sslm_gpu_seq_rows_abandon, sslm_gpu_seq_rows_open, sslm_gpu_seq_last_rows_committed) and builds the widened
+// .cso beside the one-row shaders, so the recorder is part of the shipped library. Two things stay test-only,
+// under SUPERSLM_MULTIROW_WIDE (the multi-row test-seam build, which no shipped target defines): MR1's one-layer
+// smoke and plan §8's seams.
 //
 // Definitions: superslm_gpu.cpp (PackGpuSeqStateBytes), multirow_wide.inl (included at the end of
-// superslm_gpu.cpp: the widened submissions and their finish) and gpu_1p0.cpp (the smoke entry, the chunk on the
-// handle, the close, rollback and the internal entry, which reach the handles' internals).
+// superslm_gpu.cpp: the widened submissions and their finish) and gpu_1p0.cpp (the chunk on the handle, the
+// close, rollback and the verbs, which reach the handles' internals; and the test-only smoke and seams).
 #pragma once
-
-#if defined(SUPERSLM_MULTIROW_WIDE)
 
 #include <atomic>
 #include <cstddef>
@@ -34,7 +30,8 @@ namespace superslm_gpu {
 // The SeqState bytes a one-row submission uploads for `seq` (superslm_gpu.cpp).
 std::vector<uint8_t> PackGpuSeqStateBytes(const superslm::SequenceLayerState& seq, uint32_t H);
 
-// What one widened submission leaves: every row's SeqState as it entered (`entry_rows`) and as the fence
+#if defined(SUPERSLM_MULTIROW_WIDE)
+// MR1 (test-only): what one widened submission leaves: every row's SeqState as it entered (`entry_rows`) and as the fence
 // left it (`rows`), variant_h rows of row_bytes each, padded rows included, and the whole device K/V buffer
 // the submission bound, read back after its fence.
 struct GpuWideRowsReadback {
@@ -61,6 +58,7 @@ superslm::SslmForwardStatus RunMultirowWideLayersForSmoke(
     uint64_t external_rope_sin_elems, const GpuAdapterBridge* adapter_bridge, size_t q_width,
     uint64_t model_generation, bool model_has_qk_norm, const GpuPagedKvBinding* paged_kv,
     GpuWideRowsReadback* out);
+#endif  // SUPERSLM_MULTIROW_WIDE
 
 
 // ---- MR2: the recorder (plan §3.3 to §3.5) ----
@@ -185,7 +183,7 @@ struct GpuRowsContextState {
 	uint32_t chunks_open = 0, chunks_open_peak = 0;
 	uint64_t widened_lists = 0, allocations = 0;
 	uint32_t last_widened_list_dispatches = 0, max_widened_list_dispatches = 0;
-	std::atomic<int32_t> armed_failure_slice{-1};
+	std::atomic<int32_t> armed_failure_slice{-1};  // set only through the test-only seam (cell 5.3)
 };
 
 // A chunk open on a sequence handle (plan §3.4): the rows, the entry snapshot (§3.6), the adapter fixed at the
@@ -228,6 +226,7 @@ struct GpuRowsChunk {
 
 }  // namespace superslm_gpu
 
+#if defined(SUPERSLM_MULTIROW_WIDE)
 // The MR1 one-layer smoke's result (gpu_1p0.cpp).
 struct SslmGpuMr1WideSmokeReport {
 	uint32_t real_rows = 0, variant_h = 0;
@@ -257,34 +256,8 @@ SslmGpuStatus sslm_gpu_test_only_mr1_wide_one_layer_smoke(SslmGpuContext* ctx, S
                                                           uint32_t variant_h,
                                                           SslmGpuMr1WideSmokeReport* out) noexcept;
 
-// ---- MR2: the internal entry (plan §9's MR2 row) and plan §8's seams ----
+// ---- Plan §8's seams (test-only; the MR2/MR3 cells read them) ----
 //
-// Plan §4.1's shapes, verbatim, so MR3 publishes the same functions in include/superslm/gpu_1p0.h and the MR2
-// cells (tests/multirow-gpu/mr2_entry.h, which declares the same names under the same guard) carry over
-// unchanged. Only the PROMPT kind exists at MR2. Advancing is sslm_decode_step_gpu; the close runs in the
-// sslm_gpu_ready that finishes the last layer.
-#ifndef SSLM_GPU_MAX_ROWS
-#define SSLM_GPU_MAX_ROWS 8
-typedef enum {
-	SSLM_GPU_ROWS_PROMPT = 0,
-	SSLM_GPU_ROWS_SCHEMA_FORCED = 1,
-	SSLM_GPU_ROWS_EXACT_DRAFT = 2 /* MR5 */
-} SslmGpuRowsKind;
-#define SSLM_GPU_ROWS_FIRST_PREWALKED 0x1u
-typedef struct SslmGpuRowsSpec {
-	uint32_t struct_size;
-	int32_t kind;
-	const int32_t* tokens;
-	int32_t count;
-	uint32_t flags;
-} SslmGpuRowsSpec;
-SslmGpuStatus sslm_gpu_seq_embed_rows(SslmGpuContext*, SslmGpuSequenceHandle*, const SslmGpuRowsSpec*,
-                                      int32_t* out_admitted) noexcept;
-SslmGpuStatus sslm_gpu_seq_rows_abandon(SslmGpuContext*, SslmGpuSequenceHandle*) noexcept;
-SslmGpuStatus sslm_gpu_seq_rows_open(const SslmGpuSequenceHandle*, int32_t* out_rows) noexcept;
-SslmGpuStatus sslm_gpu_seq_last_rows_committed(const SslmGpuSequenceHandle*, int32_t* out_rows) noexcept;
-#endif
-
 // The seams (the test author's contract, tests/multirow-gpu/mr2_entry.h; the layouts must stay identical).
 struct SslmGpuMr2Seams {
 	uint32_t struct_size = sizeof(SslmGpuMr2Seams);
