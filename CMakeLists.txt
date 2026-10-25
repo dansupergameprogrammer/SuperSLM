@@ -165,6 +165,11 @@ include(tests/paged-kv/paged_kv.cmake)
 # GPU paged-KV plan (rev 16) step G3: the D3D12-free core's host-only cells.
 include(tests/gpu-g3-core/g3_core.cmake)
 include(tests/precache/precache.cmake)
+# Multi-row GPU plan (rev 1.3.2): the red suite (tests/multirow-gpu), opt-in while the feature branch is open.
+option(SUPERSLM_MULTIROW_GPU_TESTS "Register the multi-row GPU red suite's host-only cells with CTest" OFF)
+if(SUPERSLM_MULTIROW_GPU_TESTS)
+	include(tests/multirow-gpu/multirow_gpu.cmake)
+endif()
 
 # T-2152 (outside strike item 1): tests/test_main.cpp's own T-2019/T-2024 GPU-serial-port
 # section calls `superslm_gpu::*` directly (#ifdef _WIN32-guarded in that file so the same
