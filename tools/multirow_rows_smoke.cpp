@@ -1,6 +1,7 @@
-// Multi-row GPU plan (rev 1.3.2), slice MR2: a builder's smoke of the recorder through its internal entry
-// (src/gpu/multirow_wide.h: sslm_gpu_seq_embed_rows and the decode step and ready that advance and close a
-// chunk). A development aid, not the grade: the test author's MR2 suite (tests/multirow-gpu) grades the cells.
+// Multi-row GPU plan (rev 1.3.2), slices MR2 and MR3: a builder's smoke of the recorder through the published verbs
+// (include/superslm/gpu_1p0.h: sslm_gpu_seq_embed_rows and the decode step and ready that advance and close a
+// chunk). A development aid, not the grade: the test author's suites (tests/multirow-gpu) grade the cells. It
+// reads plan §8's seams, so the engine is built with -DSUPERSLM_MULTIROW_WIDE.
 //
 // Every case compares a chunk handle with its one-row twin, byte for byte, through whole save blobs (SLM5 for a
 // dedicated sequence, SLM6 for a pooled one), plus the close's status and last_rows_committed:
@@ -18,6 +19,12 @@
 //   fault    cell 5.3's seam at slice 1 of an M = 4 chunk: SSLM_GPU_ALLOCATION_FAILED, the blob at entry, and a
 //            retry equal to its twin;
 //   seams    after warm-up no slice allocates, and the free list never holds more sets than chunks were open.
+// MR3 (the published verbs, plan §4.1 to §4.6):
+//   batch    sslm_decode_step_batch_gpu over a plain member, an M = 5 chunk and an M = 1 chunk, one layer each per
+//            call: every member equals its twin; with the budget for two members only, the third reads
+//            SSLM_BATCH_BUDGET_EXHAUSTED and its chunk is unchanged;
+//   statuses save with a chunk open (SSLM_GPU_ROWS_CHUNK_OPEN, the buffer and size untouched), admission capped by
+//            the context's headroom, and SSLM_GPU_ROWS_CAP_EXCEEDED at the cap with nothing written.
 //
 // --refusal-only runs just the refusal cases (with --rope-positions the clean grid's later rows would refuse too).
 //
@@ -348,6 +355,102 @@ void FaultCase(const Env& e, bool pooled) {
 	Report(true, name, why);
 }
 
+void BatchCase(const Env& e, bool pooled) {
+	char why[256] = {};
+	const std::string name = std::string("batch plain + M=5 + M=1") + (pooled ? " pooled" : " dedicated");
+	Pair a(e, pooled), b(e, pooled), c(e, pooled);
+	if (!a.ok || !b.ok || !c.ok || !a.Prefix(3) || !b.Prefix(3) || !c.Prefix(3)) return Report(false, name, "setup");
+	const int32_t tok_a = TokenAt(40, e.vocab);
+	const std::vector<int32_t> rows_b = RowTokens(3, 5, e.vocab), rows_c = RowTokens(4, 1, e.vocab);
+	if (OneRow(e, a.twin, tok_a, e.dpl) != SSLM_OK) return Report(false, name, "twin a");
+	for (int32_t t : rows_b)
+		if (OneRow(e, b.twin, t, e.dpl) != SSLM_OK) return Report(false, name, "twin b");
+	if (OneRow(e, c.twin, rows_c[0], e.dpl) != SSLM_OK) return Report(false, name, "twin c");
+	int32_t adm_b = 0, adm_c = 0;
+	SslmGpuRowsSpec sb{sizeof(SslmGpuRowsSpec), SSLM_GPU_ROWS_PROMPT, rows_b.data(), 5, 0};
+	SslmGpuRowsSpec sc{sizeof(SslmGpuRowsSpec), SSLM_GPU_ROWS_PROMPT, rows_c.data(), 1, 0};
+	if (sslm_gpu_seq_embed_token(e.ctx, a.chunk, tok_a) != SSLM_OK ||
+	    sslm_gpu_seq_embed_rows(e.ctx, b.chunk, &sb, &adm_b) != SSLM_OK ||
+	    sslm_gpu_seq_embed_rows(e.ctx, c.chunk, &sc, &adm_c) != SSLM_OK) {
+		return Report(false, name, "embed");
+	}
+	SslmGpuSequenceHandle* seqs[3] = {a.chunk, b.chunk, c.chunk};
+	const SslmGpuAdapterHandle* ads[3] = {e.adapter, e.adapter, e.adapter};
+	SslmGpuStatus st[3] = {};
+	// Budget for two members: the third (the M = 1 chunk) is exhausted and unchanged.
+	int32_t open_c = -1;
+	if (sslm_decode_step_batch_gpu(e.ctx, seqs, ads, 3, 2 * e.dpl, st) != SSLM_OK || st[0] != SSLM_OK ||
+	    st[1] != SSLM_OK || st[2] != SSLM_BATCH_BUDGET_EXHAUSTED || sslm_gpu_seq_rows_open(c.chunk, &open_c) != SSLM_OK ||
+	    open_c != 1 || *SslmGpuSeqHandleLayerIndexForBench(c.chunk) != 0) {
+		std::snprintf(why, sizeof why, "two-member budget -> %d %d %d, c open %d", static_cast<int>(st[0]),
+		              static_cast<int>(st[1]), static_cast<int>(st[2]), open_c);
+		return Report(false, name, why);
+	}
+	// c catches up alone, then every call advances all three by one layer.
+	if (Step(e, c.chunk, e.dpl) != SSLM_OK) return Report(false, name, "c catch-up");
+	for (uint32_t l = 1; l < e.L; ++l) {
+		if (sslm_decode_step_batch_gpu(e.ctx, seqs, ads, 3, 3 * e.dpl, st) != SSLM_OK || st[0] != SSLM_OK ||
+		    st[1] != SSLM_OK || st[2] != SSLM_OK) {
+			std::snprintf(why, sizeof why, "layer %u -> %d %d %d", l, static_cast<int>(st[0]), static_cast<int>(st[1]),
+			              static_cast<int>(st[2]));
+			return Report(false, name, why);
+		}
+	}
+	int32_t open_b = -1, committed_b = -1;
+	sslm_gpu_seq_rows_open(b.chunk, &open_b);
+	sslm_gpu_seq_rows_open(c.chunk, &open_c);
+	sslm_gpu_seq_last_rows_committed(b.chunk, &committed_b);
+	if (open_b != 0 || open_c != 0 || committed_b != 5) {
+		std::snprintf(why, sizeof why, "after L layers: open %d %d, committed %d", open_b, open_c, committed_b);
+		return Report(false, name, why);
+	}
+	if (!a.Equal("plain member", why, sizeof why) || !b.Equal("M=5 member", why, sizeof why) ||
+	    !c.Equal("M=1 member", why, sizeof why)) {
+		return Report(false, name, why);
+	}
+	Report(true, name, why);
+}
+
+void StatusCase(const Env& e, bool pooled) {
+	char why[256] = {};
+	const std::string name = std::string("statuses (save CHUNK_OPEN, headroom, ") + (pooled ? "budget limit) pooled" : "cap) dedicated");
+	Pair p(e, pooled);
+	if (!p.ok || !p.Prefix(29)) return Report(false, name, "setup");
+	const std::vector<int32_t> rows = RowTokens(29, 8, e.vocab);
+	SslmGpuRowsSpec spec{sizeof(SslmGpuRowsSpec), SSLM_GPU_ROWS_PROMPT, rows.data(), 8, 0};
+	int32_t admitted = -1;
+	if (sslm_gpu_seq_embed_rows(e.ctx, p.chunk, &spec, &admitted) != SSLM_OK || admitted != 3) {
+		std::snprintf(why, sizeof why, "headroom 3 of cap 32: admitted %d", admitted);
+		return Report(false, name, why);
+	}
+	std::vector<uint8_t> canary(64, 0xAB);
+	size_t sz = canary.size();
+	const SslmGpuStatus sv = sslm_gpu_seq_save(e.ctx, p.chunk, canary.data(), &sz);
+	bool untouched = sz == canary.size();
+	for (uint8_t x : canary) untouched = untouched && x == 0xAB;
+	if (sv != SSLM_GPU_ROWS_CHUNK_OPEN || !untouched) {
+		std::snprintf(why, sizeof why, "save with a chunk open -> %d, untouched %d", static_cast<int>(sv), untouched);
+		return Report(false, name, why);
+	}
+	for (uint32_t g = 0; g <= e.L; ++g) {
+		int32_t open = 0;
+		sslm_gpu_seq_rows_open(p.chunk, &open);
+		if (open == 0) break;
+		if (Step(e, p.chunk, e.dpl) != SSLM_OK) return Report(false, name, "advance");
+	}
+	std::vector<uint8_t> before, after;
+	if (!Save(e, p.chunk, &before)) return Report(false, name, "save after the close");
+	admitted = -7;
+	const SslmGpuStatus cap = sslm_gpu_seq_embed_rows(e.ctx, p.chunk, &spec, &admitted);
+	// A pooled sequence's budget (32) is below the model's cap: its limit binds, with the budget's status.
+	const SslmGpuStatus want = pooled ? SSLM_GPU_KV_BUDGET_EXCEEDED : SSLM_GPU_ROWS_CAP_EXCEEDED;
+	if (cap != want || admitted != -7 || !Save(e, p.chunk, &after) || FirstDiff(before, after) >= 0) {
+		std::snprintf(why, sizeof why, "at the cap -> %d, admitted %d", static_cast<int>(cap), admitted);
+		return Report(false, name, why);
+	}
+	Report(true, name, why);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -454,6 +557,8 @@ int main(int argc, char** argv) {
 	for (int pooled = 0; pooled < 2 && !refusal_only; ++pooled) {
 		AbandonCase(e, pooled != 0);
 		FaultCase(e, pooled != 0);
+		BatchCase(e, pooled != 0);
+		StatusCase(e, pooled != 0);
 	}
 	SslmGpuMr2Seams end{};
 	sslm_gpu_test_only_mr2_seams(e.ctx, &end);
@@ -473,6 +578,6 @@ int main(int argc, char** argv) {
 	if (e.adapter) sslm_gpu_adapter_unmap(e.ctx, e.adapter);
 	sslm_gpu_model_unmap(e.ctx, e.model);
 	sslm_gpu_context_destroy(e.ctx);
-	std::printf("MR2 recorder smoke: %s (%d cases, %d failed)\n", g_failed ? "FAIL" : "PASS", g_cases, g_failed);
+	std::printf("multi-row recorder smoke: %s (%d cases, %d failed)\n", g_failed ? "FAIL" : "PASS", g_cases, g_failed);
 	return g_failed ? 1 : 0;
 }
