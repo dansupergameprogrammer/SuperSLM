@@ -35,6 +35,7 @@
 #include "superslm/artifact.h"
 #include "superslm/model.h"
 #include "superslm/proof_manifest.h"
+#include "superslm/schema_masks.h"
 
 using namespace superslm;
 
@@ -77,6 +78,36 @@ int main(int argc, char** argv) {
 			    << "\"\n}\n";
 			std::fprintf(stderr, "REJECTED: %s -- %s\n", SslmModelStatusName(status), load_err.c_str());
 			return 1;
+		}
+	}
+
+	// The SchemaMasks section gets the same structural and cross-check parse sslm_model_map runs
+	// (sslm_abi.cpp, SchemaMasksTable::Parse against Config.vocab_size): Load does not parse it, so
+	// before this check an artifact whose SCM1 every loader refuses to map still verified OK, and
+	// sslm_attach_schema.py reported it attached (array S2 box run, 2026-10-25).
+	{
+		const SslmSectionView* schema_section = artifact.Section(SslmSectionType::SchemaMasks);
+		if (schema_section != nullptr) {
+			SslmModelConfig cfg;
+			std::string cfg_err;
+			const SslmSectionView* cfg_section = artifact.Section(SslmSectionType::Config);
+			std::string schema_err;
+			bool schema_ok = cfg_section != nullptr && ParseConfig(*cfg_section, cfg, &cfg_err) == SslmModelStatus::Ok;
+			if (!schema_ok) {
+				schema_err = "SchemaMasks present but Config did not parse: " + cfg_err;
+			} else {
+				SchemaMasksTable table;
+				schema_ok = SchemaMasksTable::Parse(schema_section->data, schema_section->byte_size, cfg.vocab_size,
+				                                    table, &schema_err);
+			}
+			if (!schema_ok) {
+				std::ofstream out(manifest_path, std::ios::binary);
+				out << "{\n  \"schema\": \"sslm_proof_manifest_v1\",\n  \"status\": \"REJECTED\",\n"
+				    << "  \"reject_status\": \"SchemaMasksRejected\",\n  \"diagnostic\": \"" << JsonEscape(schema_err)
+				    << "\"\n}\n";
+				std::fprintf(stderr, "REJECTED: SchemaMasksRejected -- %s\n", schema_err.c_str());
+				return 1;
+			}
 		}
 	}
 
