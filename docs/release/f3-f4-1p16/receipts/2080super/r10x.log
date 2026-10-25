@@ -1,0 +1,55 @@
+adapter: 0 10de 1e81 7987 NVIDIA GeForce RTX 2080 SUPER
+using adapter 0 (10de:1e81)
+[2026-10-24T18:18:20] D:\_scratch\f3-f4-1p16\pkvg\bin\pcg_cell_10_4_real.exe --cell=10.1 --phase=capture --model=D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm --prompts=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts --blobs=D:\_scratch\f3-f4-1p16\blobs\r10x
+fixture: D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.1 GPU: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+10.1 capture flat00: 159 tokens, blob 977976 bytes, sha256 14b05628f528dd4ab0df0a2e22b7d13ed03252b4b68c7b0a64575035751bd6b5
+10.1 capture flat01: 258 tokens, blob 1586232 bytes, sha256 8b13638a361c9fb17169182a20a1ad096eeffa465a0fe0a8c4506a3eb689453d
+10.1 capture flat02: 380 tokens, blob 2335800 bytes, sha256 7a76034bb84708d68daee6b6987080e48304a7f7375a4e93d1ba29e3ead8d1e3
+10.1 capture flat03: 501 tokens, blob 3079224 bytes, sha256 3a52376d1fbd9b7eccb3bdd34188f447604f63bc56f2fba372334fdcc9b653e8
+10.1 capture flat04: 751 tokens, blob 4615224 bytes, sha256 75b43fe909d1f83ebc98917a656659438a23d02479cb955de5825310d67ed247
+10.1 capture flat05: 1000 tokens, blob 6145080 bytes, sha256 e109b6a5c307aa923392e4dca7ed04a9d3ffa1ddbc11fe8eedc39c29346a1ceb
+10.1 capture flat06: 1208 tokens, blob 7423032 bytes, sha256 2092947a0e4b074cd06f84f50d988c3477057694842a4b29dfe349bce33c704f
+10.1 capture flat07: 1506 tokens, blob 9253944 bytes, sha256 d9d0ace3d02fc33c54dd89cd443313825fae2407b5d5a57de0c87bbb25802a5c
+10.1 capture flat08: 1801 tokens, blob 11066424 bytes, sha256 947d93407cb73cc2d09d3dad473037e08d189f9d482e9a9df6992f5437d4c060
+10.1 capture flat09: 2000 tokens, blob 12289080 bytes, sha256 2c27f15a1f8568ba5173fd07dfc67c4bf58ea097e9dc2b78346d8bf94e2763b4
+10.1 capture: 10 prefixes and 50 adopter streams written to D:\_scratch\f3-f4-1p16\blobs\r10x
+pcg_cell_10_4_real: checks=196 failures=0 skips=0 -> PASS
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T18:21:47] exit 0
+[2026-10-24T18:21:47] D:\_scratch\f3-f4-1p16\pkvg\bin\pcg_cell_10_4_real.exe --cell=10.1 --phase=restore --model=D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm --prompts=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts --blobs=D:\_scratch\f3-f4-1p16\blobs\r10x
+fixture: D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.1 GPU: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+10.1 restore on 10de_1e81: 50 of 50 adopter streams equal the prefill-built ones; prefix prefill calls in this process: 0
+pcg_cell_10_4_real: checks=188 failures=0 skips=0 -> PASS
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T18:23:23] exit 0
+[2026-10-24T18:23:23] D:\_scratch\f3-f4-1p16\pkvg\bin\pcg_cell_10_4_real.exe --cell=10.2 --phase=capture --model=D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm --prompts=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts --blobs=D:\_scratch\f3-f4-1p16\blobs\r10x
+fixture: D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.2 GPU: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+10.2 capture: world of 1012 and ten personas written to D:\_scratch\f3-f4-1p16\blobs\r10x
+pcg_cell_10_4_real: checks=80 failures=0 skips=0 -> PASS
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T18:24:22] exit 0
+[2026-10-24T18:24:22] D:\_scratch\f3-f4-1p16\pkvg\bin\pcg_cell_10_4_real.exe --cell=10.2 --phase=restore --model=D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm --prompts=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts --blobs=D:\_scratch\f3-f4-1p16\blobs\r10x
+fixture: D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.2 GPU: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+10.2 persona00: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona01: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 persona02: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona03: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 persona04: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona05: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 persona06: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona07: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 persona08: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona09: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 restore on 10de_1e81: 10 of 10 personas share s = 63 and match; prefix prefill calls in this process: 0
+pcg_cell_10_4_real: checks=241 failures=0 skips=0 -> PASS
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T18:24:43] exit 0
+piece took 6.4 min

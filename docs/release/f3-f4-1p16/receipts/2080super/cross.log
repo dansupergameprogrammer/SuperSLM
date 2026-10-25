@@ -1,0 +1,32 @@
+adapter: 0 10de 1e81 7987 NVIDIA GeForce RTX 2080 SUPER
+using adapter 0 (10de:1e81)
+manifest: 0 mismatch(es)
+[2026-10-25T13:06:47] D:\_scratch\f3-f4-1p16\pkvg\bin\pcg_cell_4_6.exe --model=D:\_artifacts\SuperSLM\t2901-qwen2.5-1.5b-dg\qwen2.5-1.5b-instruct-dg-g5.sslm --tag=1p5 --ids=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts\world.1p5.ids --out=D:\_scratch\f3-f4-1p16\blobs\cross --other=F:\kit-f3-xtx\results\WORKHORSE\blobs46\gpu-1p5-1002_744c.spx1 --foreign=F:\kit-f3-xtx\results\WORKHORSE\blobs46\gpu-1p5-1002_744c.spx1
+fixture: D:\_artifacts\SuperSLM\t2901-qwen2.5-1.5b-dg\qwen2.5-1.5b-instruct-dg-g5.sslm hidden=1536 layers=28 vocab=151936 cap=32768 qk_norm=0 schemas=1
+4.6 1p5: layers 28, kv heads 2, head_dim 128, cap 32768, B 16, 14336 bytes per token
+4.6 1p5: GPU prefix of 1000 tokens on 10de_1e81 built in 17740 ms; blob 14337720 bytes, sha256 8d20039ee2fed926cd89c8cde21f0cb1449b31eb474c013533f41ae9be2a58f9 -> D:\_scratch\f3-f4-1p16\blobs\cross/gpu-1p5-10de_1e81.spx1
+4.6 1p5: CPU twin built in 39497 ms; blob 14337720 bytes, sha256 10c6a89659ab5870b05ba72c042d43603954ea23a121ba13de02c06e874c09bb -> D:\_scratch\f3-f4-1p16\blobs\cross/cpu-1p5.spx1
+4.6 (a) 1p5 CPU vs GPU 10de_1e81: L = 1000, 112000 rows of 128 bytes compared (28 layers x K,V x 2 heads x 1000 positions): 0 differ; residual equal; header state fields equal; whole blob outside [4, 60) IDENTICAL
+4.6 (a) 1p5: CPU vs GPU 10de_1e81: IDENTICAL
+4.6 (b) 1p5 1002_744c vs 10de_1e81: L = 1000, 112000 rows of 128 bytes compared (28 layers x K,V x 2 heads x 1000 positions): 0 differ; residual equal; header state fields equal; whole blob outside [4, 60) IDENTICAL
+4.6 (b) 1p5: 1002_744c vs 10de_1e81: IDENTICAL
+4.6 (c) 1p5: 1002:744c's blob restored on 10de_1e81 through the seam; 64 adopter tokens EQUAL the prefill twin's
+pcg_cell_4_6: checks=41 failures=0 skips=0 -> PASS
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-25T13:07:57] exit 0
+[2026-10-25T13:07:57] D:\_scratch\f3-f4-1p16\pkvg\bin\pcg_cell_4_6.exe --model=D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm --tag=0p5 --ids=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts\world.ids --out=D:\_scratch\f3-f4-1p16\blobs\cross --other=F:\kit-f3-xtx\results\WORKHORSE\blobs46\gpu-0p5-1002_744c.spx1 --foreign=F:\kit-f3-xtx\results\WORKHORSE\blobs46\gpu-0p5-1002_744c.spx1
+fixture: D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+4.6 0p5: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+4.6 0p5: GPU prefix of 1000 tokens on 10de_1e81 built in 10544 ms; blob 6145080 bytes, sha256 b7af2d2d8fc7e205787dc9069714f96c9ade8c8142584720514b1ee996659690 -> D:\_scratch\f3-f4-1p16\blobs\cross/gpu-0p5-10de_1e81.spx1
+4.6 0p5: CPU twin built in 15186 ms; blob 6145080 bytes, sha256 ef415d8db3664c75e5ea09ff7b4bb7296b6a1af23289523c97393d9034144b4d -> D:\_scratch\f3-f4-1p16\blobs\cross/cpu-0p5.spx1
+4.6 (a) 0p5 CPU vs GPU 10de_1e81: L = 1000, 96000 rows of 64 bytes compared (24 layers x K,V x 2 heads x 1000 positions): 0 differ; residual equal; header state fields equal; whole blob outside [4, 60) IDENTICAL
+4.6 (a) 0p5: CPU vs GPU 10de_1e81: IDENTICAL
+4.6 (b) 0p5 1002_744c vs 10de_1e81: L = 1000, 96000 rows of 64 bytes compared (24 layers x K,V x 2 heads x 1000 positions): 0 differ; residual equal; header state fields equal; whole blob outside [4, 60) IDENTICAL
+4.6 (b) 0p5: 1002_744c vs 10de_1e81: IDENTICAL
+4.6 (c) 0p5: 1002:744c's blob restored on 10de_1e81 through the seam; 64 adopter tokens EQUAL the prefill twin's
+pcg_cell_4_6: checks=41 failures=0 skips=0 -> PASS
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-25T13:08:29] exit 0
+piece took 4.9 min

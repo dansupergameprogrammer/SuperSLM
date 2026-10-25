@@ -1,0 +1,44 @@
+10.4 GPU speed bar: instrument commissioning (plan �8)
+  must-accept 1002_744c 1p5 L=128: bar=met ratio95=[626.8,641.8] resolved=1 -> ok
+  must-reject 1002_744c 1p5 L=128: bar=missed ratio95=[1.0,1.0] -> ok
+  must-accept 1002_744c 1p5 L=1000: bar=met ratio95=[1320.6,1434.0] resolved=1 -> ok
+  must-reject 1002_744c 1p5 L=1000: bar=missed ratio95=[1.0,1.0] -> ok
+  must-accept 10de_1e81 0p5 L=128: bar=met ratio95=[708.4,799.4] resolved=1 -> ok
+  must-reject 10de_1e81 0p5 L=128: bar=missed ratio95=[1.0,1.0] -> ok
+  must-accept 10de_1e81 0p5 L=1000: bar=met ratio95=[1581.4,1632.5] resolved=1 -> ok
+  must-reject 10de_1e81 0p5 L=1000: bar=missed ratio95=[1.0,1.0] -> ok
+  must-accept 10de_1e81 1p5 L=128: bar=met ratio95=[724.2,828.5] resolved=1 -> ok
+  must-reject 10de_1e81 1p5 L=128: bar=missed ratio95=[1.0,1.0] -> ok
+  must-accept 10de_1e81 1p5 L=1000: bar=met ratio95=[1109.1,1151.3] resolved=1 -> ok
+  must-reject 10de_1e81 1p5 L=1000: bar=missed ratio95=[1.0,1.0] -> ok
+verdict: COMMISSIONABLE
+
+----- PC-GPU-TIMING-1 receipt template (review, then fill the two signature lines) -----
+receipt: PC-GPU-TIMING-1
+instrument: tests/precache-gpu/pcg_cell_10_4_timing.cpp (plain configuration)
+must-reject construction: tests/precache-gpu/apply_gpu_mutant.py restore-prefills
+# Plan �8: commissioned by a seat independent of the builder. The builder wrote the instrument, the mutant and
+# this tool, so the debunker reviews the construction as well as the readings: the mutant's diff (apply it to a
+# copy of src/gpu/gpu_1p0.cpp and read it) and the instrument's quiet guard, and records that below.
+construction_reviewed: 
+adapter: 1002_744c (RX 7900 XTX)
+  accept_runner: 7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638
+  reject_runner: 9c93a6037409bf942b7afb59bfe5c814f96ee2ff61871851d440a01b851cba18
+  1p5 L=128: accept [626.8,641.8] met; reject [1.0,1.0] missed
+  1p5 L=1000: accept [1320.6,1434.0] met; reject [1.0,1.0] missed
+adapter: 10de_1e81 (RTX 2080 SUPER)
+  accept_runner: 7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638
+  reject_runner: 9c93a6037409bf942b7afb59bfe5c814f96ee2ff61871851d440a01b851cba18
+  0p5 L=128: accept [708.4,799.4] met; reject [1.0,1.0] missed
+  0p5 L=1000: accept [1581.4,1632.5] met; reject [1.0,1.0] missed
+  1p5 L=128: accept [724.2,828.5] met; reject [1.0,1.0] missed
+  1p5 L=1000: accept [1109.1,1151.3] met; reject [1.0,1.0] missed
+accept_log: t-acc-15.log
+accept_log: t-acc-05.log
+accept_log: t-acc-15.log
+reject_log: t-rej-15.log
+reject_log: t-rej-05.log
+reject_log: t-rej-15.log
+verdict: COMMISSIONED
+signed_by: 
+signed_at_utc: 

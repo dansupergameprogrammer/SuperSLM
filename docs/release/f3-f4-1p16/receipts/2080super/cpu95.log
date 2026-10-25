@@ -1,0 +1,20 @@
+[2026-10-24T16:58:22] D:\_scratch\f3-f4-1p16\build-msvc\superslm_precache_unpinned.exe =9.5/F4 =9.5/F4:must-reject
+[F4] 9.5/F4 ...
+pkv_def: rule B = 128 (engine 128, helpers 128), cap 4096, cap_pages 32, last page holds 128
+9.5 pkv_def: 1.14.0 pin 1.14.0_pkv_def.spx1 (L = 141, B = 128) on 1.16.0: refused SSLM_RESTORE_PRODUCER_MISMATCH
+pkv_odd: rule B = 256 (engine 256, helpers 256), cap 4100, cap_pages 17, last page holds 4
+9.5 pkv_odd: 1.14.0 pin 1.14.0_pkv_odd.spx1 (L = 269, B = 256) on 1.16.0: refused SSLM_RESTORE_PRODUCER_MISMATCH
+pkv_32k: rule B = 256 (engine 256, helpers 256), cap 32768, cap_pages 128, last page holds 256
+9.5 pkv_32k: 1.14.0 pin 1.14.0_pkv_32k.spx1 (L = 269, B = 256) on 1.16.0: refused SSLM_RESTORE_PRODUCER_MISMATCH
+pkv_qk: rule B = 64 (engine 64, helpers 64), cap 4096, cap_pages 64, last page holds 64
+9.5 pkv_qk: 1.14.0 pin 1.14.0_pkv_qk.spx1 (L = 77, B = 64) on 1.16.0: refused SSLM_RESTORE_PRODUCER_MISMATCH
+[F4] 9.5/F4 green (117 checks, 0 failed)
+[F4] 9.5/F4:must-reject ...
+pkv_def: rule B = 128 (engine 128, helpers 128), cap 4096, cap_pages 32, last page holds 128
+pkv_odd: rule B = 256 (engine 256, helpers 256), cap 4100, cap_pages 17, last page holds 4
+pkv_32k: rule B = 256 (engine 256, helpers 256), cap 32768, cap_pages 128, last page holds 256
+pkv_qk: rule B = 64 (engine 64, helpers 64), cap 4096, cap_pages 64, last page holds 64
+[F4] 9.5/F4:must-reject green (90 checks, 0 failed)
+2 cells, 0 red; 207 checks, 0 failures
+[2026-10-24T16:58:23] exit 0
+piece took 0.0 min

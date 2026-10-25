@@ -1,0 +1,92 @@
+[2026-10-25T11:53:46] pcg_cell_format.exe --fixture-dir=E:\kit-f3-xtx\fixtures
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+2.7/2.1 L = 1, every offset: 761 truncations/extensions, 0 not refused
+2.7/2.1 L = 40, header offsets and every 4096th byte: 189 truncations/extensions, 0 not refused
+2.7/2.2: 760 flips, 0 not refused
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+smoke: the GPU blob relabelled backend 0 restores on the CPU: 0
+smoke 4.6-shape: CPU blob 15736 bytes, GPU blob 15736 bytes, 0 bytes differ outside [4, 60) (first at 0)
+pcg_cell_format: checks=258 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T11:53:49] exit 0
+[2026-10-25T11:53:49] pcg_cell_pool.exe --fixture-dir=E:\kit-f3-xtx\fixtures
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_pool: checks=266 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T11:54:23] exit 0
+[2026-10-25T11:54:23] pcg_cell_busy.exe --fixture-dir=E:\kit-f3-xtx\fixtures
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_busy: checks=23 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T11:54:25] exit 0
+[2026-10-25T11:54:25] pcg_cell_faults.exe --fixture-dir=E:\kit-f3-xtx\fixtures
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_faults: checks=135 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+superslm_gpu: HR FAIL 0x8007000e at D:\SuperSLM\.worktrees\f3-f4-1p16\src\gpu\d3d12_harness.h:636
+superslm_gpu: HR FAIL 0x8007000e at D:\SuperSLM\.worktrees\f3-f4-1p16\src\gpu\d3d12_harness.h:636
+superslm_gpu: HR FAIL 0x80070057 at D:\SuperSLM\.worktrees\f3-f4-1p16\src\gpu\d3d12_harness.h:636
+[2026-10-25T11:54:30] exit 0
+[2026-10-25T11:54:30] pcg_cell_budget_snapshot.exe --fixture-dir=E:\kit-f3-xtx\fixtures
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+budget snapshot: landed 20 of 30; original adopter read SSLM_OK, restored adopter read SSLM_OK
+schema-reject snapshot: landed 1 of 2; original adopter read SSLM_OK, restored adopter read SSLM_OK
+A budget retry: L=20; original adopter read SSLM_OK, restored adopter read SSLM_OK
+B embed reject: call 2 (token 256) SSLM_TOKEN_ID_OUT_OF_RANGE
+B embed reject: L=10; original adopter read SSLM_OK, restored adopter read SSLM_OK
+D bind permission: child of original set_schema SSLM_OK, child of restored set_schema SSLM_OK
+pcg_cell_budget_snapshot: checks=75 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T11:54:33] exit 0
+[2026-10-25T11:54:33] pcg_cell_restore_derived.exe --fixture-dir=E:\kit-f3-xtx\fixtures
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+L = 0, twin: begin_from SSLM_OK, child set_schema SSLM_OK, adopt SSLM_OK, ready 0, snapshot SSLM_PREFILL_HIDDEN_UNAVAILABLE, prefill (frozen) SSLM_GPU_PREFIX_REJECTED, freeze again SSLM_OK, set_schema (frozen) SSLM_GPU_PREFIX_REJECTED
+L = 0, restored: begin_from SSLM_OK, child set_schema SSLM_OK, adopt SSLM_OK, ready 0, snapshot SSLM_PREFILL_HIDDEN_UNAVAILABLE, prefill (frozen) SSLM_GPU_PREFIX_REJECTED, freeze again SSLM_OK, set_schema (frozen) SSLM_GPU_PREFIX_REJECTED
+L = 10, twin: begin_from SSLM_OK, child set_schema SSLM_GPU_PREFIX_REJECTED, adopt SSLM_OK, ready 1, snapshot SSLM_OK, prefill (frozen) SSLM_GPU_PREFIX_REJECTED, freeze again SSLM_OK, set_schema (frozen) SSLM_GPU_PREFIX_REJECTED
+L = 10, restored: begin_from SSLM_OK, child set_schema SSLM_GPU_PREFIX_REJECTED, adopt SSLM_OK, ready 1, snapshot SSLM_OK, prefill (frozen) SSLM_GPU_PREFIX_REJECTED, freeze again SSLM_OK, set_schema (frozen) SSLM_GPU_PREFIX_REJECTED
+pcg_cell_restore_derived: checks=53 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T11:54:35] exit 0
+[2026-10-25T11:54:35] pcg_cell_schema.exe 
+2.13 GPU: must-reject-two-name.sslm refused at map with SSLM_DEVICE_LOST
+2.13 GPU: must-reject-zero-hash.sslm refused at map with SSLM_DEVICE_LOST
+pcg_cell_schema: checks=8 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T11:55:54] exit 0
+[2026-10-25T11:55:54] pcg_cell_9_10.exe --fixture-dir=E:\kit-f3-xtx\fixtures --captures=E:\kit-f3-xtx\captures
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+pcg_cell_9_10: checks=53 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T11:56:09] exit 0
+[2026-10-25T11:56:09] pcg_cell_6_5.exe --fixture-dir=E:\kit-f3-xtx\fixtures
+fixture: E:\kit-f3-xtx\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+6.5 pkv_def: layers 2, kv heads 2, head_dim 48, cap 4096, B 16, 384 bytes per token
+6.5 pkv_def root L=0: L = 0: rows, state, round trip and 64 adopter steps graded (first steps -1010,-1010,-1010,-1010)
+6.5 pkv_def root L=1: L = 1: rows, state, round trip and 64 adopter steps graded (first steps 58,171,91,37)
+6.5 pkv_def root L=15: L = 15: rows, state, round trip and 64 adopter steps graded (first steps 105,91,136,157)
+6.5 pkv_def root L=16: L = 16: rows, state, round trip and 64 adopter steps graded (first steps 245,185,9,91)
+6.5 pkv_def root L=17: L = 17: rows, state, round trip and 64 adopter steps graded (first steps 198,78,220,91)
+6.5 pkv_def root L=1000: L = 1000: rows, state, round trip and 64 adopter steps graded (first steps 19,78,27,157)
+6.5 pkv_def root L=4095: L = 4095: rows, state, round trip and 64 adopter steps graded (first steps 54,141,-1011,-1011)
+6.5 pkv_def root L=4096: L = 4096: rows, state, round trip and 64 adopter steps graded (first steps 151,-1011,-1011,-1011)
+6.5 pkv_def bound L=1: L = 1, schema-bound: rows, state, round trip and 64 adopter steps graded (first steps 163,163,79,37)
+6.5 pkv_def bound L=17: L = 17, schema-bound: rows, state, round trip and 64 adopter steps graded (first steps 94,57,2,81)
+6.5 pkv_def bound L=1000: L = 1000, schema-bound: rows, state, round trip and 64 adopter steps graded (first steps 81,171,235,27)
+6.5 pkv_def nested: nested world 1000 -> child 1200: shared 62 pages, three children's adopters equal
+pcg_cell_6_5: checks=981 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T11:56:50] exit 0

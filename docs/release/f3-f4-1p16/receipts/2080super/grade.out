@@ -1,0 +1,8 @@
+10.4 GPU speed bar: graded readings (bar: ratio95 lower end >= 100, resolved)
+  10de_1e81 (RTX 2080 SUPER) 1p5 L=128: ratio95=[792.5,869.5] prefill_ms=1866.318 restore_ms=2.251 -> met
+  10de_1e81 (RTX 2080 SUPER) 1p5 L=1000: ratio95=[1106.8,1154.8] prefill_ms=17784.523 restore_ms=15.736 -> met
+  1002_744c (RX 7900 XTX) 1p5 L=128: ratio95=[510.7,628.2] prefill_ms=1704.000 restore_ms=3.034 -> met
+  1002_744c (RX 7900 XTX) 1p5 L=1000: ratio95=[1498.4,1521.7] prefill_ms=20321.149 restore_ms=13.459 -> met
+  10de_1e81 (RTX 2080 SUPER) 0p5 L=128: ratio95=[691.3,856.2] prefill_ms=1046.115 restore_ms=1.370 -> met
+  10de_1e81 (RTX 2080 SUPER) 0p5 L=1000: ratio95=[1609.3,1663.8] prefill_ms=10529.691 restore_ms=6.436 -> met
+verdict: MET

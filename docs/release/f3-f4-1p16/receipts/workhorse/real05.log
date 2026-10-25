@@ -1,0 +1,28 @@
+[2026-10-25T12:10:47] pcg_cell_4_6.exe --model=E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm --tag=0p5 --ids=E:\kit-f3-xtx\prompts\world.ids --out=E:\kit-f3-xtx\results\WORKHORSE\blobs46 --other=E:\kit-f3-xtx\blobs\gpu-0p5-10de_1e81.spx1 --foreign=E:\kit-f3-xtx\blobs\gpu-0p5-10de_1e81.spx1
+fixture: E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+4.6 0p5: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+4.6 0p5: GPU prefix of 1000 tokens on 1002_744c built in 14618 ms; blob 6145080 bytes, sha256 63d3eda086029aee043f352e21d83327b73079483deada4da7c0801e7d46ebfa -> E:\kit-f3-xtx\results\WORKHORSE\blobs46/gpu-0p5-1002_744c.spx1
+4.6 0p5: CPU twin built in 11380 ms; blob 6145080 bytes, sha256 ef415d8db3664c75e5ea09ff7b4bb7296b6a1af23289523c97393d9034144b4d -> E:\kit-f3-xtx\results\WORKHORSE\blobs46/cpu-0p5.spx1
+4.6 (a) 0p5 CPU vs GPU 1002_744c: L = 1000, 96000 rows of 64 bytes compared (24 layers x K,V x 2 heads x 1000 positions): 0 differ; residual equal; header state fields equal; whole blob outside [4, 60) IDENTICAL
+4.6 (a) 0p5: CPU vs GPU 1002_744c: IDENTICAL
+4.6 (b) 0p5 10de_1e81 vs 1002_744c: L = 1000, 96000 rows of 64 bytes compared (24 layers x K,V x 2 heads x 1000 positions): 0 differ; residual equal; header state fields equal; whole blob outside [4, 60) IDENTICAL
+4.6 (b) 0p5: 10de_1e81 vs 1002_744c: IDENTICAL
+4.6 (c) 0p5: 10de:1e81's blob restored on 1002_744c through the seam; 64 adopter tokens EQUAL the prefill twin's
+pcg_cell_4_6: checks=41 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T12:11:44] exit 0
+[2026-10-25T12:11:44] pcg_cell_6_5.exe --model=E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm --tag=0p5 --world=E:\kit-f3-xtx\prompts\world.ids --persona=E:\kit-f3-xtx\prompts\persona00.ids
+fixture: E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+6.5 0p5: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+6.5 0p5 root L=0: L = 0: rows, state, round trip and 64 adopter steps graded (first steps -1010,-1010,-1010,-1010)
+6.5 0p5 root L=1: L = 1: rows, state, round trip and 64 adopter steps graded (first steps 521,826,87,22516)
+6.5 0p5 root L=15: L = 15: rows, state, round trip and 64 adopter steps graded (first steps 279,11223,3561,13)
+6.5 0p5 root L=16: L = 16: rows, state, round trip and 64 adopter steps graded (first steps 13,5209,1795,279)
+6.5 0p5 root L=17: L = 17: rows, state, round trip and 64 adopter steps graded (first steps 4486,13,5692,374)
+6.5 0p5 root L=1000: L = 1000: rows, state, round trip and 64 adopter steps graded (first steps 624,6471,220,15)
+6.5 0p5 nested: nested world 1012 -> child 1195: shared 63 pages, three children's adopters equal
+pcg_cell_6_5: checks=337 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T12:12:44] exit 0

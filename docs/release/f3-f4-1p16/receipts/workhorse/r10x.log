@@ -1,0 +1,52 @@
+[2026-10-25T12:17:44] pcg_cell_10_4_real.exe --cell=10.1 --phase=capture --model=E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm --prompts=E:\kit-f3-xtx\prompts --blobs=E:\kit-f3-xtx\results\WORKHORSE\r10x
+fixture: E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.1 GPU: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+10.1 capture flat00: 159 tokens, blob 977976 bytes, sha256 23a98ece4e370b3cad31bb8f8f9facedc86072e088ac8eed5d8ce0a3c268f452
+10.1 capture flat01: 258 tokens, blob 1586232 bytes, sha256 887ed85e7c9801a1e91c1a66846ab9e35ee40aff02184765073c354dde72ba38
+10.1 capture flat02: 380 tokens, blob 2335800 bytes, sha256 a814d51454d90b82a3b174c23f35936d616def81bab58101b7a9e07cf488c0a1
+10.1 capture flat03: 501 tokens, blob 3079224 bytes, sha256 f23a806ae59c38651380aeb2d93c6dea67fff988a6a7aedea7f2ac726926be00
+10.1 capture flat04: 751 tokens, blob 4615224 bytes, sha256 ac43231674138145aec1aaa3787954af59f36aaa8c19e1ed0a6815028839cb5d
+10.1 capture flat05: 1000 tokens, blob 6145080 bytes, sha256 dd29bae704563595aa3e2c396805bfbca0cfaed01207290864cbeafc19d4767f
+10.1 capture flat06: 1208 tokens, blob 7423032 bytes, sha256 42d9b77a605612db0cf34dcdb105d1bc96c356965269c831049e6cf87ce2e146
+10.1 capture flat07: 1506 tokens, blob 9253944 bytes, sha256 daf81ecf8f27c79d0dd8aaba758a330571868e4dc7600af663d6762ae8977e92
+10.1 capture flat08: 1801 tokens, blob 11066424 bytes, sha256 982233418d0b819db8493b098d41041c8925b9940c836d6989e3aa9cb6feb636
+10.1 capture flat09: 2000 tokens, blob 12289080 bytes, sha256 62747468a44e73852be99db028bb9e5d80f25ccbd3c4405c9aa87e9a64418b6a
+10.1 capture: 10 prefixes and 50 adopter streams written to E:\kit-f3-xtx\results\WORKHORSE\r10x
+pcg_cell_10_4_real: checks=196 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T12:22:32] exit 0
+[2026-10-25T12:22:32] pcg_cell_10_4_real.exe --cell=10.1 --phase=restore --model=E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm --prompts=E:\kit-f3-xtx\prompts --blobs=E:\kit-f3-xtx\results\WORKHORSE\r10x
+fixture: E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.1 GPU: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+10.1 restore on 1002_744c: 50 of 50 adopter streams equal the prefill-built ones; prefix prefill calls in this process: 0
+pcg_cell_10_4_real: checks=188 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T12:24:27] exit 0
+[2026-10-25T12:24:27] pcg_cell_10_4_real.exe --cell=10.2 --phase=capture --model=E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm --prompts=E:\kit-f3-xtx\prompts --blobs=E:\kit-f3-xtx\results\WORKHORSE\r10x
+fixture: E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.2 GPU: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+10.2 capture: world of 1012 and ten personas written to E:\kit-f3-xtx\results\WORKHORSE\r10x
+pcg_cell_10_4_real: checks=80 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T12:25:53] exit 0
+[2026-10-25T12:25:54] pcg_cell_10_4_real.exe --cell=10.2 --phase=restore --model=E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm --prompts=E:\kit-f3-xtx\prompts --blobs=E:\kit-f3-xtx\results\WORKHORSE\r10x
+fixture: E:\kit-f3-xtx\models\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.2 GPU: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+10.2 persona00: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona01: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 persona02: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona03: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 persona04: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona05: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 persona06: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona07: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 persona08: shares 63 (the world's pages), draws 12 (probe: exact), adopter equal
+10.2 persona09: shares 63 (the world's pages), draws 14 (probe: exact), adopter equal
+10.2 restore on 1002_744c: 10 of 10 personas share s = 63 and match; prefix prefill calls in this process: 0
+pcg_cell_10_4_real: checks=241 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T12:26:21] exit 0

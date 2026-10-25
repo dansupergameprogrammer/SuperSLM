@@ -1,0 +1,10 @@
+[2026-10-25T12:51:22] pcg_cell_10_4_timing.exe --model=E:\kit-f3-xtx\models\qwen2.5-1.5b-instruct-dg-g5.sslm --tag=1p5 --ids=E:\kit-f3-xtx\prompts\world.1p5.ids --role=grade --contenders=chrome,msedge,firefox,brave,opera,teams,ms-teams,zoom,slack,discord,webex,ciscocollabhost,skype,vlc,mpc-hc64,potplayermini64,obs64,obs32,steam,steamwebhelper,epicgameslauncher,blender,photoshop,premiere pro,afterfx,resolve,unrealeditor,unity
+fixture: E:\kit-f3-xtx\models\qwen2.5-1.5b-instruct-dg-g5.sslm hidden=1536 layers=28 vocab=151936 cap=32768 qk_norm=0 schemas=1
+10.4 timing 1p5: layers 28, kv heads 2, head_dim 128, cap 32768, B 16, 14336 bytes per token
+10.4 run role=grade runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=1002_744c model=1p5 model_sha256=93c8149d8a40a9700f5f783b497c5b35b55c0eb3c9b4f26ba7198220479b6790 pairs=8 bar=100 tick_ms=0.000001
+10.4 reading role=grade runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=1002_744c model=1p5 L=128 pairs=8 bytes_including_digest=1836728 prefill_ms=1704.000 restore_ms=3.034 ratio95=[510.7,628.2] resolved=1 quiet=1 bar=met
+10.4 reading role=grade runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=1002_744c model=1p5 L=1000 pairs=8 bytes_including_digest=14337720 prefill_ms=20321.149 restore_ms=13.459 ratio95=[1498.4,1521.7] resolved=1 quiet=1 bar=met
+pcg_cell_10_4_timing: checks=81 failures=0 skips=0 -> PASS
+# adapter: AMD Radeon RX 7900 XT
+# adapter: AMD Radeon RX 7900 XT
+[2026-10-25T12:54:46] exit 0

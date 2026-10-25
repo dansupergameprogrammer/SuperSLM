@@ -1,0 +1,28 @@
+receipt: PC-GPU-TIMING-1
+instrument: tests/precache-gpu/pcg_cell_10_4_timing.cpp (plain configuration)
+must-reject construction: tests/precache-gpu/apply_gpu_mutant.py restore-prefills
+# Plan §8: commissioned by a seat independent of the builder. The builder wrote the instrument, the mutant and
+# this tool, so the debunker reviews the construction as well as the readings: the mutant's diff (apply it to a
+# copy of src/gpu/gpu_1p0.cpp and read it) and the instrument's quiet guard, and records that below.
+construction_reviewed: At bbef7455: restore-prefills diff applied to a copy of gpu_1p0.cpp and read - only the public restore wrapper changes; after a successful real restore it runs one batched prefill of the blob's L (header offsets 108/112 verified against spx1_format.cpp) in a scratch prefix of the same pool, so restore pays a full prefill (mutant 1687/19406 ms vs prefill 1692/20342 ms, ~1x). Instrument times begin+batched prefill+freeze vs sslm_gpu_prefix_restore only (digest, scatter, upload that waits for completion), 1 warm-up + 8 pairs, 95% t-interval (df 7) on the log ratio, #error on seam builds; quiet guard checks process list + build lock before and after each length, and grade_f3 refuses quiet=0; every failure mode reads missed, never met. grade_f3 commission/grade logic read, test_grade_f3 passes; raw ms consistent with the intervals and with the plan's ~13.6 ms/token 1.5B prefill rate. No defect found.
+adapter: 1002_744c (RX 7900 XT, machine WORKHORSE; device id 744c is shared with the XTX)
+  accept_runner: 7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638
+  reject_runner: 9c93a6037409bf942b7afb59bfe5c814f96ee2ff61871851d440a01b851cba18
+  1p5 L=128: accept [626.8,641.8] met; reject [1.0,1.0] missed
+  1p5 L=1000: accept [1320.6,1434.0] met; reject [1.0,1.0] missed
+adapter: 10de_1e81 (RTX 2080 SUPER)
+  accept_runner: 7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638
+  reject_runner: 9c93a6037409bf942b7afb59bfe5c814f96ee2ff61871851d440a01b851cba18
+  0p5 L=128: accept [708.4,799.4] met; reject [1.0,1.0] missed
+  0p5 L=1000: accept [1581.4,1632.5] met; reject [1.0,1.0] missed
+  1p5 L=128: accept [724.2,828.5] met; reject [1.0,1.0] missed
+  1p5 L=1000: accept [1109.1,1151.3] met; reject [1.0,1.0] missed
+accept_log: D:\_scratch\f3-f4-1p16\logs\t-acc-15.log
+accept_log: D:\_scratch\f3-f4-1p16\logs\t-acc-05.log
+accept_log: D:\_scratch\f3-f4-1p16\kit-WORKHORSE\t-acc-15.log
+reject_log: D:\_scratch\f3-f4-1p16\logs\t-rej-15.log
+reject_log: D:\_scratch\f3-f4-1p16\logs\t-rej-05.log
+reject_log: D:\_scratch\f3-f4-1p16\kit-WORKHORSE\t-rej-15.log
+verdict: COMMISSIONED
+signed_by: debunker seat (independent of the builder)
+signed_at_utc: 2026-10-25T20:13:03Z

@@ -1,0 +1,4 @@
+[2026-10-24T19:21:02] pwsh -NoProfile -File D:\SuperSLM\.worktrees\f3-f4-1p16\docs\release\f3-f4-1p16\work-machine-kit\make-kit.ps1 -Dest F:\kit-f3-xtx
+kit at F:\kit-f3-xtx : 141 files, 3.64 GB
+[2026-10-24T19:25:50] exit 0
+piece took 4.8 min

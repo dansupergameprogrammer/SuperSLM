@@ -1,0 +1,74 @@
+== box D:\_scratch\f3-f4-1p16\logs
+  build: PASS 2026-10-24T16:56:43
+  build-mut: PASS 2026-10-24T16:58:22
+  cpu95: PASS 2026-10-24T16:58:23
+  f2set: PASS 2026-10-24T17:59:37
+    pcg_cell_format: checks=258 failures=0 -> PASS
+    pcg_cell_pool: checks=266 failures=0 -> PASS
+    pcg_cell_busy: checks=23 failures=0 -> PASS
+    pcg_cell_faults: checks=135 failures=0 -> PASS
+    pcg_cell_budget_snapshot: checks=75 failures=0 -> PASS
+    pcg_cell_restore_derived: checks=53 failures=0 -> PASS
+    pcg_cell_schema: checks=8 failures=0 -> PASS
+    pcg_cell_9_10: checks=53 failures=0 -> PASS
+    pcg_cell_6_5: checks=981 failures=0 -> PASS
+  real15: PASS 2026-10-24T18:07:02
+    pcg_cell_4_6: checks=23 failures=0 -> PASS
+    pcg_cell_6_5: checks=337 failures=0 -> PASS
+  real05: PASS 2026-10-24T18:13:19
+    pcg_cell_4_6: checks=23 failures=0 -> PASS
+    pcg_cell_6_5: checks=337 failures=0 -> PASS
+  r10x: PASS 2026-10-24T18:24:44
+    pcg_cell_10_4_real: checks=196 failures=0 -> PASS
+    pcg_cell_10_4_real: checks=188 failures=0 -> PASS
+    pcg_cell_10_4_real: checks=80 failures=0 -> PASS
+    pcg_cell_10_4_real: checks=241 failures=0 -> PASS
+  t-acc-15: PASS 2026-10-24T18:32:50
+    pcg_cell_10_4_timing: checks=81 failures=0 -> PASS
+  t-rej-15: PASS 2026-10-24T18:43:49
+    pcg_cell_10_4_timing: checks=81 failures=0 -> PASS
+  t-acc-05: PASS 2026-10-24T18:50:37
+    pcg_cell_10_4_timing: checks=81 failures=0 -> PASS
+  t-rej-05: PASS 2026-10-24T18:59:06
+    pcg_cell_10_4_timing: checks=81 failures=0 -> PASS
+  t-grade-15: PASS 2026-10-24T19:07:10
+    pcg_cell_10_4_timing: checks=81 failures=0 -> PASS
+  t-grade-05: PASS 2026-10-24T19:13:58
+    pcg_cell_10_4_timing: checks=81 failures=0 -> PASS
+  mutants: PASS 2026-10-24T19:20:58
+    pcg_cell_6_5: checks=981 failures=7 -> FAIL
+    pcg_cell_10_4_real: checks=188 failures=51 -> FAIL
+  cross: PASS 2026-10-25T13:08:30
+    pcg_cell_4_6: checks=41 failures=0 -> PASS
+    pcg_cell_4_6: checks=41 failures=0 -> PASS
+== kit D:\_scratch\f3-f4-1p16\kit-WORKHORSE
+  f2set: PASS 2026-10-25T11:56:50
+    pcg_cell_format: checks=258 failures=0 -> PASS
+    pcg_cell_pool: checks=266 failures=0 -> PASS
+    pcg_cell_busy: checks=23 failures=0 -> PASS
+    pcg_cell_faults: checks=135 failures=0 -> PASS
+    pcg_cell_budget_snapshot: checks=75 failures=0 -> PASS
+    pcg_cell_restore_derived: checks=53 failures=0 -> PASS
+    pcg_cell_schema: checks=8 failures=0 -> PASS
+    pcg_cell_9_10: checks=53 failures=0 -> PASS
+    pcg_cell_6_5: checks=981 failures=0 -> PASS
+  real15: PASS 2026-10-25T12:05:46
+    pcg_cell_4_6: checks=41 failures=0 -> PASS
+    pcg_cell_6_5: checks=337 failures=0 -> PASS
+  real05: PASS 2026-10-25T12:12:44
+    pcg_cell_4_6: checks=41 failures=0 -> PASS
+    pcg_cell_6_5: checks=337 failures=0 -> PASS
+  r10x: PASS 2026-10-25T12:26:21
+    pcg_cell_10_4_real: checks=196 failures=0 -> PASS
+    pcg_cell_10_4_real: checks=188 failures=0 -> PASS
+    pcg_cell_10_4_real: checks=80 failures=0 -> PASS
+    pcg_cell_10_4_real: checks=241 failures=0 -> PASS
+  t-acc-15: PASS 2026-10-25T12:34:47
+    pcg_cell_10_4_timing: checks=81 failures=0 -> PASS
+  t-rej-15: PASS 2026-10-25T12:46:22
+    pcg_cell_10_4_timing: checks=81 failures=0 -> PASS
+  t-grade-15: PASS 2026-10-25T12:54:46
+    pcg_cell_10_4_timing: checks=81 failures=0 -> PASS
+4.6 (a finding either way, not a 4.4 gate):
+  no difference recorded
+4.4: PASS

@@ -1,0 +1,39 @@
+[11:53:43] F3 certification kit (SuperSLM branch claude/f3-f4-cells-1p16); drive folder E:\kit-f3-xtx
+[11:53:45] D3D12 hardware adapters (EnumAdapters1 order):
+[11:53:45]     0 1002 744c 20464 AMD Radeon RX 7900 XT
+[11:53:45] using adapter 0 (vendor 1002, device 744c)
+[11:53:45] f2set : starting (at most 15 min)
+[11:56:50] f2set : PASS (3.1 min)
+[11:56:51] resting 300 s before the next step (5 minutes between GPU steps)
+[11:57:08] F3 certification kit (SuperSLM branch claude/f3-f4-cells-1p16); drive folder E:\kit-f3-xtx
+[11:57:08] D3D12 hardware adapters (EnumAdapters1 order):
+[11:57:08]     0 1002 744c 20464 AMD Radeon RX 7900 XT
+[11:57:08] using adapter 0 (vendor 1002, device 744c)
+[11:57:08] f2set : already done (PASS 2026-10-25T11:56:50)
+[11:57:08] resting 282 s before the next step (5 minutes between GPU steps)
+[12:01:51] real15 : starting (at most 15 min)
+[12:05:46] real15 : PASS (3.9 min)
+[12:05:46] resting 300 s before the next step (5 minutes between GPU steps)
+[12:10:47] real05 : starting (at most 15 min)
+[12:12:44] real05 : PASS (2.0 min)
+[12:12:44] resting 300 s before the next step (5 minutes between GPU steps)
+[12:17:44] r10x : starting (at most 15 min)
+[12:26:21] r10x : PASS (8.6 min)
+[12:26:21] resting 300 s before the next step (5 minutes between GPU steps)
+[12:31:22] t-acc-15 : starting (at most 15 min)
+[12:34:47] t-acc-15 : PASS (3.4 min)
+[12:34:47] resting 300 s before the next step (5 minutes between GPU steps)
+[12:39:47] t-rej-15 : starting (at most 15 min)
+[12:46:22] t-rej-15 : PASS (6.6 min)
+[12:46:22] resting 300 s before the next step (5 minutes between GPU steps)
+[12:51:22] t-grade-15 : starting (at most 15 min)
+[12:54:46] t-grade-15 : PASS (3.4 min)
+[12:54:46] f2set : PASS 2026-10-25T11:56:50 :: pcg_cell_format: checks=258 failures=0 skips=0 -> PASS | pcg_cell_pool: checks=266 failures=0 skips=0 -> PASS | pcg_cell_busy: checks=23 failures=0 skips=0 -> PASS | pcg_cell_faults: checks=135 failures=0 skips=0 -> PASS | pcg_cell_budget_snapshot: checks=75 failures=0 skips=0 -> PASS | pcg_cell_restore_derived: checks=53 failures=0 skips=0 -> PASS | pcg_cell_schema: checks=8 failures=0 skips=0 -> PASS | pcg_cell_9_10: checks=53 failures=0 skips=0 -> PASS | pcg_cell_6_5: checks=981 failures=0 skips=0 -> PASS
+[12:54:46] real15 : PASS 2026-10-25T12:05:46 :: pcg_cell_4_6: checks=41 failures=0 skips=0 -> PASS | pcg_cell_6_5: checks=337 failures=0 skips=0 -> PASS
+[12:54:46] real05 : PASS 2026-10-25T12:12:44 :: pcg_cell_4_6: checks=41 failures=0 skips=0 -> PASS | pcg_cell_6_5: checks=337 failures=0 skips=0 -> PASS
+[12:54:46] r10x : PASS 2026-10-25T12:26:21 :: pcg_cell_10_4_real: checks=196 failures=0 skips=0 -> PASS | pcg_cell_10_4_real: checks=188 failures=0 skips=0 -> PASS | pcg_cell_10_4_real: checks=80 failures=0 skips=0 -> PASS | pcg_cell_10_4_real: checks=241 failures=0 skips=0 -> PASS
+[12:54:46] t-acc-15 : PASS 2026-10-25T12:34:47 :: 10.4 reading role=accept runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=1002_744c model=1p5 L=128 pairs=8 bytes_including_digest=1836728 prefill_ms=1692.390 restore_ms=2.668 ratio95=[626.8,641.8] resolved=1 quiet=1 bar=met | 10.4 reading role=accept runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=1002_744c model=1p5 L=1000 pairs=8 bytes_including_digest=14337720 prefill_ms=20342.453 restore_ms=14.798 ratio95=[1320.6,1434.0] resolved=1 quiet=1 bar=met | pcg_cell_10_4_timing: checks=81 failures=0 skips=0 -> PASS
+[12:54:46] t-rej-15 : PASS 2026-10-25T12:46:22 :: 10.4 reading role=reject runner=9c93a6037409bf942b7afb59bfe5c814f96ee2ff61871851d440a01b851cba18 adapter=1002_744c model=1p5 L=128 pairs=8 bytes_including_digest=1836728 prefill_ms=1687.213 restore_ms=1686.999 ratio95=[1.0,1.0] resolved=1 quiet=1 bar=missed | 10.4 reading role=reject runner=9c93a6037409bf942b7afb59bfe5c814f96ee2ff61871851d440a01b851cba18 adapter=1002_744c model=1p5 L=1000 pairs=8 bytes_including_digest=14337720 prefill_ms=20253.247 restore_ms=19405.908 ratio95=[1.0,1.0] resolved=1 quiet=1 bar=missed | pcg_cell_10_4_timing: checks=81 failures=0 skips=0 -> PASS
+[12:54:46] t-grade-15 : PASS 2026-10-25T12:54:46 :: 10.4 reading role=grade runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=1002_744c model=1p5 L=128 pairs=8 bytes_including_digest=1836728 prefill_ms=1704.000 restore_ms=3.034 ratio95=[510.7,628.2] resolved=1 quiet=1 bar=met | 10.4 reading role=grade runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=1002_744c model=1p5 L=1000 pairs=8 bytes_including_digest=14337720 prefill_ms=20321.149 restore_ms=13.459 ratio95=[1498.4,1521.7] resolved=1 quiet=1 bar=met | pcg_cell_10_4_timing: checks=81 failures=0 skips=0 -> PASS
+[12:54:46] adapter 0 (1002:744c); debug layer off
+[12:54:46] KIT RUN FINISHED: unplug the drive and bring it back to the dev box

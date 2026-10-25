@@ -1,0 +1,28 @@
+adapter: 0 10de 1e81 7987 NVIDIA GeForce RTX 2080 SUPER
+using adapter 0 (10de:1e81)
+[2026-10-24T18:04:38] D:\_scratch\f3-f4-1p16\pkvg\bin\pcg_cell_4_6.exe --model=D:\_artifacts\SuperSLM\t2901-qwen2.5-1.5b-dg\qwen2.5-1.5b-instruct-dg-g5.sslm --tag=1p5 --ids=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts\world.1p5.ids --out=D:\_scratch\f3-f4-1p16\blobs
+fixture: D:\_artifacts\SuperSLM\t2901-qwen2.5-1.5b-dg\qwen2.5-1.5b-instruct-dg-g5.sslm hidden=1536 layers=28 vocab=151936 cap=32768 qk_norm=0 schemas=1
+4.6 1p5: layers 28, kv heads 2, head_dim 128, cap 32768, B 16, 14336 bytes per token
+4.6 1p5: GPU prefix of 1000 tokens on 10de_1e81 built in 19343 ms; blob 14337720 bytes, sha256 8d20039ee2fed926cd89c8cde21f0cb1449b31eb474c013533f41ae9be2a58f9 -> D:\_scratch\f3-f4-1p16\blobs/gpu-1p5-10de_1e81.spx1
+4.6 1p5: CPU twin built in 39612 ms; blob 14337720 bytes, sha256 10c6a89659ab5870b05ba72c042d43603954ea23a121ba13de02c06e874c09bb -> D:\_scratch\f3-f4-1p16\blobs/cpu-1p5.spx1
+4.6 (a) 1p5 CPU vs GPU 10de_1e81: L = 1000, 112000 rows of 128 bytes compared (28 layers x K,V x 2 heads x 1000 positions): 0 differ; residual equal; header state fields equal; whole blob outside [4, 60) IDENTICAL
+4.6 (a) 1p5: CPU vs GPU 10de_1e81: IDENTICAL
+pcg_cell_4_6: checks=23 failures=0 skips=0 -> PASS
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T18:05:43] exit 0
+[2026-10-24T18:05:43] D:\_scratch\f3-f4-1p16\pkvg\bin\pcg_cell_6_5.exe --model=D:\_artifacts\SuperSLM\t2901-qwen2.5-1.5b-dg\qwen2.5-1.5b-instruct-dg-g5.sslm --tag=1p5 --world=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts\world.1p5.ids --persona=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts\persona00.ids
+fixture: D:\_artifacts\SuperSLM\t2901-qwen2.5-1.5b-dg\qwen2.5-1.5b-instruct-dg-g5.sslm hidden=1536 layers=28 vocab=151936 cap=32768 qk_norm=0 schemas=1
+6.5 1p5: layers 28, kv heads 2, head_dim 128, cap 32768, B 16, 14336 bytes per token
+6.5 1p5 root L=0: L = 0: rows, state, round trip and 64 adopter steps graded (first steps -1010,-1010,-1010,-1010)
+6.5 1p5 root L=1: L = 1: rows, state, round trip and 64 adopter steps graded (first steps 22250,198,220,330)
+6.5 1p5 root L=15: L = 15: rows, state, round trip and 64 adopter steps graded (first steps 279,23195,3561,13)
+6.5 1p5 root L=16: L = 16: rows, state, round trip and 64 adopter steps graded (first steps 382,16,13,5209)
+6.5 1p5 root L=17: L = 17: rows, state, round trip and 64 adopter steps graded (first steps 22573,429,279,1995)
+6.5 1p5 root L=1000: L = 1000: rows, state, round trip and 64 adopter steps graded (first steps 624,6471,220,15)
+6.5 1p5 nested: nested world 1012 -> child 1195: shared 63 pages, three children's adopters equal
+pcg_cell_6_5: checks=337 failures=0 skips=0 -> PASS
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T18:07:02] exit 0
+piece took 2.4 min

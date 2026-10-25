@@ -1,0 +1,34 @@
+[2026-10-24T16:56:45] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\SuperSLM\.worktrees\f3-f4-1p16\tests\precache-gpu\apply_gpu_mutant.py D:\_scratch\f3-f4-1p16\mutants\restore-prefills\src\gpu\gpu_1p0.cpp restore-prefills
+apply_gpu_mutant: restore-prefills applied to D:\_scratch\f3-f4-1p16\mutants\restore-prefills\src\gpu\gpu_1p0.cpp
+[2026-10-24T16:56:45] exit 0
+[2026-10-24T16:56:45] cmd /c D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\build_paged_kv_gpu.bat "--out=D:\_scratch\f3-f4-1p16\mutants\restore-prefills\pkvg" "--gpu-dir=D:\_scratch\f3-f4-1p16\mutants\restore-prefills\src\gpu" pcg_cell_10_4_timing
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+===== engine: CPU sources (build.bat's list) =====
+===== engine: GPU sources, configuration plain =====
+===== engine: GPU sources, configuration alloc =====
+===== engine: GPU sources, configuration t2169 =====
+===== engine: GPU sources, configuration bench =====
+===== te425 hooks (InstallHooks), main renamed, allocation-fault definitions =====
+===== host: the suite's process runner =====
+[F3] pcg_cell_10_4_timing: LINKED (plain) 
+PKVG BUILD: 1 linked, 0 red by link, 0 red by compile or unexpected link failure
+[2026-10-24T16:57:32] exit 0
+[2026-10-24T16:57:32] C:\Users\dansu\AppData\Local\Programs\Python\Python312\python.exe -I D:\SuperSLM\.worktrees\f3-f4-1p16\tests\precache-gpu\apply_gpu_mutant.py D:\_scratch\f3-f4-1p16\mutants\upload-skip\src\gpu\gpu_1p0.cpp upload-skip
+apply_gpu_mutant: upload-skip applied to D:\_scratch\f3-f4-1p16\mutants\upload-skip\src\gpu\gpu_1p0.cpp
+[2026-10-24T16:57:32] exit 0
+[2026-10-24T16:57:32] cmd /c D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\build_paged_kv_gpu.bat "--out=D:\_scratch\f3-f4-1p16\mutants\upload-skip\pkvg" "--gpu-dir=D:\_scratch\f3-f4-1p16\mutants\upload-skip\src\gpu" pcg_cell_6_5 pcg_cell_10_4_real
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+===== engine: CPU sources (build.bat's list) =====
+===== engine: GPU sources, configuration plain =====
+===== engine: GPU sources, configuration alloc =====
+===== engine: GPU sources, configuration t2169 =====
+===== engine: GPU sources, configuration bench =====
+===== te425 hooks (InstallHooks), main renamed, allocation-fault definitions =====
+===== host: the suite's process runner =====
+[F3] pcg_cell_6_5: LINKED (plain) 
+[F3] pcg_cell_10_4_real: LINKED (alloc) 
+PKVG BUILD: 2 linked, 0 red by link, 0 red by compile or unexpected link failure
+[2026-10-24T16:58:21] exit 0
+piece took 1.6 min

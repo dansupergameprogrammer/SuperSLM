@@ -1,0 +1,90 @@
+adapter: 0 10de 1e81 7987 NVIDIA GeForce RTX 2080 SUPER
+using adapter 0 (10de:1e81)
+[2026-10-24T19:18:59] D:\_scratch\f3-f4-1p16\mutants\upload-skip\pkvg\bin\pcg_cell_6_5.exe --fixture-dir=D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures
+fixture: D:\_artifacts\SuperSLM\t3035-precache-refs\fixtures/pkv_def.sslm hidden=192 layers=2 vocab=256 cap=4096 qk_norm=0 schemas=1
+6.5 pkv_def: layers 2, kv heads 2, head_dim 48, cap 4096, B 16, 384 bytes per token
+6.5 pkv_def root L=0: L = 0: rows, state, round trip and 64 adopter steps graded (first steps -1010,-1010,-1010,-1010)
+6.5 pkv_def root L=1: L = 1: rows, state, round trip and 64 adopter steps graded (first steps 58,171,91,37)
+6.5 pkv_def root L=15: L = 15: rows, state, round trip and 64 adopter steps graded (first steps 105,91,136,157)
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_6_5.cpp:88: a.size() == static_cast<size_t>(kSteps) && a == b -- 6.5 pkv_def root L=16: 6.2 the restored prefix's adopter differs from the prefill twin's from step 2 (64 and 64 steps)
+6.5 pkv_def root L=16: L = 16: rows, state, round trip and 64 adopter steps graded (first steps 245,185,9,91)
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_6_5.cpp:88: a.size() == static_cast<size_t>(kSteps) && a == b -- 6.5 pkv_def root L=17: 6.2 the restored prefix's adopter differs from the prefill twin's from step 1 (64 and 64 steps)
+6.5 pkv_def root L=17: L = 17: rows, state, round trip and 64 adopter steps graded (first steps 198,78,220,91)
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_6_5.cpp:88: a.size() == static_cast<size_t>(kSteps) && a == b -- 6.5 pkv_def root L=1000: 6.2 the restored prefix's adopter differs from the prefill twin's from step 1 (64 and 64 steps)
+6.5 pkv_def root L=1000: L = 1000: rows, state, round trip and 64 adopter steps graded (first steps 19,78,27,157)
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_6_5.cpp:88: a.size() == static_cast<size_t>(kSteps) && a == b -- 6.5 pkv_def root L=4095: 6.2 the restored prefix's adopter differs from the prefill twin's from step 1 (64 and 64 steps)
+6.5 pkv_def root L=4095: L = 4095: rows, state, round trip and 64 adopter steps graded (first steps 54,141,-1011,-1011)
+6.5 pkv_def root L=4096: L = 4096: rows, state, round trip and 64 adopter steps graded (first steps 151,-1011,-1011,-1011)
+6.5 pkv_def bound L=1: L = 1, schema-bound: rows, state, round trip and 64 adopter steps graded (first steps 163,163,79,37)
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_6_5.cpp:88: a.size() == static_cast<size_t>(kSteps) && a == b -- 6.5 pkv_def bound L=17: 6.2 the restored prefix's adopter differs from the prefill twin's from step 1 (64 and 64 steps)
+6.5 pkv_def bound L=17: L = 17, schema-bound: rows, state, round trip and 64 adopter steps graded (first steps 94,57,2,81)
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_6_5.cpp:88: a.size() == static_cast<size_t>(kSteps) && a == b -- 6.5 pkv_def bound L=1000: 6.2 the restored prefix's adopter differs from the prefill twin's from step 1 (64 and 64 steps)
+6.5 pkv_def bound L=1000: L = 1000, schema-bound: rows, state, round trip and 64 adopter steps graded (first steps 81,171,235,27)
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_6_5.cpp:162: built.size() == static_cast<size_t>(kSteps) && built == a && built == b -- 6.5 pkv_def nested: 6.3 the three children's adopters differ (built/shared DIFFER, built/private DIFFER)
+6.5 pkv_def nested: nested world 1000 -> child 1200: shared 62 pages, three children's adopters DIFFER
+pcg_cell_6_5: checks=981 failures=7 skips=0 -> FAIL
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T19:19:21] exit 1
+SUMMARY upload-skip pcg_cell_6_5 exit 1: killed (killed only on 6.2's assertion)
+[2026-10-24T19:19:21] D:\_scratch\f3-f4-1p16\mutants\upload-skip\pkvg\bin\pcg_cell_10_4_real.exe --cell=10.1 --phase=restore --model=D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm --prompts=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts --blobs=D:\_scratch\f3-f4-1p16\blobs\r10x
+fixture: D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.1 GPU: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat00#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat00#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat00#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat00#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat00#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat01#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat01#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat01#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat01#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat01#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat02#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat02#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat02#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat02#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat02#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat03#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat03#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat03#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat03#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat03#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat04#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat04#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat04#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat04#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat04#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat05#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat05#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat05#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat05#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat05#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat06#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat06#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat06#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat06#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat06#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat07#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat07#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat07#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat07#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat07#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat08#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat08#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat08#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat08#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat08#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat09#0: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat09#1: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat09#2: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat09#3: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:169: same -- 10.1 flat09#4: the restored prefix's adopter differs from the capture's prefill-built stream
+FAIL D:\SuperSLM\.worktrees\f3-f4-1p16\tests\paged-kv-gpu\..\precache-gpu\pcg_cell_10_4_real.cpp:175: graded == 50 -- 10.1: 0 of 50 adopter streams equal the capture's
+10.1 restore on 10de_1e81: 0 of 50 adopter streams equal the prefill-built ones; prefix prefill calls in this process: 0
+pcg_cell_10_4_real: checks=188 failures=51 skips=0 -> FAIL
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T19:20:57] exit 1
+SUMMARY upload-skip pcg_cell_10_4_real 10.1 restore exit 1: killed (killed only on 10.1's stream assertion)
+piece took 2.0 min

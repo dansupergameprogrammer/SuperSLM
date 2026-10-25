@@ -1,0 +1,13 @@
+adapter: 0 10de 1e81 7987 NVIDIA GeForce RTX 2080 SUPER
+using adapter 0 (10de:1e81)
+[2026-10-24T19:12:11] D:\_scratch\f3-f4-1p16\pkvg\bin\pcg_cell_10_4_timing.exe --model=D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm --tag=0p5 --ids=D:\_scratch\e4\t3035\tests\t3035-precache-refs\prompts\world.ids --role=grade
+fixture: D:\_artifacts\SuperSLM\te442-qwen2.5-0.5b-instruct-dg\qwen2.5-0.5b-instruct-dg.sslm hidden=896 layers=24 vocab=151936 cap=32768 qk_norm=0 schemas=0
+10.4 timing 0p5: layers 24, kv heads 2, head_dim 64, cap 32768, B 16, 6144 bytes per token
+10.4 run role=grade runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=10de_1e81 model=0p5 model_sha256=4b27e2d6e132d710a4b174d5ffc15e7705691ca37abf15eca65503803d0dba35 pairs=8 bar=100 tick_ms=0.000001
+10.4 reading role=grade runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=10de_1e81 model=0p5 L=128 pairs=8 bytes_including_digest=787512 prefill_ms=1046.115 restore_ms=1.370 ratio95=[691.3,856.2] resolved=1 quiet=1 bar=met
+10.4 reading role=grade runner=7b9ef5781c59a6255d8b296c0604e6c358164023c3b133af008db4d4d49da638 adapter=10de_1e81 model=0p5 L=1000 pairs=8 bytes_including_digest=6145080 prefill_ms=10529.691 restore_ms=6.436 ratio95=[1609.3,1663.8] resolved=1 quiet=1 bar=met
+pcg_cell_10_4_timing: checks=81 failures=0 skips=0 -> PASS
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+[2026-10-24T19:13:58] exit 0
+piece took 1.8 min
