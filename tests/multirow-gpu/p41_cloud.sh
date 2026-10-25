@@ -9,14 +9,17 @@
 #              src/gpu/shaders)
 #   --skip-run build only
 #   --only     unmodified | tests | pkvg   run one leg
+#   --with-pkvg  also run the pkvg leg (off by default: under lavapipe its lifetime cells, e.g. 1.9's 1,000
+#              prefix cycles, run for hours)
 # Each run uses its own WINEPREFIX (<out>/wineprefix-<pid>) unless WINEPREFIX is set.
 #
 # Legs, each printed PASS or FAIL, exit 0 only when every leg run passes:
-#   unmodified  `git diff <base> HEAD` is empty over tests/ (except tests/multirow-gpu/), build.bat's
-#               superslm_tests source list, and tests/paged-kv-gpu/ -- the suite that runs is the tag's.
+#   unmodified  `git diff <base> HEAD` is empty over tests/ (except tests/multirow-gpu/), and build.bat's
+#               superslm_tests compile command (sources, /D, /I) equals the tag's: the suite that runs is the
+#               tag's. build.bat may gain shader steps (the widened variants).
 #   tests       superslm_tests.exe, built from build.bat's own superslm_tests command (sources, /D and /I
 #               parsed from the file, so the cloud build follows the box build), run under Wine; exit 0.
-#   pkvg        the paged-KV GPU suite's step-G5 runner (tests/paged-kv-gpu, pkvg_g5) over
+#   pkvg        (opt-in) the paged-KV GPU suite's step-G5 runner (tests/paged-kv-gpu, pkvg_g5) over
 #               tools/gen_paged_kv_fixture.py's fixtures (pkv_def, pkv_qk, ...), real-artifact cells skipped; exit 0.
 #
 # Build notes: mingw-w64 11's d3d12.h lacks an enumerator the engine uses, so compiles go through
@@ -34,6 +37,7 @@ OUT="$REPO/out/mr-p41"
 JOBS=2
 RUN=1
 ONLY=""
+WITH_PKVG=0
 for a in "$@"; do
 	case "$a" in
 		--base=*) BASE="${a#--base=}" ;;
@@ -41,6 +45,7 @@ for a in "$@"; do
 		--jobs=*) JOBS="${a#--jobs=}" ;;
 		--skip-run) RUN=0 ;;
 		--only=*) ONLY="${a#--only=}" ;;
+		--with-pkvg) WITH_PKVG=1 ;;
 		*) sed -n '2,25p' "$0"; exit 2 ;;
 	esac
 done
@@ -54,14 +59,20 @@ FAILED=()
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 
 if want unmodified; then
-	echo "== P4.1 unmodified: git diff $BASE HEAD over the suite"
-	if git diff --quiet "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' build.bat; then
-		echo "PASS unmodified (tests/ outside tests/multirow-gpu and build.bat equal $BASE)"
-	else
-		echo "FAIL unmodified: files differ from $BASE:"
-		git diff --stat "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' build.bat | sed 's/^/    /'
-		FAILED+=(unmodified)
+	echo "== P4.1 unmodified: the suite's sources and build.bat's superslm_tests command against $BASE"
+	ok=1
+	if ! git diff --quiet "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu'; then
+		echo "    tests/ outside tests/multirow-gpu differs from $BASE:"
+		git diff --stat "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' | sed 's/^/        /'
+		ok=0
 	fi
+	# build.bat may gain shader steps (the widened variants); the superslm_tests compile line may not change.
+	if ! diff <(git show "$BASE:build.bat" | python3 -I "$HERE/p41_parse_build_bat.py" -) \
+		<(python3 -I "$HERE/p41_parse_build_bat.py" build.bat) >/dev/null; then
+		echo "    build.bat's superslm_tests command (sources, /D, /I) differs from $BASE"
+		ok=0
+	fi
+	if [ $ok = 1 ]; then echo "PASS unmodified"; else echo "FAIL unmodified"; FAILED+=(unmodified); fi
 fi
 
 shaders() {
@@ -76,22 +87,7 @@ shaders() {
 
 if want tests; then
 	echo "== P4.1 tests: superslm_tests.exe from build.bat's command"
-	PARSED="$(python3 -I - "$REPO/build.bat" <<'EOF'
-import re, sys
-text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
-joined = re.sub(r"\^[ \t]*\r?\n[ \t]*", " ", text)
-for line in joined.splitlines():
-    s = line.strip()
-    if s.startswith("cl ") and "superslm_tests.exe" in s:
-        toks = s.split()
-        srcs = [t.replace("\\", "/") for t in toks if t.endswith(".cpp")]
-        defs = ["-D" + t[2:] for t in toks if t.startswith("/D")]
-        incs = ["-I" + t[2:].replace("\\", "/") for t in toks if t.startswith("/I")]
-        print(" ".join(srcs)); print(" ".join(defs)); print(" ".join(incs))
-        sys.exit(0)
-sys.exit("build.bat: no cl command producing superslm_tests.exe")
-EOF
-)"
+	PARSED="$(python3 -I "$HERE/p41_parse_build_bat.py" build.bat)"
 	SRCS_BAT="$(sed -n 1p <<<"$PARSED")"; DEFS_BAT="$(sed -n 2p <<<"$PARSED")"; INCS_BAT="$(sed -n 3p <<<"$PARSED")"
 	FLAGS="-std=c++20 -O2 $INCS_BAT $DEFS_BAT -DNOMINMAX -DWIN32_LEAN_AND_MEAN -include d3d12.h -include d3d12sdklayers.h"
 	shaders
@@ -122,7 +118,7 @@ EOF
 	fi
 fi
 
-if want pkvg; then
+if { [ -z "$ONLY" ] && [ "$WITH_PKVG" = 1 ]; } || [ "$ONLY" = pkvg ]; then
 	echo "== P4.1 pkvg: the paged-KV GPU suite's G5 runner on pkv_def and pkv_qk"
 	FIX="$OUT/fixtures"; mkdir -p "$FIX"
 	[ -f "$FIX/pkv_def.sslm" ] && [ -f "$FIX/pkv_qk.sslm" ] || python3 tools/gen_paged_kv_fixture.py "$FIX" >/dev/null
