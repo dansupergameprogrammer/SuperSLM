@@ -241,9 +241,19 @@ def regenerate(copy: WideSet) -> WideSet:
 # --------------------------------------------------------------------------------------------- source diff (4.4)
 
 COMMENT_LINE = re.compile(r"^\s*(//.*)?$")
+ROW_MACROS = (
+    "#define SeqState SeqStateRows[g_row]",
+    "#define LayerScratch LayerScratchRows[g_row]",
+    "#define WorkScratch WorkScratchRows[g_row]",
+    "#define g_position (g_position + g_row)",
+    "#define g_width (g_width + g_row)",
+)
 ADDED_OK = [
     re.compile(r"^\s*(//.*)?$"),                                   # blank or comment
-    re.compile(r"^\s*#\s*(define|undef|if|ifdef|ifndef|elif|else|endif|include|error|pragma)\b"),
+    # The generator's five row macros, verbatim (whitespace aside), and no other preprocessor line: an added
+    # #define can rewrite any identifier's arithmetic (code review B2: `#define g_layer_index (g_layer_index +
+    # g_row)` sends row r to layer r's weights).
+    *[re.compile(r"^\s*" + r"\s+".join(re.escape(w) for w in d.split()) + r"\s*(//.*)?$") for d in ROW_MACROS],
     re.compile(r"^\s*static\s+uint\s+g_row\s*;\s*(//.*)?$"),
     re.compile(r"^\s*RWByteAddressBuffer\s+\w+Rows\s*\[\s*SSLM_WIDE_H\s*\]\s*:\s*register\([^)]*\)\s*;\s*(//.*)?$"),
     re.compile(r"^\s*g_row\s*=\s*\w+\.y\s*;\s*(//.*)?$"),
@@ -271,8 +281,8 @@ def _norm_gen(ln: str) -> str:
 def substitution_violations(base_text: str, gen_text: str) -> list[str]:
     """Differences between a generated site and its base shader that are not the generator's substitutions (§3.1;
     the spike generator's four edits): the three per-row buffers become SSLM_WIDE_H-arrays (any register), main
-    gains an SV_GroupID parameter, and the only added lines are comments, preprocessor lines, `static uint g_row;`
-    and `g_row = <gid>.y;`. Every base code line must survive, in order, up to those substitutions. A base line
+    gains an SV_GroupID parameter, and the only added lines are comments, the five ROW_MACROS verbatim, the row
+    buffer arrays, `static uint g_row;` and `g_row = <gid>.y;` (no other preprocessor line). Every base code line must survive, in order, up to those substitutions. A base line
     that names a substituted identifier inside an expression is unaffected: the macros carry it. Empty = only the
     substitutions."""
     base = [ln.rstrip() for ln in base_text.split("\n")]
@@ -679,17 +689,156 @@ def _without_plan_function(text: str) -> str:
     return text[:m.end()] + "".join("\n" if c == "\n" else " " for c in text[m.end():i]) + text[i:]
 
 
+GEMM_LANES_SLOT = 10  # the one-row bind_and_dispatch's 11th root constant: the GEMM plan's per-group lane count
+
+
+def _match_brace(text: str, i: int) -> int:
+    depth = 0
+    for k in range(i, len(text)):
+        if text[k] == "{":
+            depth += 1
+        elif text[k] == "}":
+            depth -= 1
+            if depth == 0:
+                return k
+    return len(text)
+
+
+def _enclosing_scope(text: str, pos: int) -> tuple[str, str]:
+    """(header, body) of the innermost brace block around `pos`: header is the text between the previous `;`, `{`
+    or `}` and the block's opening brace (a lambda's or function's parameter list), body the block itself."""
+    depth, i = 0, pos
+    while i > 0:
+        i -= 1
+        if text[i] == "}":
+            depth += 1
+        elif text[i] == "{":
+            if depth == 0:
+                break
+            depth -= 1
+    h = i
+    while h > 0 and text[h - 1] not in ";{}":
+        h -= 1
+    return text[h:i], text[i:_match_brace(text, i) + 1]
+
+
+def gemm_lane_slot_violations(name: str, text: str) -> tuple[int, list[str]]:
+    """Code review B1: what reaches a dispatch's lanes slot (root constant GEMM_LANES_SLOT of an array passed to
+    SetComputeRoot32BitConstants). The slot must hold exactly `<plan>.lanes`, where <plan> is a
+    GpuGemmSiteGroupPlan parameter or a variable initialised from ComputeGpuGemmSiteGroupPlan; or the one-row
+    body's no-plan value `1`/`1u`, in a dispatch that names no plan. When the slot is a parameter of the
+    enclosing lambda, every call of that lambda is held to the same rule at that argument (a call naming a plan in
+    any argument is a GEMM dispatch, so it must pass `<plan>.lanes`). A literal lane count, a conditional of
+    literals, or arithmetic on the member is red. Returns (GEMM dispatches found, violations)."""
+    plans = set(re.findall(r"\bGpuGemmSiteGroupPlan\s*[&*]?\s*(\w+)\s*=\s*ComputeGpuGemmSiteGroupPlan\s*\(", text))
+    out, found = [], 0
+
+    def names_plan(s: str, names: set[str]) -> bool:
+        return "GpuGemmSiteGroupPlan" in s or any(re.search(r"\b" + re.escape(n) + r"\b", s) for n in names)
+
+    def grade(e: str, names: set[str], is_gemm: bool, where: str) -> int:
+        e = re.sub(r"\s+", "", e)
+        mm = re.fullmatch(r"\(?(\w+)\.lanes\)?", e)
+        if mm and mm.group(1) in names:
+            return 1
+        if e in ("1", "1u", "1U") and not is_gemm:
+            return 0
+        out.append(f"{where}: lanes slot (constant {GEMM_LANES_SLOT}) is {e!r}"
+                   f"{' in a GEMM dispatch' if is_gemm else ''}: neither a GpuGemmSiteGroupPlan's `.lanes` from "
+                   f"ComputeGpuGemmSiteGroupPlan nor the no-plan value 1")
+        return 0
+
+    for call in re.finditer(r"SetComputeRoot32BitConstants\s*\(", text):
+        args = _split_cxx(_call_args(text, call.end()))
+        if len(args) < 3:
+            continue
+        line = text.count("\n", 0, call.start()) + 1
+        arr = re.sub(r"^&|\[.*$|\.data\(\)$", "", args[2].strip()).strip()
+        header, body = _enclosing_scope(text, call.start())
+        params = re.findall(r"\bGpuGemmSiteGroupPlan\s*[&*]?\s*(\w+)\s*[,)]", header)
+        names = plans | set(params)
+        is_gemm = names_plan(header + body, names)
+        init = re.search(r"\b" + re.escape(arr) + r"\s*\[[^\]]*\]\s*=?\s*\{", body)
+        if not init:
+            if is_gemm:
+                out.append(f"{name}:{line}: GEMM dispatch's root constants `{arr}` not initialised from a brace "
+                           f"list in its block, so its lanes slot cannot be read")
+            continue
+        elems = _split_cxx(body[init.end():_match_brace(body, init.end() - 1)])
+        if len(elems) <= GEMM_LANES_SLOT:
+            if is_gemm:
+                out.append(f"{name}:{line}: GEMM dispatch's `{arr}` has {len(elems)} constants, no lanes slot")
+            continue
+        slot = re.sub(r"\s+", "", elems[GEMM_LANES_SLOT])
+        lam = re.search(r"\bauto\s+(\w+)\s*=\s*\[[^\]]*\]\s*\((.*)\)\s*(->[^{]*)?$", header.strip(), re.S)
+        pnames = [re.findall(r"(\w+)\s*$", re.sub(r"=.*$", "", pa.strip()))[-1:]
+                  for pa in _split_cxx(lam.group(2))] if lam else []
+        pnames = [x[0] if x else "" for x in pnames]
+        if lam and re.fullmatch(r"\w+", slot) and slot in pnames:
+            idx, fn = pnames.index(slot), lam.group(1)
+            calls = 0
+            for c in re.finditer(r"\b" + re.escape(fn) + r"\s*\(", text):
+                if text[max(0, c.start() - 40):c.start()].rstrip().endswith("auto"):
+                    continue
+                cargs = _split_cxx(_call_args(text, c.end()))
+                if len(cargs) <= idx:
+                    continue
+                calls += 1
+                cline = text.count("\n", 0, c.start()) + 1
+                found += grade(cargs[idx], plans, names_plan(",".join(cargs), plans),
+                               f"{name}:{cline}: {fn}(...) argument {idx + 1} -> {name}:{line}")
+            if not calls:
+                out.append(f"{name}:{line}: lanes slot is {fn}'s parameter `{slot}`, but no call of {fn} was found")
+            continue
+        found += grade(slot, names, is_gemm, f"{name}:{line}")
+    return found, out
+
+
+def _split_cxx(s: str) -> list[str]:
+    """Top-level comma split of a C++ argument or initializer list (only (), [] and {} nest)."""
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+def _call_args(text: str, open_end: int) -> str:
+    depth, k = 1, open_end
+    while k < len(text) and depth:
+        if text[k] in "([{":
+            depth += 1
+        elif text[k] in ")]}":
+            depth -= 1
+        k += 1
+    return text[open_end:k - 1]
+
+
 def lint_host(gpu_root: Path) -> list[str]:
-    """The widened GEMM's `lanes` comes only from ComputeGpuGemmSiteGroupPlan (E21, §3.2)."""
+    """The widened GEMM's `lanes` comes only from ComputeGpuGemmSiteGroupPlan (E21, §3.2): the value in the GEMM
+    dispatch's lanes slot is a plan's `.lanes`, and no plan is built or rewritten by hand."""
     scope = host_scope(gpu_root)
     if not scope:
         return [f"red-unimplemented: no host C++ under {gpu_root} references proj_gemm_wide (the recorder that "
                 f"binds the widened GEMM's lanes)"]
     out = []
+    dispatches = 0
     for p in scope:
         text = _without_plan_function(strip_comments(p.read_text(encoding="utf-8", errors="replace")))
         if "ComputeGpuGemmSiteGroupPlan(" not in text:
             out.append(f"{p.name}: binds proj_gemm_wide but never calls ComputeGpuGemmSiteGroupPlan")
+        n, v = gemm_lane_slot_violations(p.name, text)
+        dispatches += n
+        out += v
         for no, ln in enumerate(text.split("\n"), 1):
             # A lanes value set from a literal.
             if re.search(r"\b\w*lanes\w*\s*(=|\{)\s*\(?\s*(static_cast<\w+>\()?\s*\d", ln, re.I):
@@ -702,6 +851,9 @@ def lint_host(gpu_root: Path) -> list[str]:
             if m:
                 out.append(f"{p.name}:{no}: GpuGemmSiteGroupPlan not taken from ComputeGpuGemmSiteGroupPlan: "
                            f"{ln.strip()[:100]!r}")
+    if dispatches == 0 and not any("lanes slot" in o for o in out):
+        out.append("no widened GEMM dispatch found in the host scope (a SetComputeRoot32BitConstants whose block "
+                   "names a GpuGemmSiteGroupPlan): the lanes slot cannot be checked")
     return out
 
 
@@ -823,3 +975,47 @@ def apply_mutant(ws: WideSet, name: str, dest: Path) -> WideSet:
         raise MR1Red(f"mutant {name} changed nothing")
     gemm.write_text(mutated, encoding="utf-8", newline="\n")
     return copy
+
+
+# --------------------------------------------------------------------------------------------- code-review mutants
+
+# L1 (code review B1): the widened GEMM dispatch's lanes slot gets a literal instead of the plan's member. The
+# literal forms are the reviewer's (`32u`) and the one that copies today's plan and survives the smoke.
+HOST_LANE_LITERALS = ("32u", "down ? 64u : 32u")
+
+
+def apply_host_lanes_mutant(ws: WideSet, literal: str, dest: Path) -> WideSet:
+    """A copy of src/gpu whose widened GEMM dispatches get `literal` where they took a plan's `.lanes`."""
+    target = dest / "src" / "gpu"
+    shutil.copytree(ws.gpu_root, target, ignore=shutil.ignore_patterns("__pycache__", "*.cso"))
+    copy = discover(target)
+    hits = 0
+    for p in host_scope(copy.gpu_root):
+        text = p.read_text(encoding="utf-8")
+        # Every plan member that reaches a dispatch (an initializer element or a call argument) becomes the
+        # literal: the port binds `plan.lanes` in its GEMM constants, the spike passes `<site>_plan.lanes` to its
+        # dispatch lambda.
+        new = re.sub(r"(?<![\w.])(\w+)\s*\.\s*lanes(?=\s*[,})])", literal, text)
+        if new != text:
+            hits += 1
+            p.write_text(new, encoding="utf-8", newline="\n")
+    if not hits:
+        raise MR1Red("mutant L1: no `<plan>.lanes` reaching a dispatch in the host scope")
+    return copy
+
+
+# G (code review B2): the generator adds two foreign macros to every widened site's row block; the second sends
+# row r to layer r's weights.
+FOREIGN_MACROS = ("#define kTagOk (kTagOk + 0)", "#define g_layer_index (g_layer_index + g_row)")
+
+
+def apply_generator_macro_mutant(ws: WideSet, dest: Path) -> WideSet:
+    """A regenerated copy whose generator emits FOREIGN_MACROS after its own row macros."""
+    copy = copy_gpu_tree(ws, dest)
+    gen = copy.generator.read_text(encoding="utf-8")
+    anchor = '        "#define g_width (g_width + g_row)",\n'
+    if anchor not in gen:
+        raise MR1Red("mutant G: the generator's row block has no `#define g_width (g_width + g_row)` line")
+    gen = gen.replace(anchor, anchor + "".join(f'        "{d}",\n' for d in FOREIGN_MACROS))
+    copy.generator.write_text(gen, encoding="utf-8", newline="\n")
+    return regenerate(copy)

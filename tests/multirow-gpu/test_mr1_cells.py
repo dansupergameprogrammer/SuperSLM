@@ -216,6 +216,31 @@ class Mutants_4_7(_Base):
         rep = m.lint_all(c, None)
         self.assertTrue(any(m.WIDE_GEMM in b for b in rep.barriers), "MX15 survived the barrier lint (4.7c)")
 
+    def test_L1_literal_lanes_in_the_GEMM_dispatch_is_red(self):
+        """Code review B1: a literal in the widened GEMM dispatch's lanes slot, including one that copies today's
+        plan (`down ? 64u : 32u`, which the smoke cannot see), turns 4.7d red."""
+        ws = self.need()
+        for lit in m.HOST_LANE_LITERALS:
+            with self.subTest(literal=lit):
+                c = m.apply_host_lanes_mutant(ws, lit, m.scratch_dir("mr1-l1-"))
+                host = m.lint_host(c.gpu_root)
+                self.assertTrue(any("lanes slot" in h for h in host), f"L1 ({lit}) survived 4.7d: {host}")
+
+
+class Mutants_4_4(_Base):
+    """Guard vitality for 4.4d: the reviewer's mutant G (two foreign macros emitted by the generator, one sending
+    row r to layer r's weights) turns the substitution diff red."""
+
+    def test_G_foreign_generator_macros_are_red(self):
+        ws = self.need()
+        g = m.apply_generator_macro_mutant(ws, m.scratch_dir("mr1-g-"))
+        bad = []
+        for f in g.generated:
+            base = g.base_dir / f.name.replace("_wide.hlsl", ".hlsl")
+            bad += m.substitution_violations(base.read_text(encoding="utf-8"), f.read_text(encoding="utf-8"))
+        for d in m.FOREIGN_MACROS:
+            self.assertTrue(any(d in b for b in bad), f"G survived 4.4d: {d!r} accepted as a substitution")
+
 
 if __name__ == "__main__":
     unittest.main()
