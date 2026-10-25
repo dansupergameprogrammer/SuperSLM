@@ -292,7 +292,7 @@ int main(int argc, char** argv) {
 	}
 
 	if (!csv_path.empty()) {
-		std::FILE* f = std::fopen(csv_path.c_str(), csv_append ? "a" : "w");
+		std::FILE* f = std::fopen(csv_path.c_str(), csv_append ? "ab" : "wb");
 		if (!f) {
 			std::printf("FAIL cannot write %s\n", csv_path.c_str());
 			return 1;
@@ -311,7 +311,7 @@ int main(int argc, char** argv) {
 	}
 
 	if (!out_path.empty()) {
-		std::FILE* f = std::fopen(out_path.c_str(), "w");
+		std::FILE* f = std::fopen(out_path.c_str(), "wb");
 		if (!f) {
 			std::printf("FAIL cannot write %s\n", out_path.c_str());
 			return 1;
