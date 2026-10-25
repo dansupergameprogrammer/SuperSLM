@@ -1,6 +1,8 @@
-// Multi-row GPU plan (rev 1.3.2), slice MR1: the host side of the row-widened kernels, test-only. Included at
-// the end of superslm_gpu.cpp, inside namespace superslm_gpu, only when SUPERSLM_MULTIROW_WIDE is defined; no
-// shipped target defines it. Ported from the T-2790 spike's widened prefill host (its root signature, row
+// Multi-row GPU plan (rev 1.3.2), slices MR1 to MR3: the host side of the row-widened kernels. Included at the
+// end of superslm_gpu.cpp, inside namespace superslm_gpu. Since MR3 the recorder below is part of the shipped
+// library (the public verbs, include/superslm/gpu_1p0.h, reach it); MR1's synchronous smoke one-shot
+// (RunMultirowWideLayersForSmoke and its private row set) stays test-only, under SUPERSLM_MULTIROW_WIDE.
+// Ported from the T-2790 spike's widened prefill host (its root signature, row
 // buffers and per-site recording), with the three additions plan §3.1 makes to the spike: paged K/V (t10 and
 // b1 bound as the one-row body binds them), adapter tails (the same 28 constants, per row), and per-row
 // causal width (the shaders' own `g_width + g_row`; the host's widest row only sizes the attention groups).
@@ -24,7 +26,6 @@
 // (harness::Device::FillComposedRootParams, parameters 0 to 16, identical) plus that table, so every
 // binding the one-row body reads is bound here at the same parameter, from what
 // PrepareGpuLayerLoopChunkOpenState bound.
-#if defined(SUPERSLM_MULTIROW_WIDE)
 
 namespace {
 
@@ -81,8 +82,8 @@ enum WideSite : uint32_t {
 	kWMlpNorm, kWGateProjGemm, kWGateProjTail, kWUpProjGemm, kWUpProjTail, kWMlpAct, kWDownProjGemm,
 	kWDownProjTail, kWMlpResidual, kWCommit, kWideSiteCount
 };
-// Each site's widened shader base name; the variant's .cso is <name>_h<H>.cso (CMakeLists.txt, under its
-// SUPERSLM_MULTIROW_WIDE_SHADERS option, and tools/multirow_wide_smoke.sh).
+// Each site's widened shader base name; the variant's .cso is <name>_h<H>.cso, built beside the one-row shaders
+// (CMakeLists.txt, build.bat and tools/multirow_wide_smoke.sh).
 const char* const kWideSiteShader[kWideSiteCount] = {
     "attn_norm_site_wide",        "q_proj_gemm_wide",   "q_proj_site_wide",    "kv_proj_gemm_wide",
     "kv_proj_site_wide",          "qk_norm_site_wide",  "rope_guard_site_wide", "rope_commit_site_wide",
@@ -113,6 +114,7 @@ WidePipelines& GetOrBuildWidePipelines(harness::Device& dev, uint32_t variant_h,
 	return p;
 }
 
+#if defined(SUPERSLM_MULTIROW_WIDE)
 // One submission's row buffers: `variant_h` rows of each per-row buffer, each row a 256-byte-aligned window
 // of one buffer, and the shader-visible table of their views.
 struct WideRowSet {
@@ -166,6 +168,7 @@ void MakeWideRowSet(harness::Device& dev, uint32_t variant_h, uint64_t seq_bytes
 		}
 	}
 }
+#endif  // SUPERSLM_MULTIROW_WIDE
 
 // Bindings: the composed parameters, from what PrepareGpuLayerLoopChunkOpenState bound, then the row table.
 void BindWideRoot(harness::Device& dev, const GpuLayerLoopChunkOpenState& state, ID3D12DescriptorHeap* heap) {
@@ -336,6 +339,7 @@ void RecordWideLayerSliceBody(harness::Device& dev, const WidePipelines& pipes, 
 
 }  // namespace
 
+#if defined(SUPERSLM_MULTIROW_WIDE)
 superslm::SslmForwardStatus RunMultirowWideLayersForSmoke(
     const superslm::SequenceLayerState* rows, uint32_t real_rows, uint32_t variant_h, uint32_t layers,
     uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
@@ -462,6 +466,8 @@ superslm::SslmForwardStatus RunMultirowWideLayersForSmoke(
 	}
 	return superslm::SslmForwardStatus::Ok;
 }
+
+#endif  // SUPERSLM_MULTIROW_WIDE
 
 // =================================================================================================
 // MR2: the recorder (plan §3.3 to §3.5). One widened submission per layer slice of a chunk, asynchronous as
@@ -855,5 +861,3 @@ superslm::SslmForwardStatus RunRowsSliceGpuFinish(GpuInFlightToken&& inflight, c
 		return ClassifyForwardFault(dev, /*stranded=*/false);
 	}
 }
-
-#endif  // SUPERSLM_MULTIROW_WIDE

@@ -60,7 +60,7 @@ static_assert(sizeof(GpuResidencyConfig) == 4 && offsetof(GpuResidencyConfig, fl
 #include <vector>
 
 #include "d3d12_harness.h"
-#include "multirow_wide.h"  // MR1 test-only declarations; empty unless SUPERSLM_MULTIROW_WIDE
+#include "multirow_wide.h"  // the multi-row recorder and its chunk state (plan rev 1.3.2 §3, §4)
 #include "../kv_pages.h"           // paged KV (G3): the page allocator, one module for both backends
 #include "gpu_kv_pool_geometry.h"  // paged KV (G3): the GPU pool's host-only arithmetic
 #include "superslm/adapter_marshal.h"  // T-2113 B6: LoadAdapterArtifact (relocated, tools/sslm_adapter_loader.h)
@@ -261,10 +261,8 @@ struct SslmGpuContext {
 	// step (LogitsSiteParallel), for a model without a device-resident head.
 	sslm_parallel_for host_parallel_for{};
 
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	// Multi-row plan §3.4 and §8 (MR2): the per-chunk row sets' free list and the recorder's seams.
 	superslm_gpu::GpuRowsContextState rows;
-#endif
 };
 
 // T-2851 (B, design Sec4.6 item 2): everything the device logits step reuses, owned by one mapped
@@ -794,12 +792,10 @@ struct SslmGpuSequenceHandle final : public superslm_gpu::inflight::InFlightHand
 	// blocks and never serialises different handles: P1's precondition (§4.4) still binds those.
 	std::atomic<bool> decode_claimed{false};
 
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	// Multi-row plan §3.4 (MR2): the open chunk (null when none), and k of the last close (plan §4.3:
 	// `last_rows_committed`; 0 after an abandon or a reset).
 	std::unique_ptr<superslm_gpu::GpuRowsChunk> rows_chunk;
 	int32_t last_rows_committed = 0;
-#endif
 
 private:
 	friend void SetGpuSeqState(SslmGpuSequenceHandle*, superslm_gpu::SslmSequenceGpuState,
@@ -889,9 +885,8 @@ void SetGpuSeqState(SslmGpuSequenceHandle* seq, superslm_gpu::SslmSequenceGpuSta
 }
 
 // Multi-row plan (rev 1.3.2), MR2: the chunk hooks the existing verbs call while a chunk is open (plan §4.6's
-// table, and §4.1's advancing through the decode step and ready). Defined with the internal entry at the end of
-// this file; with SUPERSLM_MULTIROW_WIDE undefined no handle ever has a chunk and every verb is the base's.
-#if defined(SUPERSLM_MULTIROW_WIDE)
+// table, and §4.1's advancing through the decode step and ready). Defined with the verbs at the end of this file;
+// a handle without a chunk takes every verb's base path.
 namespace {
 SslmGpuStatus RowsDecodeStep(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, const SslmGpuAdapterHandle* adapter,
                              uint32_t dispatch_budget);
@@ -902,7 +897,6 @@ void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_statu
 void RowsDropChunk(SslmGpuSequenceHandle* seq);
 bool RowsChunkOpen(const SslmGpuSequenceHandle* seq) { return seq->rows_chunk != nullptr; }
 }  // namespace
-#endif
 
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
 // Test seam (test builds only; tests/paged-kv-gpu/pkvg_same_handle_race.cpp): a hook run on the
@@ -2302,9 +2296,7 @@ SslmGpuStatus sslm_gpu_seq_releaseImpl(SslmGpuContext* ctx, SslmGpuSequenceHandl
 	if (!superslm_gpu::CallProceedsOrBusy_SeqRelease(is_submitted)) {
 		return SSLM_BUSY;
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	RowsDropChunk(seq);  // multi-row plan §4.6: release frees the chunk's row buffers (to the free list)
-#endif
 	// Paged-KV plan §4 item 6b, step G3: a pooled sequence's release touches only its own table and
 	// reserve (its pages back to the pool, a freed dirty page poisoned in the pool's host mirror by
 	// kv_pages) and fills nothing, so no neighbour's rows change. HolderRelease consumes the holder
@@ -2581,9 +2573,7 @@ SslmGpuStatus sslm_gpu_seq_bind_adapterImpl(SslmGpuContext* ctx, SslmGpuSequence
 	if (!superslm_gpu::CallProceedsOrBusy_SeqReset(is_submitted)) {
 		return SSLM_BUSY;
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	if (RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6: a chunk is open
-#endif
 	SslmGpuModelHandle* model = seq->model;
 	if (model != nullptr && seq->layer_index != 0 && seq->layer_index != model->num_hidden_layers) {
 		return SSLM_BUSY;  // genuinely mid-token -- resolves through the caller's own continued
@@ -2642,9 +2632,7 @@ SslmGpuStatus sslm_gpu_seq_embed_tokenImpl(SslmGpuContext* ctx, SslmGpuSequenceH
 		                    // sequence call (seq_save/seq_reset/seq_release all reuse the
 		                    // identical predicate against their own distinct calls today).
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	if (RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6: a chunk is open
-#endif
 
 	SslmGpuModelHandle* model = seq->model;
 	// F-S3-8 (forward_sites.cpp): validate token_id against [0, vocab_size) BEFORE any row
@@ -2931,14 +2919,12 @@ SslmGpuStatus sslm_decode_step_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenceHandl
 	if (!superslm_gpu::CallProceedsOrBusy_DecodeStepGpu(is_submitted)) {
 		return SSLM_BUSY;  // design Sec4.2's own state table, unchanged policy.
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	// Multi-row plan §4.1: an open chunk of M >= 2 advances on the recorder; M = 1 stays on this body, with the
 	// adapter fixed at the slice that ran layer 0 (§4.4).
 	if (seq->rows_chunk != nullptr) {
 		if (seq->rows_chunk->variant_h > 1) return RowsDecodeStep(ctx, seq, adapter_or_null, dispatch_budget);
 		if (seq->rows_chunk->adapter_fixed && seq->rows_chunk->adapter != adapter_or_null) return SSLM_BUSY;
 	}
-#endif
 	SslmGpuModelHandle* model = seq->model;
 	uint32_t layers_to_issue = 0;
 	const superslm_gpu::SslmGpuStatus plan = superslm_gpu::PlanDispatchBudgetGpu(
@@ -2964,13 +2950,9 @@ SslmGpuStatus sslm_decode_step_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenceHandl
 	// against a running batch-wide remainder instead -- the only difference between the two
 	// call sites, and it lives entirely in the budget arithmetic surrounding this shared call,
 	// never inside it.
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	const SslmGpuStatus submitted = SubmitOneSequenceDecode(ctx, seq, adapter_or_null, layers_to_issue);
 	if (seq->rows_chunk != nullptr) RowsAfterOneRowSubmit(seq, adapter_or_null, layers_to_issue, submitted);
 	return submitted;
-#else
-	return SubmitOneSequenceDecode(ctx, seq, adapter_or_null, layers_to_issue);
-#endif
 }
 
 // Design Sec4.3/Sec7/Sec10 B7 (T-2113 B7, repaired signature per the T-2111 fold, D-SLM3344):
@@ -3108,12 +3090,40 @@ SslmGpuStatus sslm_decode_step_batch_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenc
 			out_statuses[i] = SSLM_BUSY;
 			continue;
 		}
-#if defined(SUPERSLM_MULTIROW_WIDE)
-		if (RowsChunkOpen(seq)) {  // multi-row plan §4.1: batch members with open chunks are MR3's
+		// Multi-row plan §4.1 (MR-D14, as ruled at MR3): a member with an open chunk of M >= 2 advances its rows
+		// by the whole layers the running remainder covers at the model's per-layer count, exactly as a plain
+		// member is planned, through its own widened slice submission, drained in its turn like every member
+		// (one submission per member: the batch never has two submissions in flight, see above).
+		if (RowsChunkOpen(seq) && seq->rows_chunk->variant_h > 1) {
+			uint32_t chunk_layers = 0;
+			if (superslm_gpu::PlanDispatchBudgetGpu(remaining_budget, seq->model->num_hidden_layers,
+			                                        seq->rows_chunk->layers_done, &chunk_layers,
+			                                        seq->model->dispatches_per_layer) ==
+			    superslm_gpu::SslmGpuStatus::DispatchBudgetTooSmall) {
+				out_statuses[i] = SSLM_BATCH_BUDGET_EXHAUSTED;  // the chunk unchanged
+				continue;
+			}
+			out_statuses[i] =
+			    RowsDecodeStep(ctx, seq, adapter_or_null, chunk_layers * seq->model->dispatches_per_layer);
+			if (out_statuses[i] == SSLM_OK) {
+				remaining_budget -= chunk_layers * seq->model->dispatches_per_layer;
+				int32_t drained_ready = 0;
+				SslmGpuStatus drained_status = SSLM_OK;
+				const SslmGpuStatus ready_call_status =
+				    sslm_gpu_ready(ctx, seq, /*block=*/1, &drained_ready, &drained_status);
+				out_statuses[i] = (ready_call_status == SSLM_OK) ? drained_status : ready_call_status;
+			}
+			if (out_statuses[i] == SSLM_DEVICE_LOST) {
+				for (uint32_t j = i + 1; j < n_sequences; ++j) out_statuses[j] = SSLM_DEVICE_LOST;
+				break;
+			}
+			continue;
+		}
+		// M = 1 stays on the one-row body below, with the adapter fixed at the slice that ran layer 0 (§4.4).
+		if (RowsChunkOpen(seq) && seq->rows_chunk->adapter_fixed && seq->rows_chunk->adapter != adapter_or_null) {
 			out_statuses[i] = SSLM_BUSY;
 			continue;
 		}
-#endif
 		seq->bind_eligible = false;
 
 		// Design Sec7: "dispatch_budget is consumed by sequences strictly in the recording
@@ -3144,6 +3154,7 @@ SslmGpuStatus sslm_decode_step_batch_gpuImpl(SslmGpuContext* ctx, SslmGpuSequenc
 		}
 
 		out_statuses[i] = SubmitOneSequenceDecode(ctx, seq, adapter_or_null, layers_to_issue);
+		if (seq->rows_chunk != nullptr) RowsAfterOneRowSubmit(seq, adapter_or_null, layers_to_issue, out_statuses[i]);
 		if (out_statuses[i] == SSLM_OK) {
 			// Design Sec7's own budget arithmetic: exactly this sequence's own consumed
 			// dispatches (layers_to_issue whole layers, using this model's 24-or-25 divisor) leave
@@ -3243,10 +3254,8 @@ SslmGpuStatus sslm_gpu_readyImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
 		return SSLM_OK;
 	}
 
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	// Multi-row plan §3.5: an open chunk of M >= 2 finishes its slice here, and its last slice closes it.
 	if (seq->rows_chunk != nullptr && seq->rows_chunk->variant_h > 1) return RowsReady(seq, block, out_ready, out_status);
-#endif
 	int32_t ready = 0;
 	const superslm::SslmForwardStatus decoded = superslm_gpu::RunLayerLoopGpuFinish(
 	    std::move(seq->in_flight), seq->live_state, KvHostBase(seq), block, &ready);
@@ -3285,11 +3294,9 @@ SslmGpuStatus sslm_gpu_readyImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
 	seq->context_length = seq->live_state.context_length;
 	if (out_ready) *out_ready = 1;
 	if (out_status) *out_status = MapDecodedStatusToGpuStatus(decoded);
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	// Multi-row plan §4.1 (count 1): the one-row token's finish, then the chunk's bookkeeping (its close at the
 	// last layer or at a refusal; a fault rolls it back).
 	if (seq->rows_chunk != nullptr) RowsAfterOneRowFinish(seq, MapDecodedStatusToGpuStatus(decoded));
-#endif
 	return SSLM_OK;
 }
 
@@ -3597,11 +3604,8 @@ SslmGpuStatus sslm_gpu_seq_saveImpl(SslmGpuContext* ctx, const SslmGpuSequenceHa
 	if (!superslm_gpu::CallProceedsOrBusy_SeqSave(is_submitted)) {
 		return SSLM_BUSY;  // design Sec4.2's own state table, unchanged policy.
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
-	// Multi-row plan §4.5: refused while a chunk is open, nothing written. SSLM_GPU_ROWS_CHUNK_OPEN is MR3's
-	// branch-provisional status (§3.7); until it exists the refusal is SSLM_BUSY.
-	if (RowsChunkOpen(seq)) return SSLM_BUSY;
-#endif
+	// Multi-row plan §4.5: refused while a chunk is open, nothing written (§3.7's branch-provisional status).
+	if (RowsChunkOpen(seq)) return SSLM_GPU_ROWS_CHUNK_OPEN;
 	// Paged KV (G5, §4 item 10's writer rule): a pooled sequence saves 'SLM6', gathered from the pool's
 	// host mirror through its table; a dedicated sequence keeps saving 'SLM5', below, unchanged. A
 	// too-small buffer reports the required size and returns the status the 'SLM5' save returns.
@@ -3863,12 +3867,10 @@ SslmGpuStatus sslm_gpu_seq_resetImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle*
 	if (!superslm_gpu::CallProceedsOrBusy_SeqReset(is_submitted)) {
 		return SSLM_BUSY;  // design Sec4.2's own state table, unchanged policy.
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	// Multi-row plan §4.6: reset closes an open chunk (its row set back to the free list); the handle then
 	// equals a fresh reset handle.
 	RowsDropChunk(seq);
 	seq->last_rows_committed = 0;
-#endif
 	SslmGpuStatus reset_status = SSLM_OK;
 	std::fill(seq->hidden_codes.begin(), seq->hidden_codes.end(), 0);
 	seq->hidden_scale = superslm::CarriedScale{};
@@ -4871,9 +4873,7 @@ SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
 	    dispatch_budget < 1) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
-#if defined(SUPERSLM_MULTIROW_WIDE)
 	if (RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6
-#endif
 	// EntrySubmitGuard (§4.4): reaches the singleton; scope by holder; before the loop.
 	if (const SslmGpuStatus g = EntrySubmitGuard(ScopeForHolder(seq), GuardDevice::kReachesSingleton);
 	    g != SSLM_OK) {
@@ -6471,9 +6471,7 @@ SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx,
                                               SslmGpuSequenceHandle* seq,
                                               int32_t schema) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] {
-#if defined(SUPERSLM_MULTIROW_WIDE)
 		if (seq != nullptr && RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6
-#endif
 		return SslmGpuSeqSetSchemaForG5BridgeImpl(ctx, seq, schema);
 	});
 }
@@ -6493,9 +6491,7 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx,
                                                 SslmGpuSequenceHandle* seq,
                                                 int32_t* token) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] {
-#if defined(SUPERSLM_MULTIROW_WIDE)
 		if (seq != nullptr && RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6
-#endif
 		return SslmGpuSeqFinishTokenForG5BridgeImpl(ctx, seq, token);
 	});
 }
@@ -6504,9 +6500,7 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx,
                                                   const int32_t* tokens, int32_t count,
                                                   uint32_t budget) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] {
-#if defined(SUPERSLM_MULTIROW_WIDE)
 		if (seq != nullptr && RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6
-#endif
 		return SslmGpuSeqPrefillPromptForG5BridgeImpl(ctx, seq, tokens, count, budget);
 	});
 }
@@ -6514,9 +6508,7 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx,
                                                SslmGpuSequenceHandle* seq, int32_t token,
                                                uint32_t budget, int32_t* out_token) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] {
-#if defined(SUPERSLM_MULTIROW_WIDE)
 		if (seq != nullptr && RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6
-#endif
 		return SslmGpuSeqDecodeStepForG5BridgeImpl(ctx, seq, token, budget, out_token);
 	});
 }
@@ -6524,9 +6516,7 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(
     SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, const int32_t* tokens, int32_t count,
     uint32_t budget, int32_t* consumed) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] {
-#if defined(SUPERSLM_MULTIROW_WIDE)
 		if (seq != nullptr && RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6
-#endif
 		return SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(
 		    ctx, seq, tokens, count, budget, consumed);
 	});
@@ -6615,9 +6605,7 @@ SslmGpuStatus sslm_gpu_prefix_release(SslmGpuContext* ctx, SslmGpuPrefixHandle* 
 SslmGpuStatus sslm_gpu_seq_adopt_prefix(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                         SslmGpuPrefixHandle* prefix) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] {
-#if defined(SUPERSLM_MULTIROW_WIDE)
 		if (seq != nullptr && RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6
-#endif
 		return sslm_gpu_seq_adopt_prefixImpl(ctx, seq, prefix);
 	});
 }
@@ -6821,10 +6809,9 @@ void SslmGpuDeviceLogitsBundleDestroyForTest(SslmGpuDeviceLogitsBundleForTest* b
 #endif  // SUPERSLM_GPU_ALLOC_FAULT_INJECTION
 
 // -------------------------------------------------------------------------------------------------
-// Multi-row GPU plan (rev 1.3.2), slice MR1: the one-layer smoke (multirow_wide.h). Test-only: compiled
-// only under SUPERSLM_MULTIROW_WIDE, which no shipped target defines.
+// Multi-row GPU plan (rev 1.3.2): the K/V view helpers the recorder's close shares with MR1's one-layer smoke
+// (multirow_wide.h). The smoke itself is test-only, under SUPERSLM_MULTIROW_WIDE.
 // -------------------------------------------------------------------------------------------------
-#if defined(SUPERSLM_MULTIROW_WIDE)
 #include <limits>
 
 #include "shaders/kv_page_addr_model.h"
@@ -6849,6 +6836,7 @@ size_t Mr1KvRowOffset(const superslm::KvPageView& v, uint32_t layer, size_t half
 	                                                static_cast<size_t>(position));
 }
 
+#if defined(SUPERSLM_MULTIROW_WIDE)
 // The handle's state as a submission sees it (SubmitOneSequenceDecode syncs these four fields into
 // live_state first), with its hidden codes copied into `codes`.
 superslm::SequenceLayerState Mr1SnapshotState(SslmGpuSequenceHandle* seq, std::vector<int8_t>* codes) {
@@ -6873,9 +6861,11 @@ SslmGpuStatus Mr1DecodeAndDrain(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
 	if (!ready) return SSLM_DEVICE_LOST;
 	return slice;
 }
+#endif  // SUPERSLM_MULTIROW_WIDE
 
 }  // namespace
 
+#if defined(SUPERSLM_MULTIROW_WIDE)
 SslmGpuStatus sslm_gpu_test_only_mr1_wide_one_layer_smokeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* ref,
                                                               SslmGpuSequenceHandle* wide,
                                                               const SslmGpuAdapterHandle* adapter,
@@ -7040,11 +7030,12 @@ SslmGpuStatus sslm_gpu_test_only_mr1_wide_one_layer_smoke(SslmGpuContext* ctx, S
 		                                                       variant_h, out);
 	});
 }
+#endif  // SUPERSLM_MULTIROW_WIDE
 
 // -------------------------------------------------------------------------------------------------
-// Multi-row GPU plan (rev 1.3.2), slice MR2: the chunk on the handle (§3.4), the close (§3.5), the entry snapshot
-// and rollback (§3.6), and the internal entry in §4.1's shapes (multirow_wide.h). Test-only until MR3 publishes
-// the verbs: compiled only under SUPERSLM_MULTIROW_WIDE.
+// Multi-row GPU plan (rev 1.3.2): the chunk on the handle (§3.4), the close (§3.5), the entry snapshot and
+// rollback (§3.6), built at MR2; the public verbs of §4.1 and §4.2 (include/superslm/gpu_1p0.h), published at
+// MR3. Plan §8's seams, at the end, are test-only (SUPERSLM_MULTIROW_WIDE).
 //
 // What the recorder leaves on the handle is what the one-row twin leaves (the plan's grading rule): the close
 // reads every real row back, decides k and the footprint row f, and only then commits (CommitPrefix), so a
@@ -7301,9 +7292,14 @@ SslmGpuStatus RowsDecodeStep(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, co
 			rc.free_sets.pop_back();
 		}
 	}
+#if defined(SUPERSLM_MULTIROW_WIDE)
+	// Cell 5.3's test-only trigger (sslm_gpu_test_only_mr2_arm_slice_alloc_failure).
 	const int32_t slice_index = static_cast<int32_t>(c.slice_ends.size());
 	int32_t armed = slice_index;
 	const bool inject = rc.armed_failure_slice.compare_exchange_strong(armed, -1);
+#else
+	const bool inject = false;
+#endif
 	superslm_gpu::GpuRowsSlice slice;
 	slice.entry_rows = first_slice ? entry_rows.data() : nullptr;
 	slice.real_rows = c.rows;
@@ -7444,7 +7440,7 @@ void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_statu
 
 }  // namespace
 
-// ---- The internal entry (plan §4.1, §4.2) ----
+// ---- The public verbs (plan §4.1, §4.2; include/superslm/gpu_1p0.h) ----
 
 SslmGpuStatus sslm_gpu_seq_embed_rowsImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, const SslmGpuRowsSpec* spec,
                                           int32_t* out_admitted) {
@@ -7458,8 +7454,8 @@ SslmGpuStatus sslm_gpu_seq_embed_rowsImpl(SslmGpuContext* ctx, SslmGpuSequenceHa
 	SslmGpuModelHandle* model = seq->model;
 	const uint32_t L = model->num_hidden_layers;
 	if ((seq->layer_index != 0 && seq->layer_index != L) || seq->rows_chunk != nullptr) return SSLM_BUSY;
-	// 4. A bad spec: the argument status (§3.7: main's argument-fault status on the branch). Only PROMPT exists at
-	// MR2 (SCHEMA_FORCED is a bad spec before R-17, EXACT_DRAFT before MR5), so every flag is a bad one.
+	// 4. A bad spec: the argument status (§3.7: main's argument-fault status on the branch). Only PROMPT exists on
+	// the branch (SCHEMA_FORCED is a bad spec before R-17, EXACT_DRAFT before MR5), so every flag is a bad one.
 	constexpr uint32_t kSpecV1 = static_cast<uint32_t>(sizeof(SslmGpuRowsSpec));
 	if (spec == nullptr || out_admitted == nullptr || spec->struct_size < kSpecV1 || spec->tokens == nullptr ||
 	    spec->count < 1 || spec->count > SSLM_GPU_MAX_ROWS || spec->kind != SSLM_GPU_ROWS_PROMPT || spec->flags != 0u) {
@@ -7470,14 +7466,14 @@ SslmGpuStatus sslm_gpu_seq_embed_rowsImpl(SslmGpuContext* ctx, SslmGpuSequenceHa
 		if (spec->tokens[r] < 0 || spec->tokens[r] >= model->vocab_size) return SSLM_TOKEN_ID_OUT_OF_RANGE;
 	}
 	// Admission: the longest prefix within the context's headroom and, pooled, the budget limit. Zero admitted
-	// returns the cap's status: the one-row path's own at the cap (SSLM_SEQUENCE_REJECTED) or at the limit
-	// (SSLM_GPU_KV_BUDGET_EXCEEDED) until MR3 appends the branch-provisional statuses (§3.7).
+	// returns the cap's status: §3.7's branch-provisional SSLM_GPU_ROWS_CAP_EXCEEDED at the cap (1.17's
+	// context-cap status after R-17), SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below it.
 	const int64_t p0 = seq->context_length;
 	const int64_t headroom = seq->context_cap - p0;
 	const int64_t limit_room =
 	    (seq->pool != nullptr && seq->limit < seq->context_cap) ? seq->limit - p0 : std::numeric_limits<int64_t>::max();
 	const int64_t admitted = std::max<int64_t>(0, std::min<int64_t>({spec->count, headroom, limit_room}));
-	if (admitted == 0) return headroom <= 0 ? SSLM_SEQUENCE_REJECTED : SSLM_GPU_KV_BUDGET_EXCEEDED;
+	if (admitted == 0) return headroom <= 0 ? SSLM_GPU_ROWS_CAP_EXCEEDED : SSLM_GPU_KV_BUDGET_EXCEEDED;
 	const uint32_t M = static_cast<uint32_t>(admitted);
 
 	auto chunk = std::make_unique<GpuRowsChunk>();
@@ -7541,6 +7537,7 @@ SslmGpuStatus sslm_gpu_seq_last_rows_committedImpl(const SslmGpuSequenceHandle* 
 	return SSLM_OK;
 }
 
+#if defined(SUPERSLM_MULTIROW_WIDE)
 SslmGpuStatus sslm_gpu_test_only_mr2_seamsImpl(SslmGpuContext* ctx, SslmGpuMr2Seams* out) {
 	if (!ctx || !out || out->struct_size < sizeof(SslmGpuMr2Seams)) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	SslmGpuMr2Seams s{};
@@ -7631,6 +7628,8 @@ SslmGpuStatus sslm_gpu_test_only_mr2_arm_slice_alloc_failureImpl(SslmGpuContext*
 	return SSLM_OK;
 }
 
+#endif  // SUPERSLM_MULTIROW_WIDE
+
 SslmGpuStatus sslm_gpu_seq_embed_rows(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, const SslmGpuRowsSpec* spec,
                                       int32_t* out_admitted) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_seq_embed_rowsImpl(ctx, seq, spec, out_admitted); });
@@ -7644,6 +7643,7 @@ SslmGpuStatus sslm_gpu_seq_rows_open(const SslmGpuSequenceHandle* seq, int32_t* 
 SslmGpuStatus sslm_gpu_seq_last_rows_committed(const SslmGpuSequenceHandle* seq, int32_t* out_rows) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_seq_last_rows_committedImpl(seq, out_rows); });
 }
+#if defined(SUPERSLM_MULTIROW_WIDE)
 SslmGpuStatus sslm_gpu_test_only_mr2_seams(SslmGpuContext* ctx, SslmGpuMr2Seams* out) noexcept {
 	return InvokeGpuApiBoundary(__func__, [&] { return sslm_gpu_test_only_mr2_seamsImpl(ctx, out); });
 }

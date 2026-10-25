@@ -302,7 +302,15 @@ enum class SslmGpuStatus : uint32_t {
     /* sslm_gpu_prefix_restore (1.16.0, unreleased): the 'SPX1' blob was written by another engine version or on
      * another adapter (its VendorId or DeviceId differs from this context's). Appended LAST, as every
      * GPU status before it; nothing changes and nothing is drawn. Exported, and unreleased until 1.16.0. */
-    SSLM_RESTORE_PRODUCER_MISMATCH
+    SSLM_RESTORE_PRODUCER_MISMATCH,
+    /* BRANCH-PROVISIONAL (multi-row GPU passes, unreleased; this ordinal is not stable). sslm_gpu_seq_embed_rows
+     * found no context headroom: the sequence is at its context cap, so not one row is admitted. Nothing
+     * changes. Becomes 1.17's context-cap status when the branch rebases onto 1.17.0. */
+    SSLM_GPU_ROWS_CAP_EXCEEDED,
+    /* BRANCH-PROVISIONAL (multi-row GPU passes, unreleased; this ordinal is not stable). sslm_gpu_seq_save on
+     * a sequence with an open row chunk (sslm_gpu_seq_embed_rows): nothing is written. Close the chunk (finish
+     * its layers, or sslm_gpu_seq_rows_abandon) and save again. Takes the next free ordinal at release. */
+    SSLM_GPU_ROWS_CHUNK_OPEN
 };
 
 /* Output handles: sslm_gpu_context_create, sslm_gpu_model_map, sslm_gpu_adapter_map,
@@ -594,6 +602,101 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
                               int32_t block,
                               int32_t* out_ready,
                               SslmGpuStatus* out_status) noexcept;
+
+/* ============================================================================
+ * Multi-row prompt reading (multi-row GPU passes; unreleased, on the multi-row branch until 1.21.0).
+ * Up to SSLM_GPU_MAX_ROWS prompt tokens pass through each layer together: one weight read and one
+ * dispatch per site for all of them, instead of one token at a time. The result is byte-identical
+ * to feeding the same tokens one at a time through sslm_gpu_seq_embed_token and the decode step.
+ * ============================================================================
+ *
+ * sslm_gpu_seq_embed_rows opens a ROW CHUNK on `seq`: it embeds `spec->tokens[0..admitted)` as rows at
+ * positions p0 .. p0 + admitted - 1 (p0 = the sequence's context length). It is host-only: it submits
+ * nothing and leaves the handle Idle. Checked in this order; the first failing check decides, and
+ * nothing is written on any refusal:
+ *   1. a null context or sequence, or a sequence of another context: SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+ *   2. the sequence Submitted, or another claimed verb running on it: SSLM_BUSY;
+ *   3. the sequence mid-token (some but not all layers of a one-row token run), or a chunk already
+ *      open: SSLM_BUSY;
+ *   4. a bad spec: SSLM_SEQUENCE_KV_BUFFER_MISMATCH (the branch's argument status). A bad spec is a
+ *      null `out_admitted`, a null spec or token pointer, `struct_size` below sizeof(SslmGpuRowsSpec), `count` outside
+ *      1..SSLM_GPU_MAX_ROWS, a kind other than SSLM_GPU_ROWS_PROMPT (SCHEMA_FORCED and EXACT_DRAFT are
+ *      not available yet), or any flag set;
+ *   5. a token outside the vocabulary: SSLM_TOKEN_ID_OUT_OF_RANGE.
+ * A larger `struct_size` is accepted and the bytes past sizeof(SslmGpuRowsSpec) are never read.
+ * Admission: `*out_admitted` receives the longest admitted prefix of the tokens, capped by the
+ * context's headroom and, for a budgeted (pooled) sequence, by its budget limit. When nothing fits,
+ * the call refuses with the cap's status and writes nothing: SSLM_GPU_ROWS_CAP_EXCEEDED at the context
+ * cap, SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below the cap.
+ * Effects: the sequence's ready-for-logits state is cleared (an abandon or failure restores it); its
+ * schema binding and walk state are untouched. A count of 1 behaves exactly as sslm_gpu_seq_embed_token
+ * followed by a one-row token.
+ *
+ * ADVANCING. sslm_decode_step_gpu advances every row of the open chunk by
+ * floor(dispatch_budget / DispatchesPerLayer) whole layers (the per-layer count is the model's, as for
+ * one row), capped at the last layer. A budget below one layer returns SSLM_DISPATCH_BUDGET_TOO_SMALL
+ * with the chunk unchanged. Each call is one submission; sslm_gpu_ready finishes it, and the
+ * sslm_gpu_ready that finishes the last layer CLOSES the chunk: every admitted row is committed (its
+ * K/V rows, the residual of the last row, the context length p0 + admitted) and the handle equals one
+ * that read the same tokens one at a time. The last row rests at full depth with no finish, as a
+ * one-row token does after its last layer; ready-for-logits stays clear. The adapter passed with the
+ * slice that runs layer 0 is fixed for the chunk: a different adapter on a later slice returns
+ * SSLM_BUSY with the chunk unchanged. sslm_decode_step_batch_gpu accepts members with open chunks:
+ * each takes whole layers from the batch's running budget at the model's per-layer count, as a plain
+ * member does, and is submitted and drained in its turn (one submission per member, as for every
+ * member of the batch).
+ *
+ * A GUARD REFUSAL of row j (the first refused row) is reported by the closing sslm_gpu_ready as
+ * SSLM_SEQUENCE_REJECTED in its `out_status`. Rows 0..j-1 are committed; the residual and layer index
+ * are unspecified, and the sequence must be reset before reuse, as after a prompt-bridge refusal.
+ * sslm_gpu_seq_last_rows_committed then reads j. A device or allocation failure in any slice
+ * (SSLM_DEVICE_LOST, SSLM_GPU_ALLOCATION_FAILED) rolls the chunk back: the handle is restored to its
+ * state before sslm_gpu_seq_embed_rows and the chunk is closed. A pooled sequence's page or budget
+ * refusal from the decode step (SSLM_GPU_KV_POOL_EXHAUSTED, SSLM_GPU_KV_BUDGET_EXCEEDED) changes nothing
+ * and leaves the chunk open, as it leaves a one-row token.
+ *
+ * sslm_gpu_seq_rows_abandon restores the state before sslm_gpu_seq_embed_rows and closes the chunk.
+ * A null context or sequence, or a sequence of another context: SSLM_SEQUENCE_KV_BUFFER_MISMATCH. A
+ * Submitted sequence, or another claimed verb running on it: SSLM_BUSY. No chunk open: SSLM_OK, no
+ * change.
+ *
+ * sslm_gpu_seq_rows_open writes the open chunk's row count to `*out_rows` (0 when none);
+ * sslm_gpu_seq_last_rows_committed writes the rows the last close committed (the admitted count after a
+ * clean close, j after a refusal, 0 after an abandon, a rollback, a reset, on a fresh or restored
+ * sequence). A null sequence or out pointer: SSLM_SEQUENCE_KV_BUFFER_MISMATCH. Neither takes a claim.
+ *
+ * WHILE A CHUNK IS OPEN the other verbs on that sequence behave as follows. sslm_gpu_seq_embed_token,
+ * sslm_gpu_seq_bind_adapter, sslm_gpu_seq_adopt_prefix and every G5 bridge entry point
+ * (SslmGpuSeqSetSchemaForG5Bridge, SslmGpuSeqPrefillPromptForG5Bridge,
+ * SslmGpuSeqPrefillSchemaContentForG5Bridge, SslmGpuSeqFinishTokenForG5Bridge,
+ * SslmGpuSeqDecodeStepForG5Bridge) return SSLM_BUSY with nothing changed. sslm_gpu_seq_save returns
+ * SSLM_GPU_ROWS_CHUNK_OPEN with nothing written (it succeeds again once the chunk closes).
+ * sslm_gpu_seq_read_prefill_final_hidden is admitted and returns the snapshot unchanged.
+ * sslm_gpu_seq_reset closes the chunk (the handle then equals a freshly reset one), and
+ * sslm_gpu_seq_release frees it. A restored sequence never has a chunk.
+ *
+ * Claims: sslm_gpu_seq_embed_rows, sslm_gpu_seq_rows_abandon, the decode step and each batch member take
+ * the per-handle claim (see the decode calls above). sslm_gpu_ready, save, reset, release and the two
+ * queries take none; serializing them against the claimed verbs on one handle stays the caller's job. */
+#define SSLM_GPU_MAX_ROWS 8
+typedef enum {
+    SSLM_GPU_ROWS_PROMPT = 0,
+    SSLM_GPU_ROWS_SCHEMA_FORCED = 1,  /* reserved: a bad spec on this branch */
+    SSLM_GPU_ROWS_EXACT_DRAFT = 2     /* reserved: a bad spec on this branch */
+} SslmGpuRowsKind;
+#define SSLM_GPU_ROWS_FIRST_PREWALKED 0x1u  /* reserved: a bad spec on this branch */
+typedef struct SslmGpuRowsSpec {
+    uint32_t       struct_size;  /* sizeof(SslmGpuRowsSpec); larger accepted, the tail ignored */
+    int32_t        kind;         /* SslmGpuRowsKind */
+    const int32_t* tokens;
+    int32_t        count;        /* 1..SSLM_GPU_MAX_ROWS */
+    uint32_t       flags;        /* 0 */
+} SslmGpuRowsSpec;
+SslmGpuStatus sslm_gpu_seq_embed_rows(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, const SslmGpuRowsSpec* spec,
+                                      int32_t* out_admitted) noexcept;
+SslmGpuStatus sslm_gpu_seq_rows_abandon(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept;
+SslmGpuStatus sslm_gpu_seq_rows_open(const SslmGpuSequenceHandle* seq, int32_t* out_rows) noexcept;
+SslmGpuStatus sslm_gpu_seq_last_rows_committed(const SslmGpuSequenceHandle* seq, int32_t* out_rows) noexcept;
 
 /* ============================================================================
  * G5: schema-constrained GPU decoding -- PROMOTED to this shipped surface (design Sec14.2).
