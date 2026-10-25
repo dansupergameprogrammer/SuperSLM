@@ -27,7 +27,8 @@
 //   6.7   every row saturates without refusing: counters equal the twin's, and every twin row did saturate
 //   6.8   CPU parity: a prompt read by chunks then greedy decode equals the CPU engine's tokens
 //   1.1r  (MR2 part of MR3's 1.1, MX8's target) rollback paths on a pooled sequence over an adopted prefix: after
-//         5.3's failure and after rows_abandon the pool's free and shared counts and the blob return to entry
+//         5.3's failure and after rows_abandon the pool's free and shared counts, the blob and the holder's mapped page
+//         count (sslm_gpu_test_only_mr2_holder_mapped; the entry is on a page boundary) return to entry
 //   4.13  [box] context create time is printed as a diagnostic only
 //
 // Usage: mr2_cells.exe --model=PATH [--fixtures=DIR] [--adapter=PATH] [--shaders=DIR] [--cells=6.1,6.6,...]
@@ -100,6 +101,18 @@ int32_t RowsOpen(SslmGpuSequenceHandle* s) {
 int32_t LastCommitted(SslmGpuSequenceHandle* s) {
 	int32_t r = -1;
 	return sslm_gpu_seq_last_rows_committed(s, &r) == S::SSLM_OK ? r : -1;
+}
+// prefix_prefill fills one token per call (it reports how many in `used`), so a prefix of n tokens is n calls.
+bool PrefixFill(World& w, SslmGpuPrefixHandle* pre, const std::vector<int32_t>& toks, uint32_t budget) {
+	for (size_t done = 0; done < toks.size();) {
+		int32_t used = 0;
+		if (sslm_gpu_prefix_prefill(w.ctx, pre, toks.data() + done, static_cast<int32_t>(toks.size() - done), 0, budget, &used) !=
+		        S::SSLM_OK ||
+		    used <= 0)
+			return false;
+		done += static_cast<size_t>(used);
+	}
+	return true;
 }
 S EmbedRows(World& w, SslmGpuSequenceHandle* s, const int32_t* toks, int32_t m, int32_t* admitted) {
 	SslmGpuRowsSpec spec{sizeof(SslmGpuRowsSpec), SSLM_GPU_ROWS_PROMPT, toks, m, 0u};
@@ -393,9 +406,7 @@ void Cell46b(const mr2::Model& m) {
 				SslmGpuPrefixHandle* pre = nullptr;
 				if (sslm_gpu_prefix_begin(w.ctx, w.model, pool, 2 * B, &pre) != S::SSLM_OK) return nullptr;
 				const std::vector<int32_t> pt = Stream(0, B + B / 2, V, 5);
-				int32_t used = 0;
-				if (sslm_gpu_prefix_prefill(w.ctx, pre, pt.data(), static_cast<int32_t>(pt.size()), 0, Full(m), &used) != S::SSLM_OK ||
-				    sslm_gpu_prefix_freeze(w.ctx, pre) != S::SSLM_OK)
+				if (!PrefixFill(w, pre, pt, Full(m)) || sslm_gpu_prefix_freeze(w.ctx, pre) != S::SSLM_OK)
 					return nullptr;
 				// The second sequence holds the shared prefix (adopted) plus rows of its own.
 				SslmGpuSequenceHandle* other = w.Pooled(pool, 2 * B);
@@ -895,9 +906,7 @@ void Cell11r(const mr2::Model& m) {
 	// Two whole pages, so the entry sits at 2B on a page boundary and every chunk's rows map a fresh page that a
 	// rollback must unmap (at B + 3 the rows stayed inside the page the entry already held: MX8 was invisible).
 	const std::vector<int32_t> pt = Stream(0, 2 * B, V, 27);
-	int32_t used = 0;
-	Check(sslm_gpu_prefix_begin(w.ctx, w.model, pool, 2 * B, &pre) == S::SSLM_OK &&
-	      sslm_gpu_prefix_prefill(w.ctx, pre, pt.data(), static_cast<int32_t>(pt.size()), 0, Full(m), &used) == S::SSLM_OK &&
+	Check(sslm_gpu_prefix_begin(w.ctx, w.model, pool, 2 * B, &pre) == S::SSLM_OK && PrefixFill(w, pre, pt, Full(m)) &&
 	      sslm_gpu_prefix_freeze(w.ctx, pre) == S::SSLM_OK, "prefix");
 	SslmGpuSequenceHandle* a = w.Pooled(pool, 4 * B);
 	Check(a && sslm_gpu_seq_adopt_prefix(w.ctx, a, pre) == S::SSLM_OK, "adopt");
@@ -905,6 +914,9 @@ void Cell11r(const mr2::Model& m) {
 	SslmGpuKvPoolStats e{};
 	e.struct_size = sizeof e;
 	sslm_gpu_kv_pool_stats(pool, &e);
+	uint32_t mapped_entry = 0, grew = 0;
+	Check(sslm_gpu_test_only_mr2_holder_mapped(a, &mapped_entry) == S::SSLM_OK && mapped_entry == 2,
+	      F("holder maps %u pages at entry (want the prefix's 2)", mapped_entry));
 	std::mt19937 rng(77);
 	for (int cyc = 0; cyc < 40; ++cyc) {
 		const int M = 1 + static_cast<int>(rng() % 8);
@@ -917,6 +929,9 @@ void Cell11r(const mr2::Model& m) {
 		const uint32_t stop = rng() % m.layers();
 		S last = S::SSLM_OK;
 		for (uint32_t l = 0; l < stop && last == S::SSLM_OK && RowsOpen(a) > 0; ++l) last = mr2::Slice(w, a, m.dpl());
+		uint32_t mapped_open = 0;
+		sslm_gpu_test_only_mr2_holder_mapped(a, &mapped_open);
+		if (mapped_open > mapped_entry) ++grew;
 		if (RowsOpen(a) > 0) Check(sslm_gpu_seq_rows_abandon(w.ctx, a) == S::SSLM_OK, F("cycle %d abandon", cyc));
 		sslm_gpu_test_only_mr2_arm_slice_alloc_failure(w.ctx, -1);
 		SslmGpuKvPoolStats now{};
@@ -926,7 +941,14 @@ void Cell11r(const mr2::Model& m) {
 		      F("cycle %d (%s): free %u shared %u, entry %u/%u", cyc, fail_path ? "failure" : "abandon", now.free_pages,
 		        now.shared_pages, e.free_pages, e.shared_pages));
 		BlobEq(Blob(w, a, "1.1r"), entry, F("cycle %d back at entry", cyc));
+		// MX8: the rollback unmapped the page the chunk mapped (pool counts cannot show it; see mr2_entry.h).
+		uint32_t mapped = 0;
+		Check(sslm_gpu_test_only_mr2_holder_mapped(a, &mapped) == S::SSLM_OK && mapped == mapped_entry,
+		      F("cycle %d (%s): holder maps %u pages after the rollback, entry %u", cyc, fail_path ? "failure" : "abandon",
+		        mapped, mapped_entry));
 	}
+	// Not vacuous: some cycles mapped a page before rolling back.
+	Check(grew > 0, "no cycle mapped a page past the entry, so no rollback had one to unmap");
 	sslm_gpu_prefix_release(w.ctx, pre);
 }
 

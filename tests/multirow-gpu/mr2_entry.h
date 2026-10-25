@@ -81,3 +81,8 @@ SslmGpuStatus sslm_gpu_test_only_mr2_device_kv(SslmGpuContext* ctx, SslmGpuKvPoo
 // 5.3: the next widened slice whose index within its chunk is `slice_k` (0 = the slice that runs layer 0) fails
 // its allocation as a live device does (SSLM_GPU_ALLOCATION_FAILED), once. -1 disarms.
 SslmGpuStatus sslm_gpu_test_only_mr2_arm_slice_alloc_failure(SslmGpuContext* ctx, int32_t slice_k) noexcept;
+
+// 1.1r (MX8): the number of pages `seq`'s holder maps now (0 for a dedicated sequence), chunk open or not. A rollback
+// must leave it where the chunk's entry found it: pool counts cannot show it (a budget reserves its pages up front)
+// and HolderUnmapTail returns a page to the holder's reserve, so the next map draws the same page.
+SslmGpuStatus sslm_gpu_test_only_mr2_holder_mapped(const SslmGpuSequenceHandle* seq, uint32_t* out_pages) noexcept;
