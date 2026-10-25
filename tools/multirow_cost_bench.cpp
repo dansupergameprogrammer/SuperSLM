@@ -1,26 +1,31 @@
-// Multi-row GPU plan rev 1.3.2, cell 10.2 (slice MR4): the cost table's box bench. It measures C(M), the wall time of
+// Multi-row GPU plan rev 1.3.2, cell 10.2 (slice MR4): the cost table's box bench. It measures C(M), the GPU time of
 // one whole-depth pass of an M-row chunk, for M = 1..8 through the published verbs, and writes the table header
-// include/superslm/gpu_rows_cost_table.h in its own layout (kGpuRowsCostTableMeasured = true), and the CSV that
-// tests/multirow-gpu/mr4_box.py check102 grades.
+// include/superslm/gpu_rows_cost_table.h in its own layout, and the CSV that tests/multirow-gpu/mr4_box.py check102
+// grades.
 //
 // Per M: 1 warm-up and --runs (30) timed runs. A run resets one dedicated sequence, feeds --p0 prompt tokens one row
-// at a time (untimed), then times:
-//   C   sslm_gpu_seq_embed_rows(PROMPT, M) + one sslm_decode_step_gpu of L x DispatchesPerLayer + sslm_gpu_ready(block):
-//       the chunk from opening to its close (M = 1 is the one-row body);
-//   F   SslmGpuSeqFinishTokenForG5Bridge on the closed chunk: the last row's finish, one row's logits and token.
-// Filed per M: the median, p95 and max of C, and of the "with logits" column C + M x F.
+// at a time (untimed), then:
+//   C      sslm_gpu_seq_embed_rows(PROMPT, M) + one sslm_decode_step_gpu of L x DispatchesPerLayer + sslm_gpu_ready
+//          (block): the chunk from opening to its close, one submission (M = 1 is the one-row body). C is that
+//          submission's GPU window, superslm_gpu::LastCallTiming().gpu_busy_ms, read after the close: the recorder's
+//          timestamp pair around its first and last dispatch, on the GPU's clock. That is what the table prices
+//          (GpuRowCostMs is GPU work), so r(M) is built from it (MR4 review S2, ruling 18). The wall time of the same
+//          span (host embed, recording, submission, fence wait, read-back, commit) is filed beside it as information.
+//   F      SslmGpuSeqFinishTokenForG5Bridge on the closed chunk: the last row's finish, wall time.
 //
-// The logits column is a STAND-IN until MR5 widens the logits stage (plan §15 item 10): this build has no per-row
-// logits for a chunk, so G(M) is taken as M one-row finishes. That overstates G(M) if MR5's stage amortizes across
-// rows; the header records it as measured from the stand-in.
+// The logits column is INFORMATION ONLY until MR5 (ruling 18a): this build has no per-row logits stage for a chunk and
+// no GPU timing for the finish's logits, so the with-logits figure is the wall stand-in C_wall + M x F. g(M) is never
+// derived from it: the written header carries g's estimates unchanged (kGpuRowsLogitsRatioMeasured = false). MR5's
+// widened logits stage brings its own GPU timing bracket.
 //
-// The table: C(M) at its MAXIMUM over the timed runs (MR-D15); r(M) = ceil(1000 x maxC(M) / maxC(1)) and
-// g(M) = ceil(1000 x (max(C + M x F) - maxC(M)) / maxC(1)), integer per-mille, rounded up (costs round up, §5.1), the
-// same arithmetic as mr4_box.py check102.
+// The table: C(M) at its MAXIMUM over the timed runs (MR-D15); r(M) = ceil(1000 x maxC_gpu(M) / maxC_gpu(1)), integer
+// per-mille, rounded up (costs round up, §5.1).
 //
-// The CSV (--csv): `model,M,logits,runs,warmup,median_us,p95_us,max_us`, one row per M and logits 0 (C(M)) and 1 (the
-// with-logits column), in whole us (rounded up). --model-name names the model column (mr4_box.py: 0.5B, 1.5B); a
-// second run appends with --csv-append. A box run is 30 runs and 1 warm-up, the defaults.
+// The CSV (--csv): `model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us`,
+// one row per M and logits 0 and 1, whole us rounded up. logits 0: the timing columns are C's GPU time (clock `gpu`),
+// the wall_* columns its wall time. logits 1: the wall stand-in in both (clock `wall`, information only, never a
+// source for g). --model-name names the model column (mr4_box.py: 0.5B, 1.5B); a second run appends with
+// --csv-append. A box run is 30 runs and 1 warm-up, the defaults.
 //
 // Usage: multirow_cost_bench --model=PATH [--shaders=DIR] [--adapter=PATH] [--device-head] [--runs=30] [--warmup=1]
 //                            [--p0=16] [--out=PATH] [--json=PATH] [--csv=PATH [--csv-append]] [--model-name=NAME]
@@ -45,6 +50,7 @@
 
 #include "superslm/gpu_1p0.h"
 #include "superslm/gpu_port.h"
+#include "superslm/gpu_rows_cost_table.h"  // g(M)'s estimates, carried into the written table
 #include "superslm/model.h"
 
 using enum SslmGpuStatus;
@@ -95,7 +101,7 @@ SslmGpuStatus PromptRow(const Env& e, int32_t tok) {
 }
 
 struct Sample {
-	double c_us = 0, f_us = 0;
+	double c_us = 0, c_gpu_us = 0, f_us = 0;  // C's wall and GPU time, the finish's wall time
 };
 
 // One run at M rows: the timed chunk and the timed finish after it.
@@ -121,8 +127,13 @@ bool Run(const Env& e, uint32_t m, int p0, Sample* s, std::string* why) {
 	SslmGpuStatus st = sslm_gpu_seq_embed_rows(e.ctx, e.seq, &spec, &admitted);
 	if (st == SSLM_OK) st = StepDrain(e, e.L * e.dpl);
 	s->c_us = UsSince(t0);
+	s->c_gpu_us = superslm_gpu::LastCallTiming().gpu_busy_ms * 1000.0;  // the close's submission (published at ready)
 	sslm_gpu_seq_last_rows_committed(e.seq, &committed);
 	sslm_gpu_seq_rows_open(e.seq, &open);
+	if (st == SSLM_OK && !(s->c_gpu_us > 0)) {
+		std::snprintf(buf, sizeof buf, "no GPU timing for the chunk (gpu_busy_ms %.4f): no timestamp support?", s->c_gpu_us / 1000.0);
+		return *why = buf, false;
+	}
 	if (st != SSLM_OK || admitted != static_cast<int32_t>(m) || committed != static_cast<int32_t>(m) || open != 0) {
 		std::snprintf(buf, sizeof buf, "chunk -> %d, admitted %d, committed %d, open %d", static_cast<int>(st), admitted,
 		              committed, open);
@@ -236,7 +247,7 @@ int main(int argc, char** argv) {
 
 	constexpr uint32_t kMaxM = SSLM_GPU_MAX_ROWS;
 	std::vector<Sample> samples[kMaxM + 1];
-	Stats c_stats[kMaxM + 1], cl_stats[kMaxM + 1], mf_stats[kMaxM + 1];
+	Stats c_stats[kMaxM + 1], cw_stats[kMaxM + 1], cl_stats[kMaxM + 1];  // C gpu, C wall, the wall stand-in
 	for (uint32_t m = 1; m <= kMaxM; ++m) {
 		for (int i = 0; i < warmup + runs; ++i) {
 			Sample s;
@@ -247,27 +258,26 @@ int main(int argc, char** argv) {
 			}
 			if (i >= warmup) samples[m].push_back(s);
 		}
-		std::vector<double> c, cl, mf;
+		std::vector<double> c, cw, cl;
 		for (const Sample& s : samples[m]) {
-			c.push_back(s.c_us);
-			mf.push_back(m * s.f_us);
+			c.push_back(s.c_gpu_us);
+			cw.push_back(s.c_us);
 			cl.push_back(s.c_us + m * s.f_us);
 		}
 		c_stats[m] = Summarize(c);
+		cw_stats[m] = Summarize(cw);
 		cl_stats[m] = Summarize(cl);
-		mf_stats[m] = Summarize(mf);
 	}
 
-	int64_t r[kMaxM + 1] = {0}, g[kMaxM + 1] = {0};
-	std::printf("\n  M | C(M) us median    p95      max | with logits (stand-in) median    p95      max | r(M) g(M)\n");
+	int64_t r[kMaxM + 1] = {0};
+	std::printf("\n  M | C(M) GPU us median    p95      max | wall median    p95      max | with logits, wall, info only: max | r(M)\n");
 	for (uint32_t m = 1; m <= kMaxM; ++m) {
 		r[m] = m == 1 ? 1000 : CeilPerMille(c_stats[m].max, c_stats[1].max);
-		g[m] = CeilPerMille(cl_stats[m].max - c_stats[m].max, c_stats[1].max);
-		std::printf("  %u | %13.0f %8.0f %8.0f | %29.0f %8.0f %8.0f | %4lld %4lld\n", m, c_stats[m].median,
-		            c_stats[m].p95, c_stats[m].max, cl_stats[m].median, cl_stats[m].p95, cl_stats[m].max,
-		            static_cast<long long>(r[m]), static_cast<long long>(g[m]));
+		std::printf("  %u | %17.0f %8.0f %8.0f | %11.0f %8.0f %8.0f | %33.0f | %4lld\n", m, c_stats[m].median,
+		            c_stats[m].p95, c_stats[m].max, cw_stats[m].median, cw_stats[m].p95, cw_stats[m].max, cl_stats[m].max,
+		            static_cast<long long>(r[m]));
 	}
-	std::printf("  port rule C(4) / (4 x C(1)) at the median: %.3f (MR0: <= 0.6)\n",
+	std::printf("  port rule C(4) / (4 x C(1)) on GPU time at the median: %.3f (MR0: <= 0.6); g(M) stays at its estimate\n",
 	            c_stats[4].median / (4.0 * c_stats[1].median));
 
 	if (!json_path.empty()) {
@@ -279,14 +289,18 @@ int main(int argc, char** argv) {
 		std::fprintf(f, "{\"L\": %u, \"p0\": %d, \"warmup\": %d, \"runs\": %d, \"device_head\": %s, \"rows\": [", e.L, p0,
 		             warmup, runs, device_head ? "true" : "false");
 		for (uint32_t m = 1; m <= kMaxM; ++m) {
-			std::fprintf(f, "%s\n {\"M\": %u, \"r_permille\": %lld, \"g_permille\": %lld, \"c_us\": [", m == 1 ? "" : ",", m,
-			             static_cast<long long>(r[m]), static_cast<long long>(g[m]));
+			std::fprintf(f, "%s\n {\"M\": %u, \"r_permille\": %lld, \"c_gpu_us\": [", m == 1 ? "" : ",", m,
+			             static_cast<long long>(r[m]));
+			for (size_t i = 0; i < samples[m].size(); ++i) std::fprintf(f, "%s%.1f", i ? ", " : "", samples[m][i].c_gpu_us);
+			std::fprintf(f, "], \"c_wall_us\": [");
 			for (size_t i = 0; i < samples[m].size(); ++i) std::fprintf(f, "%s%.1f", i ? ", " : "", samples[m][i].c_us);
 			std::fprintf(f, "], \"finish_us\": [");
 			for (size_t i = 0; i < samples[m].size(); ++i) std::fprintf(f, "%s%.1f", i ? ", " : "", samples[m][i].f_us);
 			std::fprintf(f, "], \"c\": {\"median\": %.1f, \"p95\": %.1f, \"max\": %.1f}", c_stats[m].median, c_stats[m].p95,
 			             c_stats[m].max);
-			std::fprintf(f, ", \"with_logits_standin\": {\"median\": %.1f, \"p95\": %.1f, \"max\": %.1f}}", cl_stats[m].median,
+			std::fprintf(f, ", \"c_wall\": {\"median\": %.1f, \"p95\": %.1f, \"max\": %.1f}", cw_stats[m].median, cw_stats[m].p95,
+			             cw_stats[m].max);
+			std::fprintf(f, ", \"with_logits_wall_info_only\": {\"median\": %.1f, \"p95\": %.1f, \"max\": %.1f}}", cl_stats[m].median,
 			             cl_stats[m].p95, cl_stats[m].max);
 		}
 		std::fprintf(f, "\n]}\n");
@@ -299,13 +313,16 @@ int main(int argc, char** argv) {
 			std::printf("FAIL cannot write %s\n", csv_path.c_str());
 			return 1;
 		}
-		if (!csv_append) std::fprintf(f, "model,M,logits,runs,warmup,median_us,p95_us,max_us\n");
+		if (!csv_append)
+			std::fprintf(f, "model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us\n");
 		auto up = [](double v) { return static_cast<long long>(CeilPerMille(v, 1000.0)); };  // whole us, rounded up
 		for (uint32_t m = 1; m <= kMaxM; ++m) {
 			for (int lg = 0; lg < 2; ++lg) {
-				const Stats& st = lg ? cl_stats[m] : c_stats[m];
-				std::fprintf(f, "%s,%u,%d,%d,%d,%lld,%lld,%lld\n", model_name.c_str(), m, lg, runs, warmup, up(st.median),
-				             up(st.p95), up(st.max));
+				const Stats& st = lg ? cl_stats[m] : c_stats[m];  // logits 1: the wall stand-in, information only
+				const Stats& wall = lg ? cl_stats[m] : cw_stats[m];
+				std::fprintf(f, "%s,%u,%d,%d,%d,%lld,%lld,%lld,%s,%lld,%lld,%lld\n", model_name.c_str(), m, lg, runs, warmup,
+				             up(st.median), up(st.p95), up(st.max), lg ? "wall" : "gpu", up(wall.median), up(wall.p95),
+				             up(wall.max));
 			}
 		}
 		std::fclose(f);
@@ -322,19 +339,23 @@ int main(int argc, char** argv) {
 		             "// Multi-row GPU plan rev 1.3.2, slice MR4: the cost table in C18 (plan §4.7, §5.1, cell 10.2; rulings item 12).\n"
 		             "//\n"
 		             "// WRITTEN BY tools/multirow_cost_bench (model %s): L = %u, p0 = %d, %d warm-up + %d timed runs per M, %s.\n"
-		             "// C(1) max = %.0f us. r(M) = ceil(1000 x maxC(M) / maxC(1)); g(M) = ceil(1000 x (max(C + M x F) - maxC(M)) / maxC(1)),\n"
-		             "// F the closing row's one-row finish: a stand-in for the per-row logits stage until MR5.\n"
+		             "// C(1) = %.0f us of GPU time at its max (superslm_gpu::LastCallTiming().gpu_busy_ms; wall time is not used).\n"
+		             "// r(M) = ceil(1000 x maxC(M) / maxC(1)), measured. g(M) is NOT measured: the estimates are carried over unchanged\n"
+		             "// until MR5's widened logits stage times its own GPU work (ruling 18a).\n"
 		             "// Host-only data for the plugin's integer chooser (MR6); index M - 1. See the estimates' header for the layout.\n"
 		             "#ifndef SUPERSLM_GPU_ROWS_COST_TABLE_H\n#define SUPERSLM_GPU_ROWS_COST_TABLE_H\n\n#include <cstdint>\n\n"
 		             "namespace superslm_gpu {\n\n"
-		             "constexpr bool kGpuRowsCostTableMeasured = true;\n"
+		             "constexpr bool kGpuRowsCostTableMeasured = true;     // r(M), on this card\n"
+		             "constexpr bool kGpuRowsLogitsRatioMeasured = false;  // g(M): estimates until MR5\n"
 		             "constexpr uint32_t kGpuRowCostUs = 6200;  // GpuRowCostMs's default (6.2 ms) in us: C(1), the M = 1 entry\n\n",
 		             model_name.c_str(), e.L, p0, warmup, runs, device_head ? "device head" : "host head", c_stats[1].max);
 		const char* names[2] = {"kGpuRowsCostRatioPerMille", "kGpuRowsLogitsRatioPerMille"};
 		for (int t = 0; t < 2; ++t) {
 			std::fprintf(f, "constexpr uint32_t %s[8] = {\n", names[t]);
 			for (uint32_t m = 1; m <= kMaxM; ++m)
-				std::fprintf(f, "    %lld,  // M = %u\n", static_cast<long long>(t == 0 ? r[m] : g[m]), m);
+				std::fprintf(f, "    %lld,  // M = %u%s\n",
+				             static_cast<long long>(t == 0 ? r[m] : superslm_gpu::kGpuRowsLogitsRatioPerMille[m - 1]), m,
+				             t == 0 ? "" : ": estimate, carried over");
 			std::fprintf(f, "};\n\n");
 		}
 		std::fprintf(f, "}  // namespace superslm_gpu\n\n#endif  // SUPERSLM_GPU_ROWS_COST_TABLE_H\n");

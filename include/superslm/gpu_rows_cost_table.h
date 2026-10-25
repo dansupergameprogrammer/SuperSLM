@@ -12,8 +12,9 @@
 // M = 1 entry, so r(1) is 1000 by definition. C(M) is taken at its MAXIMUM over the timed runs (MR-D15), and ratios
 // round UP (costs round up, §5.1).
 //
-// Provenance. kGpuRowsCostTableMeasured is false while the values are ESTIMATES, true once tools/multirow_cost_bench
-// has measured them on a box (it writes this whole header in this layout):
+// Provenance. kGpuRowsCostTableMeasured is false while r(M) is an ESTIMATE, true once tools/multirow_cost_bench has
+// measured it on a box from the recorder's GPU time (it writes this whole header in this layout). g(M) stays an estimate
+// in either case until MR5 (kGpuRowsLogitsRatioMeasured):
 //   - r(1), r(2), r(4), r(8): COST's spike table [A], C(M) in us {6,200; 7,900; 11,500; 18,600}, on another model;
 //   - r(3), r(5), r(6), r(7): linear interpolation of C between those [I];
 //   - g(M): unknown until MR5's widened logits stage (§15 item 10); estimated at gamma = G / C = 0.25, the plan's
@@ -26,7 +27,8 @@
 
 namespace superslm_gpu {
 
-constexpr bool kGpuRowsCostTableMeasured = false;  // estimates (above)
+constexpr bool kGpuRowsCostTableMeasured = false;    // estimates (above)
+constexpr bool kGpuRowsLogitsRatioMeasured = false;  // g(M): estimates until MR5's widened logits stage (ruling 18a)
 constexpr uint32_t kGpuRowCostUs = 6200;            // GpuRowCostMs's default (6.2 ms) in us: C(1), the M = 1 entry
 
 // r(M), per-mille of C(1); index M - 1.

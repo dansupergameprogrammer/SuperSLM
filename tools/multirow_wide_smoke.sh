@@ -138,8 +138,9 @@ case "$SUITE" in
 				echo "    FAIL $h table header"; FAILED+=(bench-table-$h)
 			fi
 		done
-		[ "$(head -1 "$OUT/multirow_cost_bench.csv")" = "model,M,logits,runs,warmup,median_us,p95_us,max_us" ] &&
-			[ "$(wc -l <"$OUT/multirow_cost_bench.csv")" = 17 ] && echo "    PASS CSV: mr4_box.py's columns, 16 rows" ||
+		[ "$(head -1 "$OUT/multirow_cost_bench.csv")" = "model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us" ] &&
+			[ "$(grep -c ',0,[0-9]*,[0-9]*,[0-9]*,[0-9]*,[0-9]*,gpu,' "$OUT/multirow_cost_bench.csv")" = 8 ] &&
+			[ "$(wc -l <"$OUT/multirow_cost_bench.csv")" = 17 ] && echo "    PASS CSV: mr4_box.py's columns plus clock and wall, 16 rows, logits 0 on the GPU clock" ||
 			{ echo "    FAIL CSV"; FAILED+=(bench-csv); } ;;
 esac
 if [ ${#FAILED[@]} = 0 ]; then echo "Multi-row Wine smoke ($SUITE): PASS"; else echo "Multi-row Wine smoke ($SUITE): FAIL (${FAILED[*]})"; exit 1; fi
