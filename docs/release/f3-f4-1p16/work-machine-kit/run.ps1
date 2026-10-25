@@ -122,7 +122,7 @@ function RunStep($s) {
             }
             $env:SUPERSLM_PRECACHE_E0_ARTIFACT_DIR = Join-Path $Kit 'e0'
             $x = Cell 'f2set' 'pcg_cell_schema.exe' @() 3; if ($x -ne 0) { $bad += "pcg_cell_schema exit $x" }
-            $x = Cell 'f2set' 'pcg_cell_9_10.exe' @("--fixture-dir=$FX", ('--captures=' + (Join-Path $Kit "captures\v1.13.1_$Card"))) 5
+            $x = Cell 'f2set' 'pcg_cell_9_10.exe' @("--fixture-dir=$FX", ('--captures=' + (Join-Path $Kit 'captures'))) 5  # the cell appends v1.13.1_<card>
             if ($x -ne 0) { $bad += "pcg_cell_9_10 exit $x" }
             $x = Cell 'f2set' 'pcg_cell_6_5.exe' @("--fixture-dir=$FX") 5; if ($x -ne 0) { $bad += "pcg_cell_6_5 pkv_def exit $x" }
         }

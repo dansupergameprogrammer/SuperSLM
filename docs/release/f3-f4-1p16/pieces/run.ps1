@@ -118,7 +118,7 @@ try {
             $env:SUPERSLM_PRECACHE_E0_ARTIFACT_DIR = $F3E0
             $c = F3-Cell $log "$F3Bin\pcg_cell_schema.exe" @() 3
             if ($c -ne 0) { & $fail "pcg_cell_schema exit $c" }
-            $c = F3-Cell $log "$F3Bin\pcg_cell_9_10.exe" @("--fixture-dir=$F3FX", "--captures=$F3Src\tests\precache-gpu\captures\v1.13.1_$card") 5
+            $c = F3-Cell $log "$F3Bin\pcg_cell_9_10.exe" @("--fixture-dir=$F3FX", "--captures=$F3Src\tests\precache-gpu\captures") 5  # the cell appends v1.13.1_<card>
             if ($c -ne 0) { & $fail "pcg_cell_9_10 exit $c" }
             $c = F3-Cell $log "$F3Bin\pcg_cell_6_5.exe" @("--fixture-dir=$F3FX") 5
             if ($c -ne 0) { & $fail "pcg_cell_6_5 pkv_def exit $c" }
