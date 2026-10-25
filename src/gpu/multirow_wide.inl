@@ -167,11 +167,41 @@ void MakeWideRowSet(harness::Device& dev, uint32_t variant_h, uint64_t seq_bytes
 	}
 }
 
+// Bindings: the composed parameters, from what PrepareGpuLayerLoopChunkOpenState bound, then the row table.
+void BindWideRoot(harness::Device& dev, const GpuLayerLoopChunkOpenState& state, ID3D12DescriptorHeap* heap) {
+	dev.list->SetComputeRootSignature(WideRootSig().Get());
+	ID3D12DescriptorHeap* heaps[] = {heap};
+	dev.list->SetDescriptorHeaps(1, heaps);
+	harness::BindRootSrv(dev.list.Get(), 1, state.bound_weights.Get());
+	harness::BindRootSrv(dev.list.Get(), 2, state.layout_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 3, state.rope_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 4, state.model_const_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 5, state.silu_lut_buf.Get());
+	harness::BindRootSrv(dev.list.Get(), 6, state.bound_rope_cos.Get());
+	harness::BindRootSrv(dev.list.Get(), 7, state.bound_rope_sin.Get());
+	harness::BindRootSrv(dev.list.Get(), 8, state.scratch_layout_buf.Get());
+	// u0, u1 and u3 (space 0) are declared by the composed parameters and read by no widened shader; bound to
+	// the one-row buffers so that every root descriptor is a valid address.
+	harness::BindRootUav(dev.list.Get(), 9, state.seq_uav.Get());
+	harness::BindRootUav(dev.list.Get(), 10, state.scratch_uav.Get());
+	harness::BindRootUav(dev.list.Get(), 11, state.kv_uav.Get());
+	harness::BindRootUav(dev.list.Get(), 12, state.work_scratch_uav.Get());
+	harness::BindRootSrv(dev.list.Get(), 13, state.bound_lora_ab.Get());
+	harness::BindRootSrv(dev.list.Get(), 14, state.bound_fold.Get());
+	harness::BindRootSrv(dev.list.Get(), harness::Device::kComposedRootParamKvPageTable,
+	                     state.bound_kv_page_table.Get());
+	dev.list->SetComputeRoot32BitConstants(harness::Device::kComposedRootParamKvPageConstants,
+	                                       harness::Device::kComposedPageConstantCount,
+	                                       state.bound_kv_page_constants, 0);
+	dev.list->SetComputeRootDescriptorTable(kWideRowTableParam, heap->GetGPUDescriptorHandleForHeapStart());
+}
+
 // The widened body for one layer slice: the one-row body's sites, constants and order, once for all rows.
 // `plan_for` is the one-row body's six GEMM plans, from ComputeGpuGemmSiteGroupPlan.
 void RecordWideLayerSliceBody(harness::Device& dev, const WidePipelines& pipes, uint32_t variant_h,
                               uint32_t start_layer, uint32_t layers, const GpuLayerLoopChunkOpenState& state,
-                              uint32_t position0, const GpuAdapterBridge* adapter_bridge, bool has_qk_norm) {
+                              uint32_t position0, const GpuAdapterBridge* adapter_bridge, bool has_qk_norm,
+                              uint32_t* dispatch_query_index = nullptr) {
 	const uint32_t H = state.H, HD = state.HD, NH = state.NH, NQH = state.NQH, I = state.I, N = state.N;
 	const uint32_t cap = state.context_cap_u32;
 	const uint32_t Q_WIDTH = NQH * HD;
@@ -180,10 +210,20 @@ void RecordWideLayerSliceBody(harness::Device& dev, const WidePipelines& pipes, 
 	D3D12_RESOURCE_BARRIER uav_barrier{};
 	uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
 	uav_barrier.UAV.pResource = nullptr;  // global, as every barrier the one-row body issues
+	// One timestamp boundary before every dispatch, as the one-row body takes them (MR2's recorder passes the
+	// index; the MR1 smoke takes none).
+	auto stamp = [&] {
+		if (dispatch_query_index == nullptr) return;
+		if (*dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
+			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, *dispatch_query_index);
+		}
+		++*dispatch_query_index;
+	};
 
 	// A GEMM site: the plan's groups in X, one Y row (the shader loops over the rows), and the plan's
 	// per-group thread count as the 11th constant, exactly the one-row bind_and_dispatch's.
 	auto gemm = [&](uint32_t site, uint32_t layer, const GpuGemmSiteGroupPlan& plan) {
+		stamp();
 		const uint32_t consts[12] = {layer, H, HD, NH, cap, position0, NQH, width0, I, N, plan.lanes, Q_WIDTH};
 		dev.list->SetComputeRoot32BitConstants(0, 12, consts, 0);
 		dev.list->SetPipelineState(pipes.pso[site].Get());
@@ -193,6 +233,7 @@ void RecordWideLayerSliceBody(harness::Device& dev, const WidePipelines& pipes, 
 	// A plain site: the one-row bind_and_dispatch's 12 values with no GEMM plan (its 11th value is 1), rows
 	// in Y.
 	auto plain = [&](uint32_t site, uint32_t layer, uint32_t groups_x) {
+		stamp();
 		const uint32_t consts[12] = {layer, H, HD, NH, cap, position0, NQH, width0, I, N, 1u, Q_WIDTH};
 		dev.list->SetComputeRoot32BitConstants(0, 12, consts, 0);
 		dev.list->SetPipelineState(pipes.pso[site].Get());
@@ -207,6 +248,7 @@ void RecordWideLayerSliceBody(harness::Device& dev, const WidePipelines& pipes, 
 		uint32_t wide_base;
 	};
 	auto tail = [&](uint32_t site, uint32_t layer, std::initializer_list<Slot> slots) {
+		stamp();
 		uint32_t consts[28] = {layer, H, HD, NH, cap, position0, NQH, width0, I, N, 1u};
 		size_t base = 11;
 		for (const Slot& s : slots) {
@@ -352,32 +394,7 @@ superslm::SslmForwardStatus RunMultirowWideLayersForSmoke(
 		harness::RecordTransition(dev.list.Get(), rs.seq_rows.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
 		                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-		// Bindings: the composed parameters, from what Prepare bound, then the row table.
-		dev.list->SetComputeRootSignature(WideRootSig().Get());
-		ID3D12DescriptorHeap* heaps[] = {rs.heap.Get()};
-		dev.list->SetDescriptorHeaps(1, heaps);
-		harness::BindRootSrv(dev.list.Get(), 1, state.bound_weights.Get());
-		harness::BindRootSrv(dev.list.Get(), 2, state.layout_buf.Get());
-		harness::BindRootSrv(dev.list.Get(), 3, state.rope_buf.Get());
-		harness::BindRootSrv(dev.list.Get(), 4, state.model_const_buf.Get());
-		harness::BindRootSrv(dev.list.Get(), 5, state.silu_lut_buf.Get());
-		harness::BindRootSrv(dev.list.Get(), 6, state.bound_rope_cos.Get());
-		harness::BindRootSrv(dev.list.Get(), 7, state.bound_rope_sin.Get());
-		harness::BindRootSrv(dev.list.Get(), 8, state.scratch_layout_buf.Get());
-		// u0, u1 and u3 (space 0) are declared by the composed parameters and read by no widened shader;
-		// bound to the one-row buffers so that every root descriptor is a valid address.
-		harness::BindRootUav(dev.list.Get(), 9, state.seq_uav.Get());
-		harness::BindRootUav(dev.list.Get(), 10, state.scratch_uav.Get());
-		harness::BindRootUav(dev.list.Get(), 11, state.kv_uav.Get());
-		harness::BindRootUav(dev.list.Get(), 12, state.work_scratch_uav.Get());
-		harness::BindRootSrv(dev.list.Get(), 13, state.bound_lora_ab.Get());
-		harness::BindRootSrv(dev.list.Get(), 14, state.bound_fold.Get());
-		harness::BindRootSrv(dev.list.Get(), harness::Device::kComposedRootParamKvPageTable,
-		                     state.bound_kv_page_table.Get());
-		dev.list->SetComputeRoot32BitConstants(harness::Device::kComposedRootParamKvPageConstants,
-		                                       harness::Device::kComposedPageConstantCount,
-		                                       state.bound_kv_page_constants, 0);
-		dev.list->SetComputeRootDescriptorTable(kWideRowTableParam, rs.heap->GetGPUDescriptorHandleForHeapStart());
+		BindWideRoot(dev, state, rs.heap.Get());
 
 		RecordWideLayerSliceBody(dev, pipes, variant_h, rows[0].layer_index, layers, state,
 		                         static_cast<uint32_t>(p0), adapter_bridge, model_has_qk_norm);
@@ -444,6 +461,385 @@ superslm::SslmForwardStatus RunMultirowWideLayersForSmoke(
 		return ClassifyForwardFault(dev, !list_closed);
 	}
 	return superslm::SslmForwardStatus::Ok;
+}
+
+// =================================================================================================
+// MR2: the recorder (plan §3.3 to §3.5). One widened submission per layer slice of a chunk, asynchronous as
+// the one-row path is: the Submit half records and submits, the Finish half (run by sslm_gpu_ready) waits and
+// reads back. The rows' SeqStates live in the chunk's row set across slices (each row a 256-byte window of
+// seq_rows); only the first slice uploads them. The close's choices (plan §3.5) are gpu_1p0.cpp's: this half
+// reads back and hands over, and touches no host state.
+// =================================================================================================
+
+superslm::SslmForwardStatus DecodeRowsStickyTag(int64_t tag) { return DecodeStickyTag(tag); }
+
+namespace {
+
+// A new row set: kGpuRowsMaxRows rows of each per-row buffer and every view of the table (so one set serves
+// every variant), the two read-backs, and the persistently mapped upload window. kGpuRowSetAllocations
+// allocations.
+std::unique_ptr<GpuRowSet> MakeGpuRowSet(harness::Device& dev, uint64_t seq_bytes, uint64_t scratch_bytes,
+                                         uint64_t work_bytes, uint64_t kv_readback_bytes) {
+	auto rs = std::make_unique<GpuRowSet>();
+	rs->seq_bytes = seq_bytes;
+	rs->scratch_bytes = scratch_bytes;
+	rs->work_bytes = work_bytes;
+	rs->kv_readback_bytes = kv_readback_bytes;
+	rs->seq_stride = WideAlign256(seq_bytes);
+	rs->scratch_stride = WideAlign256(scratch_bytes);
+	rs->work_stride = WideAlign256(work_bytes);
+	const uint64_t rows = kGpuRowsMaxRows;
+	rs->seq_rows = dev.MakeBuffer(rs->seq_stride * rows, D3D12_HEAP_TYPE_DEFAULT,
+	                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+	rs->seq_rows_state = D3D12_RESOURCE_STATE_COPY_DEST;
+	rs->scratch_rows = dev.MakeBuffer(rs->scratch_stride * rows, D3D12_HEAP_TYPE_DEFAULT,
+	                                  D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+	                                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	rs->work_rows = dev.MakeBuffer(rs->work_stride * rows, D3D12_HEAP_TYPE_DEFAULT,
+	                               D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	rs->seq_readback = dev.MakeBuffer(rs->seq_stride * rows, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	                                  D3D12_RESOURCE_STATE_COPY_DEST);
+	rs->kv_readback = dev.MakeBuffer(kv_readback_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	                                 D3D12_RESOURCE_STATE_COPY_DEST);
+	rs->init_upload = dev.MakeBuffer(rs->seq_stride * rows, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE,
+	                                 D3D12_RESOURCE_STATE_GENERIC_READ);
+	harness::NameBuffer(rs->seq_rows.Get(), L"SuperSLM SeqState rows (chunk)");
+	harness::NameBuffer(rs->scratch_rows.Get(), L"SuperSLM LayerScratch rows (chunk)");
+	harness::NameBuffer(rs->work_rows.Get(), L"SuperSLM WorkScratch rows (chunk)");
+	D3D12_DESCRIPTOR_HEAP_DESC hd{};
+	hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	hd.NumDescriptors = 3 * kWideMaxRows;
+	hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	SSLM_GPU_HR(dev.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rs->heap)));
+	const UINT inc = dev.dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	const D3D12_CPU_DESCRIPTOR_HANDLE base = rs->heap->GetCPUDescriptorHandleForHeapStart();
+	ID3D12Resource* const bufs[3] = {rs->seq_rows.Get(), rs->scratch_rows.Get(), rs->work_rows.Get()};
+	const uint64_t strides[3] = {rs->seq_stride, rs->scratch_stride, rs->work_stride};
+	for (uint32_t k = 0; k < 3; ++k) {
+		for (uint32_t r = 0; r < kWideMaxRows; ++r) {
+			D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+			ud.Format = DXGI_FORMAT_R32_TYPELESS;
+			ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+			ud.Buffer.FirstElement = (strides[k] * r) / 4u;
+			ud.Buffer.NumElements = static_cast<UINT>(strides[k] / 4u);
+			ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+			D3D12_CPU_DESCRIPTOR_HANDLE h = base;
+			h.ptr += static_cast<SIZE_T>(k * kWideMaxRows + r) * inc;
+			dev.dev->CreateUnorderedAccessView(bufs[k], nullptr, &ud, h);
+		}
+	}
+	return rs;
+}
+
+D3D12_RESOURCE_BARRIER WideTransition(ID3D12Resource* r, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+	D3D12_RESOURCE_BARRIER b{};
+	b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	b.Transition.pResource = r;
+	b.Transition.StateBefore = before;
+	b.Transition.StateAfter = after;
+	b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	return b;
+}
+
+uint64_t RowsU64(const uint8_t* p, size_t lo_off, size_t hi_off) {
+	uint32_t lo = 0, hi = 0;
+	std::memcpy(&lo, p + lo_off, 4);
+	std::memcpy(&hi, p + hi_off, 4);
+	return (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+}
+
+}  // namespace
+
+superslm::SslmForwardStatus RunRowsSliceGpuSubmit(
+    const GpuRowsSlice& slice, std::unique_ptr<GpuRowSet>* io_row_set, uint32_t num_hidden_layers,
+    size_t hidden_size, size_t head_dim, size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
+    uint8_t* workspace, size_t workspace_size, ID3D12Resource* external_kv_resident,
+    bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident, bool external_rope_has,
+    uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems, const GpuAdapterBridge* adapter_bridge,
+    size_t q_width, uint64_t model_generation, bool model_has_qk_norm, const GpuPagedKvBinding* paged_kv,
+    GpuInFlightToken* out_inflight, GpuRowsSliceRecord* out_record) {
+	if (out_inflight) *out_inflight = GpuInFlightToken();
+	if (out_record) *out_record = GpuRowsSliceRecord{};
+	if (io_row_set == nullptr || out_inflight == nullptr || out_record == nullptr || external_kv_resident == nullptr ||
+	    !WideVariantSupported(slice.variant_h) || slice.real_rows < 2 || slice.real_rows > slice.variant_h ||
+	    slice.layers == 0 || (slice.first_slice && slice.entry_rows == nullptr)) {
+		return superslm::SslmForwardStatus::InvalidLayerBudget;  // a malformed internal call; nothing recorded
+	}
+	static const superslm::SslmTensorManifest kEmptyManifest;
+	harness::Device& dev = harness::GetDevice();
+	const superslm::KvPageView kv_view =
+	    paged_kv != nullptr ? paged_kv->view : GpuOnePageView(workspace, workspace_size, context_cap);
+	const auto t_record_start = std::chrono::steady_clock::now();
+	// Prepare's guard ladder runs on row 0 at the chunk's layer, for every real row's position (coverage).
+	std::vector<int8_t> row0_codes(hidden_size, 0);
+	superslm::SequenceLayerState row0{};
+	if (slice.first_slice) {
+		row0 = slice.entry_rows[0];
+	} else {
+		row0.hidden_codes = row0_codes.data();
+	}
+	row0.layer_index = slice.start_layer;
+	row0.context_length = slice.p0;
+	GpuLayerLoopChunkOpenState state;
+	GpuRowSet* rs = io_row_set->get();
+	const D3D12_RESOURCE_STATES seq_rows_state_entry = rs != nullptr ? rs->seq_rows_state : D3D12_RESOURCE_STATE_COPY_DEST;
+	const bool kv_latch_entry = io_external_kv_needs_resume_barrier != nullptr && *io_external_kv_needs_resume_barrier;
+	std::vector<size_t> kv_row_offsets;
+	uint32_t dispatch_query_index = 0;
+	uint32_t dispatch_count = 0;
+	try {
+		const superslm::SslmForwardStatus prep = PrepareGpuLayerLoopChunkOpenState(
+		    dev, row0, /*layers=*/nullptr, num_hidden_layers, slice.layers, hidden_size, head_dim, num_key_value_heads,
+		    intermediate_size, context_cap, kEmptyManifest, kv_view, workspace_size,
+		    paged_kv != nullptr ? paged_kv->table_resident : nullptr, paged_kv != nullptr && paged_kv->upload_table,
+		    /*coverage_tokens=*/slice.real_rows, external_kv_resident, io_external_kv_needs_resume_barrier,
+		    external_weights_resident, external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
+		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &state, q_width, model_generation);
+		if (prep != superslm::SslmForwardStatus::Ok) return prep;
+		if (slice.inject_allocation_failure) {
+			throw harness::GpuAllocationError("MR2 cell 5.3: injected slice allocation failure", E_OUTOFMEMORY);
+		}
+		const uint32_t H = state.H, HD = state.HD, NH = state.NH, N = state.N;
+		const uint32_t layers = std::min(slice.layers, N - slice.start_layer);
+
+		// The row set: this chunk's, regrown only if a different model needs more (cell 1.2).
+		const uint64_t seq_bytes = SeqTotalSize(H);
+		const uint64_t kv_rows_max = uint64_t{kGpuRowsMaxRows} * N * NH * 2u;
+		const uint64_t kv_rb_bytes = kv_rows_max * HD;
+		if (rs == nullptr || !rs->Fits(seq_bytes, state.scratch_uav->GetDesc().Width,
+		                               state.work_scratch_uav->GetDesc().Width, kv_rb_bytes)) {
+			out_record->row_set_created = rs == nullptr;
+			*io_row_set = MakeGpuRowSet(dev, seq_bytes, state.scratch_uav->GetDesc().Width,
+			                            state.work_scratch_uav->GetDesc().Width, kv_rb_bytes);
+			out_record->allocations += kGpuRowSetAllocations;
+			rs = io_row_set->get();
+		}
+		const WidePipelines& pipes = GetOrBuildWidePipelines(dev, slice.variant_h, model_has_qk_norm);
+
+		// The first slice uploads every row's entry state as a one-row submission packs its one; padded rows
+		// repeat the last real row's with their own position and a set sticky word, so every site returns on them
+		// first (plan §3.1). Later slices find the rows where the previous slice left them.
+		if (slice.first_slice) {
+			void* up = nullptr;
+			const D3D12_RANGE none{0, 0};
+			SSLM_GPU_HR(rs->init_upload->Map(0, &none, &up));
+			uint8_t* dst = static_cast<uint8_t*>(up);
+			for (uint32_t r = 0; r < slice.variant_h; ++r) {
+				std::vector<uint8_t> row =
+				    PackGpuSeqStateBytes(slice.entry_rows[r < slice.real_rows ? r : slice.real_rows - 1], H);
+				if (r >= slice.real_rows) {
+					PutI64At(row, SeqCtxLenOff(H), slice.p0 + static_cast<int64_t>(r));
+					PutI64At(row, SeqStickyOff(H), kWidePaddedRowTag);
+				}
+				std::memcpy(dst + static_cast<size_t>(rs->seq_stride) * r, row.data(), row.size());
+			}
+			rs->init_upload->Unmap(0, nullptr);
+			if (rs->seq_rows_state != D3D12_RESOURCE_STATE_COPY_DEST) {
+				harness::RecordTransition(dev.list.Get(), rs->seq_rows.Get(), rs->seq_rows_state,
+				                          D3D12_RESOURCE_STATE_COPY_DEST);
+			}
+			harness::RecordCopyBufferRegion(dev.list.Get(), rs->seq_rows.Get(), 0, rs->init_upload.Get(), 0,
+			                                rs->seq_stride * slice.variant_h);
+			harness::RecordTransition(dev.list.Get(), rs->seq_rows.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+			                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		} else {
+			harness::RecordTransition(dev.list.Get(), rs->seq_rows.Get(), rs->seq_rows_state,
+			                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		}
+
+		BindWideRoot(dev, state, rs->heap.Get());
+		RecordWideLayerSliceBody(dev, pipes, slice.variant_h, slice.start_layer, layers, state,
+		                         static_cast<uint32_t>(slice.p0), adapter_bridge, model_has_qk_norm,
+		                         &dispatch_query_index);
+		dispatch_count = std::min(dispatch_query_index, harness::Device::kMaxTimestampSlots - 1);
+		dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_count);
+		dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, dispatch_count + 1,
+		                           dev.timestamp_readback.Get(), 0);
+
+		// Read-back: every row's SeqState, and on the close slice every real row's K/V rows at every layer
+		// (through the call's view, by the shaders' own formula, as the one-row read-back computes its rows).
+		// The K/V buffer rests in COPY_SOURCE afterwards, as after every one-row read-back, so the latch says so.
+		if (slice.close_slice) {
+			kv_row_offsets.reserve(static_cast<size_t>(slice.real_rows) * N * NH * 2u);
+			for (uint32_t r = 0; r < slice.real_rows; ++r) {
+				const uint32_t pos = static_cast<uint32_t>(slice.p0) + r;
+				for (uint32_t l = 0; l < N; ++l) {
+					for (uint32_t h = 0; h < NH; ++h) {
+						kv_row_offsets.push_back(KvViewRowOffset(kv_view, l, 0u, NH, HD, h, pos));
+						kv_row_offsets.push_back(KvViewRowOffset(kv_view, l, 1u, NH, HD, h, pos));
+					}
+				}
+			}
+		}
+		D3D12_RESOURCE_BARRIER pre_copy[3]{};
+		uint32_t n_pre = 0;
+		pre_copy[n_pre++] = WideTransition(rs->seq_rows.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+		                                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+		pre_copy[n_pre++] = WideTransition(state.kv_uav.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+		                                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+		n_pre += TableBackToCommonBarrier(state, &pre_copy[n_pre]);
+		harness::RecordBarriers(dev.list.Get(), n_pre, pre_copy);
+		rs->seq_rows_state = D3D12_RESOURCE_STATE_COPY_SOURCE;
+		if (io_external_kv_needs_resume_barrier != nullptr) *io_external_kv_needs_resume_barrier = true;
+		harness::RecordCopyBufferRegion(dev.list.Get(), rs->seq_readback.Get(), 0, rs->seq_rows.Get(), 0,
+		                                rs->seq_stride * slice.real_rows);
+		for (size_t k = 0; k < kv_row_offsets.size(); ++k) {
+			harness::RecordCopyBufferRegion(dev.list.Get(), rs->kv_readback.Get(), k * static_cast<UINT64>(HD),
+			                                state.kv_uav.Get(), kv_row_offsets[k], HD);
+		}
+	} catch (...) {
+		// Nothing this call recorded was submitted: the row set's state and the latch go back to what it found.
+		if (io_row_set->get() != nullptr) (*io_row_set)->seq_rows_state = seq_rows_state_entry;
+		if (io_external_kv_needs_resume_barrier != nullptr) *io_external_kv_needs_resume_barrier = kv_latch_entry;
+		const bool list_closed = AbandonRecording(dev, state);
+		return ClassifyForwardFault(dev, !list_closed);
+	}
+
+	bool close_attempted = false;
+	const uint64_t counter_before = dev.submission_counter();
+	GpuRowSet* const rsp = io_row_set->get();
+	const StrandedTailKeepAlive stranded_keep_alive(dev, counter_before, state, std::addressof(rsp->seq_rows),
+	                                                std::addressof(rsp->scratch_rows),
+	                                                std::addressof(rsp->work_rows), external_weights_resident,
+	                                                external_rope_cos_resident, external_rope_sin_resident,
+	                                                adapter_bridge, paged_kv);
+	GpuCallTiming call_timing{};
+	try {
+		close_attempted = true;
+		dev.CloseListOrThrow();
+		const auto t_record_end = std::chrono::steady_clock::now();
+		call_timing.record_ms = std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
+		harness::GpuSubmission submission = dev.Submit();
+		GpuInFlightToken token = GpuInFlightToken::Make(std::move(submission), &dev, call_timing);
+		GpuLayerLoopInFlight* inflight = token.get();
+		inflight->dispatch_count_this_call = dispatch_count;
+		inflight->seq_readback = rsp->seq_readback;
+		inflight->kv_readback = rsp->kv_readback;
+		inflight->kv_row_offsets = std::move(kv_row_offsets);
+		inflight->seq_bytes_size = SeqTotalSize(state.H);
+		inflight->hidden_size_h = state.H;
+		inflight->head_dim_hd = state.HD;
+		inflight->t_record_end = t_record_end;
+		inflight->layout_buf = state.layout_buf;
+		inflight->rope_buf = state.rope_buf;
+		inflight->model_const_buf = state.model_const_buf;
+		inflight->silu_lut_buf = state.silu_lut_buf;
+		inflight->scratch_layout_buf = state.scratch_layout_buf;
+		inflight->seq_uav = state.seq_uav;
+		inflight->scratch_uav = state.scratch_uav;
+		inflight->work_scratch_uav = state.work_scratch_uav;
+		inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
+		inflight->upload_keep_alive = state.upload_keep_alive;
+		// The row set's buffers live on the context's free list, which a stranded record must not outlive.
+		inflight->upload_keep_alive.push_back(rsp->seq_rows);
+		inflight->upload_keep_alive.push_back(rsp->scratch_rows);
+		inflight->upload_keep_alive.push_back(rsp->work_rows);
+		inflight->upload_keep_alive.push_back(rsp->init_upload);
+		inflight->KeepExternalsAlive(state.kv_uav.Get(), external_weights_resident, external_rope_cos_resident,
+		                             external_rope_sin_resident, adapter_bridge, paged_kv);
+		out_record->dispatches = dispatch_count;
+		*out_inflight = std::move(token);
+		return superslm::SslmForwardStatus::Ok;
+	} catch (...) {
+		const bool executed = dev.submission_counter() != counter_before;
+		InvalidateResidencyCachesOnThrow();
+		if (!executed) {
+			rsp->seq_rows_state = seq_rows_state_entry;
+			if (io_external_kv_needs_resume_barrier != nullptr) *io_external_kv_needs_resume_barrier = kv_latch_entry;
+		}
+		PublishCallTimingNoThrow(call_timing, {});
+		return SubmissionTailFaultStatus(dev, close_attempted, executed);
+	}
+}
+
+superslm::SslmForwardStatus RunRowsSliceGpuFinish(GpuInFlightToken&& inflight, const GpuRowSet& row_set,
+                                                  uint32_t real_rows, int32_t block, int32_t* out_ready,
+                                                  std::vector<GpuRowsRowState>* out_rows,
+                                                  std::vector<size_t>* out_kv_offsets,
+                                                  std::vector<uint8_t>* out_kv_rows) {
+	if (out_ready) *out_ready = 0;
+	if (!inflight || !inflight->dev || out_rows == nullptr || out_kv_offsets == nullptr || out_kv_rows == nullptr ||
+	    real_rows == 0 || real_rows > kGpuRowsMaxRows) {
+		return superslm::SslmForwardStatus::GpuOperationFailed;
+	}
+	harness::Device& dev = *inflight->dev;
+	if (!block && !inflight.ReadyNoWait()) return superslm::SslmForwardStatus::Ok;
+	GpuInFlightToken owned = std::move(inflight);  // consumed, exactly once, from here on
+	GpuLayerLoopInFlight* const rec = owned.get();
+	try {
+		owned.Wait();
+		const auto t_wait_end = std::chrono::steady_clock::now();
+		rec->timing.submit_wait_ms = std::chrono::duration<double, std::milli>(t_wait_end - rec->t_record_end).count();
+		if (dev.timestamp_frequency > 0 && rec->dispatch_count_this_call > 0) {
+			std::vector<UINT64> ts(rec->dispatch_count_this_call + 1, 0);
+			void* qp = nullptr;
+			D3D12_RANGE qrange{0, ts.size() * sizeof(UINT64)};
+			if (SUCCEEDED(dev.timestamp_readback->Map(0, &qrange, &qp))) {
+				std::memcpy(ts.data(), qp, ts.size() * sizeof(UINT64));
+				D3D12_RANGE qnone{0, 0};
+				dev.timestamp_readback->Unmap(0, &qnone);
+				const double freq = static_cast<double>(dev.timestamp_frequency);
+				rec->timing.gpu_busy_ms = static_cast<double>(ts.back() - ts.front()) / freq * 1000.0;
+				rec->per_dispatch_ms.resize(rec->dispatch_count_this_call);
+				for (uint32_t d = 0; d < rec->dispatch_count_this_call; ++d) {
+					rec->per_dispatch_ms[d] = static_cast<double>(ts[d + 1] - ts[d]) / freq * 1000.0;
+				}
+			}
+		}
+		const uint32_t H = rec->hidden_size_h;
+		const size_t HD = rec->head_dim_hd;
+		const auto t_readback_start = std::chrono::steady_clock::now();
+		out_rows->assign(real_rows, GpuRowsRowState{});
+		{
+			void* p = nullptr;
+			const D3D12_RANGE range{0, static_cast<SIZE_T>(row_set.seq_stride * real_rows)};
+			SSLM_GPU_HR(rec->seq_readback->Map(0, &range, &p));
+			for (uint32_t r = 0; r < real_rows; ++r) {
+				const uint8_t* b = static_cast<const uint8_t*>(p) + static_cast<size_t>(row_set.seq_stride) * r;
+				GpuRowsRowState& row = (*out_rows)[r];
+				row.hidden_codes.resize(H);
+				for (uint32_t i = 0; i < H; ++i) {
+					int32_t v = 0;
+					std::memcpy(&v, b + i * 4, 4);
+					row.hidden_codes[i] = static_cast<int8_t>(v);
+				}
+				std::memcpy(&row.hidden_scale.m, b + SeqScaleOff(H) + 0, 8);
+				std::memcpy(&row.hidden_scale.e, b + SeqScaleOff(H) + 8, 8);
+				std::memcpy(&row.layer_index, b + SeqLayerIdxOff(H), 4);
+				std::memcpy(&row.context_length, b + SeqCtxLenOff(H), 8);
+				std::memcpy(&row.sticky, b + SeqStickyOff(H), 8);
+				row.counters[kGpuRowsKvSaturation] = RowsU64(b, SeqSatLoOff(H), SeqSatHiOff(H));
+				row.counters[kGpuRowsKvLandingSaturation] =
+				    RowsU64(b, SeqKvLandingSatLoOff(H), SeqKvLandingSatHiOff(H));
+				row.counters[kGpuRowsKChannelLandingSaturation] =
+				    RowsU64(b, SeqKChannelLandingSatLoOff(H), SeqKChannelLandingSatHiOff(H));
+				row.counters[kGpuRowsRopeQSaturation] = RowsU64(b, SeqRopeQSatLoOff(H), SeqRopeQSatHiOff(H));
+				row.counters[kGpuRowsRopeKSaturation] = RowsU64(b, SeqRopeKSatLoOff(H), SeqRopeKSatHiOff(H));
+			}
+			const D3D12_RANGE none{0, 0};
+			rec->seq_readback->Unmap(0, &none);
+		}
+		*out_kv_offsets = std::move(rec->kv_row_offsets);
+		out_kv_rows->assign(out_kv_offsets->size() * HD, 0);
+		if (!out_kv_offsets->empty()) {
+			void* p = nullptr;
+			const D3D12_RANGE range{0, static_cast<SIZE_T>(out_kv_rows->size())};
+			SSLM_GPU_HR(rec->kv_readback->Map(0, &range, &p));
+			std::memcpy(out_kv_rows->data(), p, out_kv_rows->size());
+			const D3D12_RANGE none{0, 0};
+			rec->kv_readback->Unmap(0, &none);
+		}
+		rec->timing.readback_ms =
+		    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_readback_start).count();
+		g_last_call_timing_snapshot.Publish(rec->timing, std::move(rec->per_dispatch_ms));
+		if (out_ready) *out_ready = 1;
+		return superslm::SslmForwardStatus::Ok;
+	} catch (...) {
+		if (out_ready) *out_ready = 1;  // a terminal status, not a pending one
+		PublishCallTimingNoThrow(rec->timing, std::move(rec->per_dispatch_ms));
+		return ClassifyForwardFault(dev, /*stranded=*/false);
+	}
 }
 
 #endif  // SUPERSLM_MULTIROW_WIDE
