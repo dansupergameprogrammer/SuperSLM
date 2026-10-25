@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Multi-row GPU plan (rev 1.3.2): the builder's Wine smokes on the software GPU (Wine + vkd3d-proton + lavapipe,
 # tools/cloud_gpu/wine_gpu.sh; run its `setup` once first). MR1 gate: "Wine one-layer smoke equal on pkv_def and
-# pkv_qk" (multirow_wide_smoke.cpp). MR2: the recorder through its internal entry against the one-row twin
-# (multirow_rows_smoke.cpp; a development aid, the test author's suite grades the cells).
+# pkv_qk" (multirow_wide_smoke.cpp). MR2 and MR3: the recorder through the published verbs against the one-row
+# twin, the batch with open chunks and the provisional statuses (multirow_rows_smoke.cpp; a development aid, the
+# test author's suite grades the cells).
 #
 # Usage: tools/multirow_wide_smoke.sh [--out=DIR] [--jobs=N] [--build-only] [--quick] [--suite=mr1|mr2|all]
 #   --out    default <repo>/out/mr1-wide-smoke. Each run gets its own WINEPREFIX (<out>/wineprefix-<pid>)
@@ -10,7 +11,7 @@
 #   --quick  the tools' reduced grids
 #   --suite  which smoke's legs run (default mr1)
 #
-# Builds the engine with -DSUPERSLM_MULTIROW_WIDE (the test-only widened host, src/gpu/multirow_wide.inl) and
+# Builds the engine with -DSUPERSLM_MULTIROW_WIDE (the multi-row test seams and MR1's smoke one-shot) and
 # tools/multirow_wide_smoke.cpp, compiles the one-row and widened shaders as build.bat does, writes the
 # fixtures (tools/gen_paged_kv_fixture.py; tools/gen_multirow_adapter_fixture.py for pkv_def_r4.adp) and runs
 # three legs: pkv_def, pkv_def with pkv_def_r4.adp, and pkv_qk. Exit 0 only when every leg passes.
