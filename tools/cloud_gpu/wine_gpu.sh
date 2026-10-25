@@ -89,8 +89,9 @@ cmd_build() {
 	for f in src/gpu/shaders/*.hlsl; do
 		"$DXC" -T cs_6_2 -E main -Fo "out/shaders/$(basename "$f" .hlsl).cso" "$f" -O3 -HV 2018 -WX >/dev/null
 	done
-	# The row-widened variants (multi-row plan §3.1/§3.2), as build.bat compiles them.
-	if [ -d src/gpu/shaders_wide ]; then
+	# The row-widened variants (multi-row plan §3.1/§3.2), only when asked (SUPERSLM_MULTIROW_WIDE_SHADERS=1, as
+	# CMake's option of that name): nothing the shipped library runs loads them.
+	if [ "${SUPERSLM_MULTIROW_WIDE_SHADERS:-0}" = 1 ] && [ -d src/gpu/shaders_wide ]; then
 		for h in 2 4 8; do
 			for f in src/gpu/shaders_wide/*_site_wide.hlsl; do
 				"$DXC" -T cs_6_2 -E main -Fo "out/shaders/$(basename "$f" .hlsl)_h$h.cso" "$f" -O3 -HV 2018 -WX \

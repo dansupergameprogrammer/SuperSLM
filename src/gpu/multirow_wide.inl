@@ -81,7 +81,8 @@ enum WideSite : uint32_t {
 	kWMlpNorm, kWGateProjGemm, kWGateProjTail, kWUpProjGemm, kWUpProjTail, kWMlpAct, kWDownProjGemm,
 	kWDownProjTail, kWMlpResidual, kWCommit, kWideSiteCount
 };
-// Each site's widened shader base name; the variant's .cso is <name>_h<H>.cso (CMakeLists.txt, build.bat).
+// Each site's widened shader base name; the variant's .cso is <name>_h<H>.cso (CMakeLists.txt, under its
+// SUPERSLM_MULTIROW_WIDE_SHADERS option, and tools/multirow_wide_smoke.sh).
 const char* const kWideSiteShader[kWideSiteCount] = {
     "attn_norm_site_wide",        "q_proj_gemm_wide",   "q_proj_site_wide",    "kv_proj_gemm_wide",
     "kv_proj_site_wide",          "qk_norm_site_wide",  "rope_guard_site_wide", "rope_commit_site_wide",

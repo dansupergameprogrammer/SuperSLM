@@ -50,27 +50,6 @@ for %%f in (src\gpu\shaders\*.hlsl) do (
 		goto :hard_fail
 	)
 )
-rem Multi-row plan Sec3.1-3.2: the row-widened site variants, H in 2, 4, 8, at the same pinned
-rem target and flags (CMakeLists.txt compiles the identical set): the generated non-GEMM sites of
-rem src\gpu\shaders_wide once per H, and proj_gemm_wide.hlsl once per H and GEMM site.
-for %%h in (2 4 8) do (
-	for %%f in (src\gpu\shaders_wide\*_site_wide.hlsl) do (
-		%DXC% -T cs_6_2 -E main -Fo out\shaders\%%~nf_h%%h.cso %%f -O3 -HV 2018 -WX -D SSLM_WIDE_H=%%h -I src\gpu\shaders
-		if not "!errorlevel!"=="0" (
-			echo T2701_SHADER_COMPILE_FAILED: %%~nxf H=%%h exit=!errorlevel!
-			goto :hard_fail
-		)
-	)
-	set SSLM_WIDE_GI=0
-	for %%g in (q_proj kv_proj o_proj gate_proj up_proj down_proj) do (
-		set /a SSLM_WIDE_GI+=1
-		%DXC% -T cs_6_2 -E main -Fo out\shaders\%%g_gemm_wide_h%%h.cso src\gpu\shaders_wide\proj_gemm_wide.hlsl -O3 -HV 2018 -WX -D SSLM_WIDE_H=%%h -D SSLM_GEMM_SITE=!SSLM_WIDE_GI! -I src\gpu\shaders
-		if not "!errorlevel!"=="0" (
-			echo T2701_SHADER_COMPILE_FAILED: proj_gemm_wide.hlsl %%g H=%%h exit=!errorlevel!
-			goto :hard_fail
-		)
-	)
-)
 
 rem GPU paged-KV G3: src\gpu and tests\gpu-g3-core on the path, and SUPERSLM_LEDGER_YIELD_HOOK on the
 rem whole binary (one definition of the ledger), for cell 3.6h (tests\gpu-g3-core\g3_superslm_tests_adapter.cpp).
