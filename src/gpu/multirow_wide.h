@@ -1,7 +1,10 @@
 // Multi-row GPU plan (rev 1.3.2), slice MR1: the test-only host side of the row-widened kernels, declared
 // for the one-layer smoke (MR1's gate: "Wine one-layer smoke equal on pkv_def and pkv_qk"). Everything here
-// exists only in a build that defines SUPERSLM_MULTIROW_WIDE; no shipped target defines it, so the shipped
-// library is unchanged by MR1. The recorder, the chunk state and the internal entry are MR2's (plan §3.3 to
+// exists only in a build that defines SUPERSLM_MULTIROW_WIDE; no shipped target defines it. The shipped library
+// is not byte-identical to the base: MR1 adds behaviour-neutral hooks to it (FillComposedRootParams, the bound-
+// resource fields of GpuLayerLoopChunkOpenState, and PackGpuSeqStateBytes, a new external symbol), and none of
+// the widened code. The widened .cso are built and staged only under the CMake option
+// SUPERSLM_MULTIROW_WIDE_SHADERS (default OFF), so the default install tree is the base's. The recorder, the chunk state and the internal entry are MR2's (plan §3.3 to
 // §3.6), not this file's.
 //
 // Definitions: superslm_gpu.cpp (PackGpuSeqStateBytes), multirow_wide.inl (included at the end of
