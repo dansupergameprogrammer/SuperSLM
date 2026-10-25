@@ -10,6 +10,8 @@
 #   MX10  an adapter change admitted on a later slice (both chunk adapter checks removed)        -> 7.7 (pkv_def + r4)
 #   MX17  the close copies only the last committed row into the mirror                          -> 7.16
 #   MX18  embed_rows leaves ready_for_logits set                                                 -> 7.14
+#   MXB5  the batch skips the M = 1 chunk hook after a slot's submission (review N5)             -> 5.4
+#   MXS1  widened names no longer map to their shaders_wide sources (review S1, N7)              -> stale
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -89,6 +91,12 @@ if want MX17; then host_mutant MX17 $G 1 '^(\s*)for \(uint32_t r = 0; r < k; \+\
 	'\1if (k > 0) copy_row(k - 1u, L);  // MX17: only the last committed row' && must_red MX17 7.16 pkv_def pkv_qk; fi
 if want MX18; then host_mutant MX18 $G 1 '^(\s*)seq->ready_for_logits = false;(\n\s*seq->bind_eligible = false;\n\s*if \(M == 1\))' \
 	'\1// MX18: ready_for_logits left set\2' && must_red MX18 7.14 pkv_def pkv_qk; fi
+if want MXB5; then host_mutant MXB5 $G 1 \
+	'^(\s*)if \(seq->rows_chunk != nullptr\) RowsAfterOneRowSubmit\(seq, adapter_or_null, layers_to_issue, out_statuses\[i\]\);' \
+	'\1(void)0;  // MXB5: the batch skips the M = 1 chunk hook' && must_red MXB5 5.4 pkv_def pkv_qk; fi
+if want MXS1; then host_mutant MXS1 src/gpu/superslm_gpu.cpp 1 \
+	'^(\s*)if \(WidenedShaderSources\(shader_source_dir, shader_name, &wide_dir, &sources\)\) \{' \
+	'\1if (false) {  // MXS1: widened names unmapped' && must_red MXS1 stale pkv_def; fi
 if [ ${#FAILED[@]} -eq 0 ]; then echo "mutants: PASS"; exit 0; fi
 echo "mutants: FAIL (${FAILED[*]})"
 exit 1
