@@ -3904,7 +3904,8 @@ std::vector<sfd::LayerRowsEntry> Q6cPasses() {
 	return v;
 }
 
-// kBit01: bits 0 and 1 (tiled-matmul plan slice 2), under which the batched pass itself threads.
+// kBit0 is a hook with `reserved` = 0 (no bits; the name predates bit 0). kBit01: bits 0 and 1
+// (SSLM_PARALLEL_FOR_PREFILL and _MATVEC, tiled-matmul plan slice 2), under which the batched pass itself threads.
 enum class Q6cArm { kNoHook, kBit1, kBit0, kBit01 };
 
 struct SpanRun {
@@ -3970,9 +3971,10 @@ uint32_t Q6cLongestState(const Sfd& f) {
 
 // Q6C.1 [Q6 C] One verb call at M = 1, 2, 7, 8 and 9 rows, both as a whole span (budget 64 at a state whose
 // chain is M) and as a chunk_budget-bounded piece (budget M at the longest chain). Under bit 1 the status,
-// forced ids and whole blob equal the batched pass's (no hook, and bit 0) and the token-by-token reference
+// forced ids and whole blob equal the batched pass's (no hook, and a hook with no bits) and the token-by-token reference
 // (the same tokens as explicit content, one per prefill call); 7 splits into seven threaded one-row passes,
-// 8 stays one serial pass of eight. Bit 0 keeps one pass at every M and never calls `run`. The bit-1 arm's
+// 8 stays one serial pass of eight. A hook with no bits keeps one pass at every M and never calls `run`;
+// with bits 0 and 1 (tiled-matmul slice 2) every M of 2 or more is one threaded pass. The bit-1 arm's
 // hook runs its tasks on real threads, so the cell is also the split path's TSan cell.
 void Cell_Q6C_1() {
 	const MinWorkScope min_work(kSmallMinWork);
@@ -3994,7 +3996,7 @@ void Cell_Q6C_1() {
 			const SpanRun plain = Q6cSpan(f, at, budget, Q6cArm::kNoHook);
 			const SpanRun bit0 = Q6cSpan(f, at, budget, Q6cArm::kBit0);
 			for (const SpanRun* x : {&bit1, &plain, &bit0}) {
-				const char* arm = x == &bit1 ? "bit 1" : x == &plain ? "no hook" : "bit 0";
+				const char* arm = x == &bit1 ? "bit 1" : x == &plain ? "no hook" : "no bits";
 				CHECK_MSG(x->ok && x->j.st == SSLM_OK && x->j.count == int32_t(m) && x->j.forced == want,
 				          "[Q6C.1 M %zu %s, %s] status %d count %d forced %s; want %s", m, how, arm,
 				          static_cast<int>(x->j.st), x->j.count, Str(x->j.forced).c_str(), Str(want).c_str());
@@ -4017,7 +4019,7 @@ void Cell_Q6C_1() {
 			          (m >= 2 && m <= kQ6cSplitMax) ? "one-row passes, one per row" : "one batched pass of M rows");
 			CHECK_MSG((m <= kQ6cSplitMax) == (bit1.run_calls > 0), "[Q6C.1 M %zu %s, bit 1] %zu run calls; want %s", m,
 			          how, bit1.run_calls, m <= kQ6cSplitMax ? "some (threaded one-row passes)" : "none (one serial pass)");
-			CHECK_MSG(Q6cShapeIs(bit0.passes, m, false) && bit0.run_calls == 0, "[Q6C.1 M %zu %s, bit 0] S-LAYERROWS %s, "
+			CHECK_MSG(Q6cShapeIs(bit0.passes, m, false) && bit0.run_calls == 0, "[Q6C.1 M %zu %s, no bits] S-LAYERROWS %s, "
 			          "%zu run calls; want one pass of M rows and none", m, how, Q6cShape(bit0.passes).c_str(),
 			          bit0.run_calls);
 			CHECK_MSG(Q6cShapeIs(plain.passes, m, false), "[Q6C.1 M %zu %s, no hook] S-LAYERROWS %s", m, how,

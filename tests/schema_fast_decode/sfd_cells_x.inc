@@ -2186,7 +2186,8 @@ void Cell_X_8_1b() {
 					CHECK_MSG(shape, "[8.X1b %s] the call at %zu (M %zu, j %d): S-LAYERROWS %s; want one pass of M rows",
 					          XWhat(both, plan).c_str(), v.pos, m, v.j.count, Q6cShape(v.passes).c_str());
 				}
-				CHECK_MSG(!any || batched_runs > 0, "[8.X1b %s] no batched run call", XWhat(both, plan).c_str());
+				CHECK_MSG(any && batched_runs > 0, "[8.X1b %s] %s", XWhat(both, plan).c_str(),
+				          any ? "no batched run call" : "no verb call carried a draft (the cell would test nothing)");
 			}
 		}
 	}
