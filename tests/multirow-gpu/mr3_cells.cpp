@@ -1120,12 +1120,190 @@ void Cell52(const mr2::Model& m) { CellHeadroom(m, true); }
 
 // ------------------------------------------------------------------------------------------------ 5.4 / 8.6
 // One batch call; returns the submissions it made (submission seam).
-uint64_t Batch(World& w, const std::vector<SslmGpuSequenceHandle*>& seqs, uint32_t budget, std::vector<S>* st, S* call) {
+uint64_t Batch(World& w, const std::vector<SslmGpuSequenceHandle*>& seqs, uint32_t budget, std::vector<S>* st, S* call,
+               std::vector<const SslmGpuAdapterHandle*> adapters = {}) {
 	const SslmGpuMr2Seams s0 = Seams(w);
-	std::vector<const SslmGpuAdapterHandle*> none(seqs.size(), nullptr);
-	st->assign(seqs.size(), S::SSLM_DEVICE_LOST);
-	*call = sslm_decode_step_batch_gpu(w.ctx, seqs.data(), none.data(), static_cast<uint32_t>(seqs.size()), budget, st->data());
+	if (adapters.empty()) adapters.assign(seqs.size(), nullptr);
+	st->assign(seqs.size(), S::SSLM_PREFILL_HIDDEN_UNAVAILABLE);  // a value no member can be given: unwritten slots show
+	*call = sslm_decode_step_batch_gpu(w.ctx, seqs.data(), adapters.data(), static_cast<uint32_t>(seqs.size()), budget, st->data());
 	return Seams(w).submissions - s0.submissions;
+}
+uint32_t RowLayer(SslmGpuSequenceHandle* s) { return *SslmGpuSeqHandleLayerIndexForBench(s); }
+// A plain member a batch left part-way through its token: one-layer slices to full depth.
+void FinishRow(World& w, SslmGpuSequenceHandle* s, const mr2::Model& m, const std::string& tag) {
+	for (int i = 0; i < 64 && RowLayer(s) < m.layers(); ++i)
+		if (mr2::Slice(w, s, m.dpl()) != S::SSLM_OK) { Check(false, tag + ": finishing the plain member"); return; }
+}
+// A chunk member a batch left open: one-layer slices until it closes.
+void FinishChunk(World& w, SslmGpuSequenceHandle* s, int32_t M, const mr2::Model& m, const std::string& tag) {
+	ChunkRun r;
+	r.admitted = M;
+	if (RowsOpen(s) != 0) Advance(w, s, r, [&](int) { return m.dpl(); });
+	else r.closed = true;
+	CleanClose(r, s, M, tag);
+}
+// 5.4 (review S2): a chunk-open member takes whole layers from the batch's RUNNING budget at the model's per-layer
+// count, as a plain member does, and is charged for them; a member the remainder cannot cover is
+// SSLM_BATCH_BUDGET_EXHAUSTED (the batch's status, never the single call's), unchanged. L = 2 on the cloud fixtures.
+//   A  [plain, chunk M4 at layer 0, plain], budget full + D: the plain takes L layers, the chunk 1 (the remainder runs
+//      out inside it), the last plain is exhausted and unchanged.
+//   B  [plain, chunk M4 at layer 0], budget full: the chunk is exhausted and unchanged.
+//   C  [chunk M4 at layer L-1, plain], budget 2D: the chunk takes its last layer and closes, the plain takes 1 layer
+//      (the chunk was charged).
+// Then every member finishes one layer at a time and equals its one-row twin.
+void Cell54Budget(const mr2::Model& m) {
+	const int32_t V = m.vocab();
+	const uint32_t full = Full(m), D = m.dpl(), L = m.layers();
+	if (L < 2) { Check(false, "5.4 budget cases need L >= 2"); return; }
+	struct Member {
+		bool chunk;
+		uint32_t pre;      // chunk: layers sliced before the batch
+		uint32_t layers;   // the layers the batch must advance it
+		S want;
+	};
+	struct Case {
+		const char* name;
+		std::vector<Member> ms;
+		uint32_t budget;
+	};
+	const std::vector<Case> cases = {
+	    {"A (runs out inside the chunk)", {{false, 0, L, S::SSLM_OK}, {true, 0, 1, S::SSLM_OK}, {false, 0, 0, S::SSLM_BATCH_BUDGET_EXHAUSTED}}, full + D},
+	    {"B (exhausted at the chunk)", {{false, 0, L, S::SSLM_OK}, {true, 0, 0, S::SSLM_BATCH_BUDGET_EXHAUSTED}}, full},
+	    {"C (the chunk is charged)", {{true, L - 1, 1, S::SSLM_OK}, {false, 0, 1, S::SSLM_OK}}, 2 * D},
+	};
+	const int32_t M = 4;
+	for (int pooled = 0; pooled <= 1; ++pooled)
+		for (size_t ci = 0; ci < cases.size(); ++ci) {
+			const Case& c = cases[ci];
+			const std::string tag = F("%s %s budget case %s", m.base().c_str(), pooled ? "pooled" : "dedicated", c.name);
+			World w(m, Shaders());
+			if (!w.ok) { Check(false, tag); continue; }
+			std::vector<Pair> ps;
+			std::vector<SslmGpuSequenceHandle*> members;
+			std::vector<std::vector<int32_t>> rows;
+			for (size_t i = 0; i < c.ms.size(); ++i) {
+				const uint32_t stream = 80 + static_cast<uint32_t>(10 * ci + i);
+				ps.push_back(MakePair(w, pooled != 0));
+				Pair& p = ps.back();
+				Twin(w, p.a, Stream(0, 2, V, stream), full, m);
+				Twin(w, p.t, Stream(0, 2, V, stream), full, m);
+				rows.push_back(Stream(2, c.ms[i].chunk ? M : 1, V, stream));
+				if (c.ms[i].chunk) {
+					Check(Embed(w, p.a, rows.back()) == S::SSLM_OK, tag + ": open chunk");
+					for (uint32_t l = 0; l < c.ms[i].pre; ++l) Check(mr2::Slice(w, p.a, D) == S::SSLM_OK, tag + ": pre-slice");
+				} else {
+					Check(sslm_gpu_seq_embed_token(w.ctx, p.a, rows.back()[0]) == S::SSLM_OK, tag + ": plain embed");
+				}
+				members.push_back(p.a);
+			}
+			std::vector<S> st;
+			S call = S::SSLM_DEVICE_LOST;
+			Batch(w, members, c.budget, &st, &call);
+			StatusIs(call, S::SSLM_OK, tag + ": batch call");
+			for (size_t i = 0; i < c.ms.size(); ++i) {
+				const Member& mb = c.ms[i];
+				const std::string mt = F("%s: member %zu (%s)", tag.c_str(), i, mb.chunk ? "chunk M4" : "plain");
+				StatusIs(st[i], mb.want, mt);
+				mr2::Ready(w, members[i]);
+				if (mb.chunk) {
+					const uint32_t want_layer = mb.pre + mb.layers;
+					const int32_t want_open = want_layer >= L ? 0 : M;
+					const uint32_t got_layer = want_open == 0 ? L : Layer(members[i]);
+					Check(RowsOpen(members[i]) == want_open && got_layer == want_layer,
+					      F("%s: rows_open %d at layer %u, want %d at layer %u", mt.c_str(), RowsOpen(members[i]), Layer(members[i]), want_open, want_layer));
+					FinishChunk(w, members[i], M, m, mt);
+				} else {
+					Check(RowLayer(members[i]) == mb.layers, F("%s: at layer %u, want %u", mt.c_str(), RowLayer(members[i]), mb.layers));
+					FinishRow(w, members[i], m, mt);
+				}
+				Twin(w, ps[i].t, rows[i], full, m);
+				BlobEq(Blob(w, members[i], mt), Blob(w, ps[i].t, mt), mt + " vs its twin");
+			}
+		}
+}
+// 5.4 (review S2): an M = 1 chunk member keeps the adapter of the slice that ran layer 0 (§4.4) in the batch as in the
+// single call: a batch slot naming another adapter (none, or a second handle of the same adapter) is BUSY with the
+// chunk unchanged; the first adapter completes it, equal to the twin on that adapter. M = 4 likewise. pkv_def only.
+void Cell54Adapter(const mr2::Model& m) {
+	const int32_t V = m.vocab();
+	const uint32_t D = m.dpl();
+	std::vector<uint8_t> bytes;
+	superslm::SslmModelView view{};
+	if (!LoadAdapter(m, &bytes, &view)) {
+		if (m.base() == "pkv_def") Check(false, "5.4 adapter case: no --adapter (pkv_def_r4.adp)");
+		else std::printf("5.4: %s has no adapter fixture; the adapter case runs on pkv_def\n", m.base().c_str());
+		return;
+	}
+	if (m.layers() < 2) { Check(false, "5.4 adapter case needs L >= 2"); return; }
+	for (int32_t M : {1, 4}) {
+		const std::string tag = F("%s M%d adapter in the batch", m.base().c_str(), M);
+		World w(m, Shaders());
+		if (!w.ok) { Check(false, tag); continue; }
+		SslmGpuAdapterHandle *a1 = nullptr, *a2 = nullptr;
+		Check(sslm_gpu_adapter_map(w.ctx, w.model, &view, &a1) == S::SSLM_OK && sslm_gpu_adapter_map(w.ctx, w.model, &view, &a2) == S::SSLM_OK,
+		      tag + ": adapter maps");
+		w.adapters.push_back(a1);
+		w.adapters.push_back(a2);
+		Pair p = MakePair(w, false), q = MakePair(w, false);
+		const std::vector<int32_t> rows = Stream(0, M, V, 95);
+		Check(Embed(w, p.a, rows) == S::SSLM_OK, tag + ": embed");
+		Check(mr2::Slice(w, p.a, D, a1) == S::SSLM_OK, tag + ": layer 0's slice on the first adapter");
+		const uint32_t layer = Layer(p.a);
+		Check(sslm_gpu_seq_embed_token(w.ctx, q.a, mr2::StreamToken(0, V, 96)) == S::SSLM_OK, tag + ": plain embed");
+		for (const SslmGpuAdapterHandle* later : {static_cast<const SslmGpuAdapterHandle*>(nullptr), static_cast<const SslmGpuAdapterHandle*>(a2)}) {
+			const std::string lt = tag + (later ? ": a second handle" : ": no adapter");
+			std::vector<S> st;
+			S call = S::SSLM_DEVICE_LOST;
+			Batch(w, {p.a}, Full(m), &st, &call, {later});
+			StatusIs(call, S::SSLM_OK, lt + ": batch call");
+			StatusIs(st[0], MR3_MIDTOKEN_ADAPTER_STATUS, lt + ": the changed adapter in a batch slot");
+			Check(RowsOpen(p.a) == M && Layer(p.a) == layer, lt + ": the refused slot changed the chunk");
+		}
+		// The first adapter completes it, beside a plain member after it (which the refusal above never reached).
+		std::vector<S> st;
+		S call = S::SSLM_DEVICE_LOST;
+		Batch(w, {p.a, q.a}, 2 * Full(m), &st, &call, {a1, nullptr});
+		StatusIs(st[0], S::SSLM_OK, tag + ": the first adapter");
+		StatusIs(st[1], S::SSLM_OK, tag + ": the plain member after it");
+		mr2::Ready(w, p.a);
+		mr2::Ready(w, q.a);
+		FinishChunk(w, p.a, M, m, tag);
+		Check(Twin(w, p.t, rows, D, m, a1) == S::SSLM_OK, tag + ": twin");
+		BlobEq(Blob(w, p.a, tag), Blob(w, p.t, tag), tag + ": vs the twin on the first adapter");
+		Twin(w, q.t, {mr2::StreamToken(0, V, 96)}, Full(m), m);
+		BlobEq(Blob(w, q.a, tag), Blob(w, q.t, tag), tag + ": the plain member");
+	}
+}
+// 5.4 (review S2): device lost on a chunk-open member ahead of others: that slot and every slot after it read
+// SSLM_DEVICE_LOST and the later members are not reached (no layer run, nothing submitted for them), as for a plain
+// member (design §9's batch row). Then abandon and release return OK and the row set is freed.
+void Cell54DeviceLost(const mr2::Model& m) {
+	const int32_t V = m.vocab();
+	for (int pooled = 0; pooled <= 1; ++pooled) {
+		const std::string tag = F("%s %s device lost on a chunk member", m.base().c_str(), pooled ? "pooled" : "dedicated");
+		World w(m, Shaders());
+		if (!w.ok) { Check(false, tag); continue; }
+		Pair c = MakePair(w, pooled != 0), p1 = MakePair(w, pooled != 0), p2 = MakePair(w, pooled != 0);
+		Check(Embed(w, c.a, Stream(0, 4, V, 97)) == S::SSLM_OK, tag + ": embed");
+		Check(sslm_gpu_seq_embed_token(w.ctx, p1.a, mr2::StreamToken(0, V, 98)) == S::SSLM_OK &&
+		          sslm_gpu_seq_embed_token(w.ctx, p2.a, mr2::StreamToken(0, V, 99)) == S::SSLM_OK,
+		      tag + ": plain embeds");
+		Check(sslm_gpu_test_only_mr2_arm_slice_alloc_failure(w.ctx, 0) == S::SSLM_OK, tag + ": arm");
+		ArmGpuMapDeviceRemovedQueryInjection();
+		std::vector<S> st;
+		S call = S::SSLM_OK;
+		const uint64_t subs = Batch(w, {c.a, p1.a, p2.a}, 3 * Full(m), &st, &call);
+		sslm_gpu_test_only_mr2_arm_slice_alloc_failure(w.ctx, -1);
+		StatusIs(call, S::SSLM_OK, tag + ": batch call");
+		for (size_t i = 0; i < st.size(); ++i) StatusIs(st[i], S::SSLM_DEVICE_LOST, F("%s: slot %zu", tag.c_str(), i));
+		Check(RowLayer(p1.a) == 0 && RowLayer(p2.a) == 0,
+		      F("%s: members after the lost one ran layers (%u, %u)", tag.c_str(), RowLayer(p1.a), RowLayer(p2.a)));
+		Check(subs == 0, F("%s: %llu submissions (want none: the chunk's failed before submitting, the rest not reached)", tag.c_str(),
+		                   (unsigned long long)subs));
+		StatusIs(sslm_gpu_seq_rows_abandon(w.ctx, c.a), S::SSLM_OK, tag + ": rows_abandon after device lost");
+		const SslmGpuMr2Seams sm = Seams(w);
+		Check(sm.chunks_open == 0 && sm.row_buffer_free == sm.row_buffer_sets, tag + ": the chunk's row set was not freed");
+	}
 }
 void Cell54(const mr2::Model& m) {
 	g_cell = "5.4";
@@ -1187,6 +1365,9 @@ void Cell54(const mr2::Model& m) {
 			BlobEq(Blob(w, plain[i].a, tag), Blob(w, plain[i].t, tag), F("%s: plain-only member %d", tag.c_str(), i));
 		}
 	}
+	Cell54Budget(m);
+	Cell54Adapter(m);
+	Cell54DeviceLost(m);
 }
 void Cell86(const mr2::Model& m) {
 	g_cell = "8.6";
@@ -1406,6 +1587,35 @@ void Cell75(const mr2::Model& m) {
 				StatusIs(sslm_gpu_seq_rows_abandon(w.ctx, p.a), S::SSLM_OK, tag + ": abandon on a closed handle");
 				Check(LastCommitted(p.a) == M, F("%s: abandon on a closed handle changed last_rows_committed to %d", tag.c_str(), LastCommitted(p.a)));
 				BlobEq(Blob(w, p.a, tag), closed, tag + ": abandon on a closed handle changed it");
+			}
+	// §4.2's first rule (review S3): rows_abandon on a Submitted handle is BUSY and changes nothing; the slice drains
+	// as submitted and the chunk completes equal to the twin. At layer 0's slice and at the closing slice.
+	for (int pooled = 0; pooled <= 1; ++pooled)
+		for (int M : {1, 4})
+			for (uint32_t at : {0u, L - 1}) {
+				const std::string tag = F("%s M%d abandon while slice %u is Submitted %s", m.base().c_str(), M, at, pooled ? "pooled" : "dedicated");
+				World w(m, Shaders());
+				if (!w.ok) { Check(false, tag); continue; }
+				Pair p = MakePair(w, pooled != 0);
+				const std::vector<int32_t> head = Stream(0, 3, V, 74), rows = Stream(3, M, V, 74);
+				Twin(w, p.a, head, Full(m), m);
+				Twin(w, p.t, head, Full(m), m);
+				Check(Embed(w, p.a, rows) == S::SSLM_OK, tag + ": embed");
+				for (uint32_t l = 0; l < at; ++l) Check(mr2::Slice(w, p.a, D) == S::SSLM_OK, tag + ": slice");
+				StatusIs(sslm_decode_step_gpu(w.ctx, p.a, nullptr, D), S::SSLM_OK, tag + ": submit");
+				const SslmGpuMr2Seams s0 = Seams(w);
+				StatusIs(sslm_gpu_seq_rows_abandon(w.ctx, p.a), S::SSLM_BUSY, tag);
+				const SslmGpuMr2Seams s1 = Seams(w);
+				Check(s1.row_buffer_free == s0.row_buffer_free && s1.chunks_open == s0.chunks_open,
+				      F("%s: the refused abandon returned the row set (free %u -> %u, open %u -> %u)", tag.c_str(), s0.row_buffer_free,
+				        s1.row_buffer_free, s0.chunks_open, s1.chunks_open));
+				StatusIs(mr2::Ready(w, p.a), S::SSLM_OK, tag + ": the slice drains");
+				const bool closing = at + 1 >= L;
+				Check(RowsOpen(p.a) == (closing ? 0 : M) && (closing || Layer(p.a) == at + 1),
+				      F("%s: rows_open %d layer %u after the drain", tag.c_str(), RowsOpen(p.a), Layer(p.a)));
+				FinishChunk(w, p.a, M, m, tag);
+				Twin(w, p.t, rows, Full(m), m);
+				BlobEq(Blob(w, p.a, tag), Blob(w, p.t, tag), tag + ": vs twin");
 			}
 	World w(m, Shaders());
 	SslmGpuSequenceHandle* f = w.Dedicated(64);
