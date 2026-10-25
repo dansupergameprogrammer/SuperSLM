@@ -9,7 +9,8 @@
 #   MX1s  every row at the chunk's widest causal width (`g_width + SSLM_WIDE_H - 1`)      -> 6.1
 #   MX2   no `+ r` in the row position/address (the g_position row macro dropped)          -> 6.1, 4.6
 #   MX3a  the padded rows' sticky gate removed in every site                               -> 6.4, 4.6b
-#   MX3b  the padded rows' sticky gate removed in commit_site only                         -> 6.4, 4.6b
+#   MX3b  the padded rows' sticky gate removed in commit_site only                         -> MR1 smoke E3 (6.4 and
+#         4.6b run report-only: the mutant changes only the padded row's own SeqState, which no MR2 surface reads)
 #   MX6   the adapter tails read row 0's activations (ApplyFusedAdapterDeltaGpu on row 0)  -> 4.1 (pkv_def_r4.adp)
 #   MX12  at H = 2, row b's GEMM sum stored to row (b + 1) mod 2                           -> 6.1
 #   MX15  barriers removed from the widened GEMM tree's last log2(32) steps: 4.7's lint (MR1 suite) is its
@@ -21,7 +22,12 @@
 #   MX4   the close picks the LAST refused row instead of the first                        -> 6.6 (two-refusal)
 #   MX5   counters summed over all rows                                                    -> 6.6 (every j < 7)
 #   MX7   the close copies a row above f into the mirror                                   -> 6.6
-#   MX8   rollback skips HolderUnmapTail                                                   -> 1.1r (MR3's 1.1)
+#   MX8   rollback skips HolderUnmapTail                                                   -> 1.1r (MR3's 1.1; its
+#         entry sits on a page boundary so every rollback has a page to unmap). SURVIVES at MR2: the page is
+#         inside the budget's up-front reservation (free_pages never moves) and HolderUnmapTail returns it to
+#         the holder's reserve so the next map draws the same page, so pool stats, blobs and device bytes are
+#         identical with or without the unmap. Only the holder's mapped-page count shows it, and no MR2 seam
+#         reports that: 1.1r needs one (the builder's side) before MX8 can go red. Left graded, so it stays red.
 #   MX11  ctxlen advanced once per chunk                                                   -> 6.1
 #   MX20  the refused row's counter deltas dropped (rev 1.1's rule)                        -> 6.6
 #   MX21  the refused row's mirror rows not copied                                         -> 6.6
@@ -105,7 +111,35 @@ must_red() {
 if want MX1s; then shader_mutant MX1s 's/^#define g_width (g_width + g_row)$/#define g_width (g_width + SSLM_WIDE_H - 1)/' '*_site_wide.hlsl' && must_red MX1s 6.1 pkv_def pkv_qk; fi
 if want MX2; then shader_mutant MX2 '/^#define g_position (g_position + g_row)$/d' '*_site_wide.hlsl' && must_red MX2 6.1,4.6 pkv_def pkv_qk; fi
 if want MX3a; then shader_mutant MX3a 's/^\(\s*\)if (sticky != kTagOk) return;/\1\/\/ MX3a: padded gate removed/; s/^\(\s*\)if (SeqState.Load<int64_t>(sticky_off) != kTagOk) return;/\1\/\/ MX3a: padded gate removed/' '*_site_wide.hlsl' && must_red MX3a 6.4,4.6b pkv_def pkv_qk; fi
-if want MX3b; then shader_mutant MX3b 's/^\(\s*\)if (sticky != kTagOk) return;/\1\/\/ MX3b: padded gate removed/' 'commit_site_wide.hlsl' && must_red MX3b 6.4,4.6b pkv_def pkv_qk; fi
+if want MX3b; then
+	# commit_site alone ungated lets a padded row overwrite only its OWN SeqState (residual, scale, layer, ctxlen): the
+	# K/V sites stay gated and the close never reads a padded row, so no MR2 surface (6.4, 4.6b) can see it, and they
+	# are run report-only. The check that reads padded rows is MR1's one-layer smoke, E3 (padded_rows_inert): MX3b
+	# must turn E3 red there, and only E3, on both fixtures.
+	if shader_mutant MX3b 's/^\(\s*\)if (sticky != kTagOk) return;/\1\/\/ MX3b: padded gate removed/' 'commit_site_wide.hlsl'; then
+		for m in pkv_def pkv_qk; do
+			set +e; "$WINE" "$OUT/MX3b/mr2_cells.exe" --model="$FIX/$m.sslm" --fixtures="$FIX" --cells=6.4,4.6b >"$OUT/MX3b/$m.log" 2>&1; set -e
+			echo "REPORT MX3b on $m, 6.4/4.6b: $(tr -d '\r' <"$OUT/MX3b/$m.log" | grep -c '^RED cell') of 2 red (expected 0: no MR2 surface reads a padded row)"
+		done
+		S1="$(dirname "$OUT")/mr1-smoke"
+		bash "$HERE/mr1_wine_smoke.sh" --out="$S1" --build-only --jobs="$JOBS" >"$OUT/MX3b/mr1-build.log" 2>&1 ||
+			{ echo "FAIL mutant MX3b: MR1 smoke build ($OUT/MX3b/mr1-build.log)"; FAILED+=(MX3b); }
+		if [ -f "$S1/mr1_wide_smoke.exe" ]; then
+			d="$OUT/MX3b/mr1"; rm -rf "$d"; mkdir -p "$d"
+			cp "$S1/mr1_wide_smoke.exe" "$S1/d3d12.dll" "$S1/d3d12core.dll" "$d/"; cp -r "$S1/shaders" "$d/shaders"
+			cp "$OUT/MX3b/shaders"/commit_site_wide_h*.cso "$d/shaders/"
+			ok=1
+			for m in pkv_def pkv_qk; do
+				set +e; "$WINE" "$d/mr1_wide_smoke.exe" --model="$FIX/$m.sslm" >"$d/wide-$m.log" 2>&1; rc=$?; set -e
+				hit=$(tr -d '\r' <"$d/wide-$m.log" | grep -E '^FAIL' | grep -c 'E3 padded_rows_inert' || true)
+				other=$(tr -d '\r' <"$d/wide-$m.log" | grep -E '^FAIL' | grep -v 'E3 padded_rows_inert' | grep -v '^FAIL widened one-layer smoke' | head -2 || true)
+				if [ $rc != 0 ] && [ "$hit" -gt 0 ] && [ -z "$other" ]; then echo "    MX3b on $m: MR1 smoke E3 red in $hit cases, nothing else"
+				else ok=0; echo "    MX3b on $m: MR1 smoke exit $rc, $hit E3 failures, other: ${other:-none} ($d/wide-$m.log)"; fi
+			done
+			if [ $ok = 1 ]; then echo "PASS mutant MX3b -> red in MR1 smoke E3 (pkv_def pkv_qk)"; else echo "FAIL mutant MX3b survived (MR1 smoke E3)"; FAILED+=(MX3b); fi
+		fi
+	fi
+fi
 if want MX6; then shader_mutant MX6 's/ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch,/ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratchRows[0],/' '*_site_wide.hlsl' && must_red MX6 4.1 pkv_def; fi
 if want MX12; then shader_mutant MX12 's/WorkScratchRows\[b0 + b\]\.Store<int64_t>/WorkScratchRows[SSLM_WIDE_H == 2 ? ((b0 + b + 1u) % 2u) : (b0 + b)].Store<int64_t>/' 'proj_gemm_wide.hlsl' && must_red MX12 6.1 pkv_def pkv_qk; fi
 if want MX15; then

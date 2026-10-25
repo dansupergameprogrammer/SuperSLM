@@ -892,7 +892,9 @@ void Cell11r(const mr2::Model& m) {
 	sslm_gpu_kv_pool_stats(pool, &st);
 	const int B = static_cast<int>(st.page_positions);
 	SslmGpuPrefixHandle* pre = nullptr;
-	const std::vector<int32_t> pt = Stream(0, B + 3, V, 27);
+	// Two whole pages, so the entry sits at 2B on a page boundary and every chunk's rows map a fresh page that a
+	// rollback must unmap (at B + 3 the rows stayed inside the page the entry already held: MX8 was invisible).
+	const std::vector<int32_t> pt = Stream(0, 2 * B, V, 27);
 	int32_t used = 0;
 	Check(sslm_gpu_prefix_begin(w.ctx, w.model, pool, 2 * B, &pre) == S::SSLM_OK &&
 	      sslm_gpu_prefix_prefill(w.ctx, pre, pt.data(), static_cast<int32_t>(pt.size()), 0, Full(m), &used) == S::SSLM_OK &&
@@ -906,7 +908,7 @@ void Cell11r(const mr2::Model& m) {
 	std::mt19937 rng(77);
 	for (int cyc = 0; cyc < 40; ++cyc) {
 		const int M = 1 + static_cast<int>(rng() % 8);
-		// Rows that cross into a new page, so a rollback must unmap it.
+		// Rows in the page past the entry's last, so a rollback must unmap it.
 		const std::vector<int32_t> rows = Stream(cyc * 8, M, V, 28);
 		int32_t adm = 0;
 		const bool fail_path = cyc % 2 == 1;
