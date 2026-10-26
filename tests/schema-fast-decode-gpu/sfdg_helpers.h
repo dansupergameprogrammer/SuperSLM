@@ -93,6 +93,13 @@ constexpr GoldenStream kGoldenStreams[] = {
     {kPotion, 24, "5498cef23900bfbfad790d7174b6badc04bddc58afdca629daf8e2d0b48488bd"},
     {kPromptResult, 42, "16072100850158b6b6314415875d694601b47c80de8335be6d276230c65b08fb"},
 };
+// MR5 RE-POINT (multi-row GPU plan, ruling 29 M1 as widened): 1.18 removes Canonical, so the streams above are no
+// longer any loop's. Exact's stream is Off's: cell 6.X5's pinned Off streams (the CPU suite's kXOffGoldens: greedy,
+// decode-only, the same prompts), which the GPU's Exact loop must equal.
+constexpr GoldenStream kOffGoldens[] = {
+    {kPotion, 33, "7953dd212aa523bc1800991ac79268947b1c51df48e20ee91c0075e817244bed"},
+    {kPromptResult, 159, "674e41c93d082d38d189b1a55466bb03570fc760bdc76911c80e1d9584ec236c"},
+};
 constexpr const char* kPromptPotionText = "Customer: I would like to buy a health potion, please.\nOrder:";
 constexpr const char* kPromptPrText = "Summarize the request in one line.\nNotes:";
 
@@ -441,8 +448,11 @@ inline GS Compose(GRig& rig, GSeq& s, int32_t pending, const std::vector<int32_t
 	if (st == GS::SSLM_OK && !chain.empty()) st = rig.Content(s, chain);
 	return st;
 }
-// A run of the canonical loop (the §5.6 host contract): the verb until the query reports no chain, then one decode;
-// until a dead end. `pending` is the decoded token while it is the caller's.
+// A run of the jump loop (the §5.6 host contract): the verb, then one decode; until a dead end. `pending` is the
+// decoded token while it is the caller's.
+// MR5 RE-POINT (ruling 29 M1 as widened): 1.17's loop called the verb until the query reported no chain, which
+// Canonical's -1 call advanced. Under Exact a -1 call is a no-op (the next decode produces the pending token), so
+// that loop would spin; the loop is now Exact's host loop: one verb call per decoded token, with that token pending.
 struct GJfRun {
 	std::vector<int32_t> stream;
 	bool dead_end = false;
@@ -454,7 +464,7 @@ inline GJfRun RunGpuJf(GRig& rig, GSeq& s, int32_t budget, int max_decodes = 400
 	GJfRun r;
 	int32_t pending = -1;
 	for (int d = 0; d < max_decodes; ++d) {
-		for (int guard = 0; guard < 1000; ++guard) {
+		{
 			const JumpOut j = Jump(rig, s, pending, budget);
 			++r.verb_calls;
 			r.stream.insert(r.stream.end(), j.forced.begin(), j.forced.end());
@@ -464,12 +474,6 @@ inline GJfRun RunGpuJf(GRig& rig, GSeq& s, int32_t budget, int max_decodes = 400
 			}
 			if (ReadyFlag(rig.ctx(), s.h) == 1) pending = -1;  // admitted: the pending row is in
 			if (between) between(s, r.verb_calls);
-			const GQuery q = QueryGpu(rig.ctx(), s.h, 0);
-			if (q.st != GS::SSLM_OK) {
-				r.end = q.st;
-				return r;
-			}
-			if (q.count == 0) break;
 		}
 		GS st = GS::SSLM_OK;
 		if (pending >= 0) s.last = pending;
@@ -493,6 +497,30 @@ inline std::vector<int32_t> PromptOfLength(const std::vector<int32_t>& base, siz
 	std::vector<int32_t> v;
 	for (size_t i = 0; i < n && !base.empty(); ++i) v.push_back(base[i % base.size()]);
 	return v;
+}
+// MR5 RE-POINT (ruling 29 M1 as widened): Exact's expectations, computed without the verb. Exact keeps the pending
+// token and the draft's leading ids that equal Off's own next tokens (docs/api.md, "Exact mode"), and leaves the
+// sequence at full depth on the last kept row, ready, so the next decode gives Off's next token.
+// Off's own next `n` tokens from `s` by the decode bridge alone (a token in hand is embedded first): DecodeN's form,
+// -2 appended at a dead end.
+inline std::vector<int32_t> OffTokensGpu(GRig& rig, GSeq& s, int64_t n) { return DecodeN(rig.env, s, n); }
+constexpr int32_t kJumpExact = 1;  // SSLM_JUMP_EXACT (sslm_abi.h's enum; the GPU verb takes the CPU's modes)
+// One verb call with an explicit draft under SSLM_JUMP_EXACT.
+inline JumpOut JumpDraft(GRig& rig, GSeq& s, int32_t pending, int32_t budget, const std::vector<int32_t>& draft) {
+	SslmGpuJumpOptions o{};
+	o.struct_size = sizeof(SslmGpuJumpOptions);
+	o.mode = kJumpExact;
+	o.draft = draft.empty() ? nullptr : draft.data();
+	o.draft_count = static_cast<int32_t>(draft.size());
+	return Jump(rig, s, pending, budget, &o);
+}
+// Exact's kept count: the draft's leading ids that equal `off`, at most `limit`.
+inline int32_t ExactKeptPrefix(const std::vector<int32_t>& draft, const std::vector<int32_t>& off, int32_t limit) {
+	int32_t k = 0;
+	while (k < limit && static_cast<size_t>(k) < draft.size() && static_cast<size_t>(k) < off.size() &&
+	       draft[static_cast<size_t>(k)] == off[static_cast<size_t>(k)])
+		++k;
+	return k;
 }
 
 // ---- the CPU side (the reference) ------------------------------------------------------------------------

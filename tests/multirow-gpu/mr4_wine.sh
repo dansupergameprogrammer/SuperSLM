@@ -5,8 +5,8 @@
 #
 # Usage: tests/multirow-gpu/mr4_wine.sh [--out=DIR] [--jobs=N] [--base=REV] [--only=LEG[,LEG...]] [--build-only] [--fixtures-only]
 #   --out   default <repo>/out/mr4
-#   --base  1.17's revision 8.3 compares against (default MR_BASE_TAG, else the merge base with origin/claude/sfd-gpu-1p17,
-#           else v1.17.0)
+#   --base  1.17's revision 8.3 and sfdg compare against (default MR_BASE_TAG, else ff55ae99, the 1.17.0 release that
+#           mr4_sfdg_mrx_ff55ae99.diff is recorded against)
 #   --only  census | contract | cells | c83 | table | sfdg | mutants   (default: census,cells,c83,table,sfdg; contract RETIRED)
 #   --fixtures-only  make the fixtures below and exit (mr4_mutants.sh uses it)
 # Fixtures: all three in <out>/fixtures (MR4_FIXTURES overrides), made when absent, so a fresh clone with no out/ needs
@@ -130,12 +130,11 @@ fi
 # ------------------------------------------------------------------------------------------------ 8.3
 BT="$OUT/base-tree"
 base_tree() {
-	# The base, resolved only by the legs that build from it (c83, sfdg), so census, cells, table and --fixtures-only run
-	# on a clone without that branch. Without origin/claude/sfd-gpu-1p17 (a single-branch clone) it is the v1.17.0 tag
-	# (ruling 20's base).
+	# The base, resolved only by the legs that build from it (c83, sfdg).
 	if [ -z "$BASE" ]; then
-		BASE="$(git merge-base HEAD origin/claude/sfd-gpu-1p17 2>/dev/null || true)"
-		[ -n "$BASE" ] || { BASE=v1.17.0; echo "    base: no origin/claude/sfd-gpu-1p17; using $BASE"; }
+		# Ruling 29 M1 as widened: ff55ae99 (the 1.17.0 release), the base mr4_sfdg_mrx_ff55ae99.diff is recorded against.
+		# The merge base with origin/claude/sfd-gpu-1p17 drifted (to dc342ff5, which has no recorded divergence).
+		BASE=ff55ae99
 	fi
 	if [ ! -d "$BT/src" ] || [ "$(git -C "$BT" rev-parse HEAD 2>/dev/null)" != "$(git rev-parse "$BASE^{commit}")" ]; then
 		git worktree remove --force "$BT" 2>/dev/null || rm -rf "$BT"

@@ -7,7 +7,8 @@
 // MR5 RE-POINT (multi-row GPU plan, ruling 29: the MRX review's M1). The pinned digests are 1.17's Canonical streams
 // (24 and 42 tokens); 1.18 removes Canonical, and Exact's stream is the decode-only run's. As the CPU suite's cell 6.6
 // does since MRX, the expectation is the CPU decode-only stream (greedy, same prompt, to the dead end), computed live
-// without the jump verb. Red until MR5 (the GPU refuses Exact).
+// without the jump verb, and equal to cell 6.X5's pinned Off stream (kOffGoldens: 33 and 159 tokens). The loop is
+// Exact's host loop (RunGpuJf: one verb call per decoded token).
 #include "sfdg_helpers.h"
 
 using namespace sfdg;
@@ -40,6 +41,12 @@ int main(int argc, char** argv) {
 			}
 			CHECK_MSG(want_dead, "[G7.1] %s: the CPU decode-only run did not reach the dead end (%zu tokens)", g.schema, want.size());
 			const std::string want_digest = HexDigest(want);
+			// The live reference is cell 6.X5's pinned Off stream (kOffGoldens).
+			for (const GoldenStream& o : kOffGoldens)
+				if (std::string(o.schema) == g.schema)
+					CHECK_MSG(want.size() == o.length && want_digest == o.digest, "[G7.1] %s: the CPU decode-only stream (%zu, %s) "
+					          "is not cell 6.X5's pinned Off stream (%zu, %s)", g.schema, want.size(), want_digest.c_str(), o.length,
+					          o.digest);
 			for (Mapped* m : {&host, &dev}) {
 				if (!m->m) continue;
 				const char* arm = m == &host ? "host head" : "device head";

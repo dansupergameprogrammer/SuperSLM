@@ -16,6 +16,31 @@
 //   G12.9 Exact mode refused (rev 1.4.4): SSLM_JUMP_EXACT with a draft and with NULL, from each of the first three
 //         shapes, is SSLM_SEQUENCE_REJECTED with the sequence unchanged (blob, walk, flags, bindability) and no
 //         submission; the next canonical call equals a fresh one's (XG37).
+// MR5 RE-POINT (multi-row GPU plan, ruling 29 M1 as widened). 1.18 removes Canonical: NULL options are Exact with the
+// forced chain as the draft, so every expectation is Exact's, computed without the verb (Off's own next tokens, by
+// decode alone on a twin; Exact keeps the draft's leading ids that equal them).
+//   G12.1 The fused admission is an Exact pass: the token in hand and a draft of Off's own next 6 tokens in one call
+//         (7 rows, one pass). The verb keeps all 6 in 2 submissions (the pass and its device K/V snapshot), against
+//         the composition's 1 + ceil(6/4) (the prompt bridge for the pending token, then the schema-content bridge). Tokens, walk and the SLM5
+//         and SLM6 blobs equal the composition's, and the next decode gives Off's next token. Re-pointed: the prefill
+//         snapshot after the verb equals the one before it (Exact never touches it, XG12), not the composition's,
+//         whose prompt bridge rewrites it as 1.17's verb did.
+//   G12.2 The walked embed against an Exact pass with a draft of Off's own next 2 tokens (was: the forced chain). The
+//         Ready arm's reference is the schema-content bridge for the start chain's first token, then a decode (was:
+//         the verb's one-row admission from the ready shape, which only Canonical had: Exact keeps nothing without a
+//         pending token).
+//   G12.3 Fresh, -1: Exact's no-op (OK, nothing kept, context 0, the sequence as an untouched twin's), which still
+//         clears bind eligibility (docs/api.md). Primed, -1: the no-op, sequence unchanged. Retired: "primed -1 equals
+//         the ready shape's admission of the chain" (Canonical-only: both are no-ops now). A wrong pending token is
+//         embedded as given: the verb equals the composition of the wrong token and Exact's kept prefix of the chain,
+//         the prefix computed from Off's next tokens after the wrong token. TokenInHand no longer calls the verb (its
+//         -1 call after the prompt is a no-op under Exact).
+//   G12.8 unchanged.
+//   G12.9 Exact mode is the mode (rev 1.4.4's refusal is gone): SSLM_JUMP_EXACT with NULL draft equals NULL options and
+//         keeps Exact's prefix of the chain; with a draft of Off's own next 2 tokens it keeps both and the next decode
+//         is Off's; from the ready and fresh shapes both are no-ops (OK, nothing kept, sequence unchanged, no
+//         submission), the fresh one no longer bindable, and the next decode equals an untouched twin's (XG37's
+//         "nothing left behind", re-pointed from the refusal).
 // Box only. Run: sfdg_cell_g12_verb.exe [--fixture-dir=DIR] [--only=G12.N]
 #include "sfdg_helpers.h"
 
@@ -47,10 +72,10 @@ GSeq NewSeq(GRig& rig, const char* schema, bool pooled) {
 	return s;
 }
 
-// A sequence with a produced token in hand: the prompt, the start chain by the verb, one decode. Returns the token.
+// A sequence with a produced token in hand: the prompt, one decode. Returns the token. (MR5: 1.17 admitted the
+// start chain by the verb first; under Exact that -1 call is a no-op, so it is gone.)
 int32_t TokenInHand(GRig& rig, GSeq& s, const std::vector<int32_t>& prompt) {
 	rig.Prompt(s, prompt);
-	Jump(rig, s, -1, 64);
 	GS st = GS::SSLM_OK;
 	const int32_t t = Token(rig.env, s, &st);
 	CHECK_MSG(st == GS::SSLM_OK && t >= 0, "token in hand: %s %d", Name(st), t);
@@ -86,38 +111,49 @@ void Primed(GRig& rig, GSeq& s, const std::vector<int32_t>& prompt) {
 
 // ---- G12.1 -----------------------------------------------------------------------------------------------------
 void Cell_12_1(GRig& rig, const std::vector<int32_t>& prompt) {
+	constexpr size_t m = 6;
 	for (const bool pooled : {false, true}) {
 		const char* arm = pooled ? "SLM6" : "SLM5";
-		GSeq a = NewSeq(rig, kPotion, pooled), b = NewSeq(rig, kPotion, pooled);
-		if (!a.h || !b.h) continue;
+		GSeq a = NewSeq(rig, kPotion, pooled), b = NewSeq(rig, kPotion, pooled), o = NewSeq(rig, kPotion, pooled);
+		if (!a.h || !b.h || !o.h) continue;
 		const int32_t t = TokenInHand(rig, a, prompt);
 		const int32_t tb = TokenInHand(rig, b, prompt);
-		CHECK_MSG(t == tb, "[G12.1 %s] the twins chose %d and %d", arm, t, tb);
-		const GQuery q = QueryGpu(rig.ctx(), a.h);
-		const uint64_t R = 1 + q.ids.size();
-		CHECK_MSG(q.count > 0, "[G12.1 %s] precondition: a chain after the choice %d", arm, t);
+		const int32_t to = TokenInHand(rig, o, prompt);
+		CHECK_MSG(t == tb && t == to, "[G12.1 %s] the twins chose %d, %d and %d", arm, t, tb, to);
+		std::vector<int32_t> offn = OffTokensGpu(rig, o, static_cast<int64_t>(m) + 1);
+		while (!offn.empty() && offn.back() < 0) offn.pop_back();
+		CHECK_MSG(offn.size() == m + 1, "[G12.1 %s] precondition: Off's %zu tokens after the choice %d (%zu)", arm, m + 1, t,
+		          offn.size());
+		if (offn.size() != m + 1) continue;
+		const std::vector<int32_t> draft(offn.begin(), offn.begin() + static_cast<long>(m));
+		const uint64_t R = 1 + m;
+		const SnapRead snap0 = ReadSnapshot(rig.ctx(), a.h);
 		uint64_t n0 = Submissions(rig.ctx());
-		const JumpOut j = Jump(rig, a, t, 64);
+		const JumpOut j = JumpDraft(rig, a, t, static_cast<int32_t>(R), draft);
 		const uint64_t verb_subs = Submissions(rig.ctx()) - n0;
 		n0 = Submissions(rig.ctx());
-		const GS cs = Compose(rig, b, tb, q.ids);
+		const GS cs = Compose(rig, b, tb, draft);
 		const uint64_t comp_subs = Submissions(rig.ctx()) - n0;
-		CHECK_MSG(j.st == GS::SSLM_OK && cs == GS::SSLM_OK && j.forced == q.ids, "[G12.1 %s] verb %s forced %s, composition %s",
-		          arm, Name(j.st), Str(j.forced).c_str(), Name(cs));
-		CHECK_MSG(verb_subs == (R + 3) / 4, "[G12.1 %s] R = %llu rows: the verb made %llu submissions, want ceil(R/4) = %llu",
-		          arm, static_cast<unsigned long long>(R), static_cast<unsigned long long>(verb_subs),
-		          static_cast<unsigned long long>((R + 3) / 4));
-		CHECK_MSG(comp_subs == 1 + (R - 1 + 3) / 4, "[G12.1 %s] the composition made %llu submissions, want %llu", arm,
+		CHECK_MSG(j.st == GS::SSLM_OK && cs == GS::SSLM_OK && j.forced == draft, "[G12.1 %s] verb %s kept %s (Off's own %s), "
+		          "composition %s", arm, Name(j.st), Str(j.forced).c_str(), Str(draft).c_str(), Name(cs));
+		// One Exact pass (R <= 8): its rows' layers in one submission, plus the device K/V snapshot of the chunk's first
+		// slice (build-mr5.md, decision (b)); no K/V restore (every row kept) and no widened logits stage (F-SFD's tied,
+		// bound head finishes on the host). The composition: the prompt bridge's one row, then ceil((R - 1) / 4).
+		CHECK_MSG(verb_subs == 2 && comp_subs == 1 + (R - 1 + 3) / 4 && verb_subs < comp_subs,
+		          "[G12.1 %s] R = %llu rows: the verb made %llu submissions (want 2: one pass and its K/V snapshot), the "
+		          "composition %llu (want %llu)", arm, static_cast<unsigned long long>(R), static_cast<unsigned long long>(verb_subs),
 		          static_cast<unsigned long long>(comp_subs), static_cast<unsigned long long>(1 + (R - 1 + 3) / 4));
-		CHECK_MSG(Observe(rig, a.h) == Observe(rig, b.h), "[G12.1 %s] the verb's sequence (blob, walk, flags) differs from "
-		          "the composition's", arm);
-		CHECK_MSG(ReadSnapshot(rig.ctx(), a.h) == ReadSnapshot(rig.ctx(), b.h) &&
-		              ReadSnapshot(rig.ctx(), a.h).st == GS::SSLM_OK,
-		          "[G12.1 %s] the prefill snapshot after the verb differs from the composition's (%s, %s)", arm,
-		          Name(ReadSnapshot(rig.ctx(), a.h).st), Name(ReadSnapshot(rig.ctx(), b.h).st));
+		const SeqObs oa = Observe(rig, a.h), ob = Observe(rig, b.h);
+		CHECK_MSG(oa == ob, "[G12.1 %s] the verb's sequence differs from the composition's: walk %u / %u, ready %d / %d, "
+		          "layer %u / %u, context %lld / %lld, mapped %u / %u, blob %s", arm, oa.walk, ob.walk, oa.ready, ob.ready,
+		          oa.layer, ob.layer, static_cast<long long>(oa.ctx), static_cast<long long>(ob.ctx), oa.mapped, ob.mapped,
+		          oa.blob == ob.blob ? "equal" : "differs");
+		CHECK_MSG(ReadSnapshot(rig.ctx(), a.h) == snap0 && snap0.st == GS::SSLM_OK,
+		          "[G12.1 %s] the prefill snapshot after the verb differs from the one before it (%s, %s; XG12)", arm,
+		          Name(ReadSnapshot(rig.ctx(), a.h).st), Name(snap0.st));
 		GS st = GS::SSLM_OK;
 		const int32_t na = Token(rig.env, a, &st), nb = Token(rig.env, b, &st);
-		CHECK_MSG(na == nb && na != -1, "[G12.1 %s] the next tokens %d and %d", arm, na, nb);
+		CHECK_MSG(na == nb && na == offn[m], "[G12.1 %s] the next tokens %d and %d; Off's %d", arm, na, nb, offn[m]);
 		CHECK_MSG(rig.Blob(a.h) == rig.Blob(b.h), "[G12.1 %s] the blobs differ after the next decode", arm);
 	}
 }
@@ -125,16 +161,24 @@ void Cell_12_1(GRig& rig, const std::vector<int32_t>& prompt) {
 // ---- G12.2 -----------------------------------------------------------------------------------------------------
 void Cell_12_2(GRig& rig, const std::vector<int32_t>& prompt) {
 	const superslm::SslmModelView& view = rig.env.fx.view;
-	GSeq a = rig.New(kPotion), b = rig.New(kPotion);
-	if (!a.h || !b.h) return;
+	GSeq a = rig.New(kPotion), b = rig.New(kPotion), o = rig.New(kPotion);
+	if (!a.h || !b.h || !o.h) return;
 	const int32_t t = TokenInHand(rig, a, prompt);
 	TokenInHand(rig, b, prompt);
-	const GQuery q = QueryGpu(rig.ctx(), a.h);
-	CHECK_MSG(q.count > 1, "[G12.2] precondition: a chain of two or more after the choice (%d)", q.count);
+	TokenInHand(rig, o, prompt);
+	std::vector<int32_t> offn = OffTokensGpu(rig, o, 3);
+	while (!offn.empty() && offn.back() < 0) offn.pop_back();
+	CHECK_MSG(offn.size() == 3, "[G12.2] precondition: Off's 3 tokens after the choice (%zu)", offn.size());
+	if (offn.size() != 3) return;
+	GQuery q;
+	q.ids.assign(offn.begin(), offn.begin() + 2);  // the draft: Off's own next 2 tokens
 	// The verb.
-	Jump(rig, a, t, 64);
+	const JumpOut jv = JumpDraft(rig, a, t, 3, q.ids);
+	CHECK_MSG(jv.st == GS::SSLM_OK && jv.forced == q.ids, "[G12.2] the verb: %s kept %s (Off's own %s)", Name(jv.st),
+	          Str(jv.forced).c_str(), Str(q.ids).c_str());
 	GS st = GS::SSLM_OK;
 	const int32_t next_verb = Token(rig.env, a, &st);
+	CHECK_MSG(next_verb == offn[2], "[G12.2] the verb's next token %d, Off's %d", next_verb, offn[2]);
 	// The sliced path: the pending token by the plain embed (its finish walked it), the chain by the walked embed.
 	CHECK_MSG(sslm_gpu_seq_embed_token(rig.ctx(), b.h, t) == GS::SSLM_OK && DriveSliced(rig, b, 4) == GS::SSLM_OK,
 	          "[G12.2] the pending row");
@@ -183,10 +227,10 @@ void Cell_12_2(GRig& rig, const std::vector<int32_t>& prompt) {
 			          ReadyFlag(rig.ctx(), r.h));
 			r.last = c0;
 			const int32_t tr = Token(rig.env, r, &st);
-			Jump(rig, v, -1, 1);
+			const GS cv = rig.Content(v, {c0});
 			const int32_t tv = Token(rig.env, v, &st);
-			CHECK_MSG(tr == tv && tr != -1, "[G12.2 Ready] the decode after the walked embed gave %d; the verb's one row %d",
-			          tr, tv);
+			CHECK_MSG(cv == GS::SSLM_OK && tr == tv && tr != -1, "[G12.2 Ready] the decode after the walked embed gave %d; "
+			          "after the schema-content bridge's row of %d, %d (%s)", tr, c0, tv, Name(cv));
 		}
 	}
 }
@@ -212,14 +256,13 @@ void Cell_12_3(GRig& rig, const std::vector<int32_t>& prompt) {
 			(void)QueryGpu(rig.ctx(), f.h);
 			CHECK_MSG(rig.Bindable(f.h, kPotion), "[G12.3] fresh: not bindable after the refusals and a query");
 			GSeq g = rig.New(kPotion);
-			const GQuery q = QueryGpu(rig.ctx(), f.h);
 			const JumpOut j = Jump(rig, f, -1, 64);
-			if (g.h) rig.Content(g, q.ids);
-			CHECK_MSG(j.st == GS::SSLM_OK && j.forced == q.ids && CtxLen(f.h) == int64_t(q.ids.size()) &&
+			CHECK_MSG(j.st == GS::SSLM_OK && j.count == 0 && CtxLen(f.h) == 0 &&
 			              (g.h == nullptr || Observe(rig, f.h) == Observe(rig, g.h)),
-			          "[G12.3] fresh, -1: %s, forced %s (start chain %s)", Name(j.st), Str(j.forced).c_str(),
-			          Str(q.ids).c_str());
-			CHECK_MSG(!rig.Bindable(f.h, kPotion), "[G12.3] fresh: still bindable after an admitting call");
+			          "[G12.3] fresh, -1: %s, kept %d, context %lld (want Exact's no-op, as an untouched twin)", Name(j.st),
+			          j.count, static_cast<long long>(CtxLen(f.h)));
+			CHECK_MSG(!rig.Bindable(f.h, kPotion), "[G12.3] fresh: still bindable after a call that passed validation (a no-op "
+			          "clears eligibility)");
 		}
 		GSeq w = rig.New(kPotion);
 		if (w.h) {
@@ -245,9 +288,13 @@ void Cell_12_3(GRig& rig, const std::vector<int32_t>& prompt) {
 			          ReadyFlag(rig.ctx(), p.h), LayerIdx(p.h));
 			Refused("primed, a token given", rig, p, prompt[0], GS::SSLM_SEQUENCE_REJECTED);
 			rig.Prompt(r, prompt);
+			const SeqObs p0 = Observe(rig, p.h), r0 = Observe(rig, r.h);
 			const JumpOut jp = Jump(rig, p, -1, 64), jr = Jump(rig, r, -1, 64);
-			CHECK_MSG(jp.st == GS::SSLM_OK && jp.forced == jr.forced && rig.Blob(p.h) == rig.Blob(r.h),
-			          "[G12.3] primed, -1: %s forced %s; ready %s", Name(jp.st), Str(jp.forced).c_str(), Str(jr.forced).c_str());
+			CHECK_MSG(jp.st == GS::SSLM_OK && jp.count == 0 && Observe(rig, p.h) == p0 && jr.st == GS::SSLM_OK && jr.count == 0 &&
+			              Observe(rig, r.h) == r0,
+			          "[G12.3] primed, -1: %s kept %d, sequence %s; ready, -1: %s kept %d, sequence %s (want Exact's no-op)",
+			          Name(jp.st), jp.count, Observe(rig, p.h) == p0 ? "unchanged" : "changed", Name(jr.st), jr.count,
+			          Observe(rig, r.h) == r0 ? "unchanged" : "changed");
 		}
 	}
 	// A token in hand: -1 refused; a valid but wrong token embedded as given; after sslm_gpu_seq_embed_token the
@@ -261,13 +308,20 @@ void Cell_12_3(GRig& rig, const std::vector<int32_t>& prompt) {
 			Refused("token in hand, -1", rig, a, -1, GS::SSLM_SEQUENCE_REJECTED);
 			const int32_t wrong = t == prompt[0] ? prompt[1] : prompt[0];
 			const GQuery q = QueryGpu(rig.ctx(), b.h);
-			GSeq bw = rig.New(kPotion);
-			if (bw.h) {
+			GSeq bw = rig.New(kPotion), ow = rig.New(kPotion);
+			if (bw.h && ow.h) {
 				TokenInHand(rig, bw, prompt);
+				TokenInHand(rig, ow, prompt);
+				ow.last = wrong;  // Off with the wrong token given: the decode embeds it as given
+				const std::vector<int32_t> offw = OffTokensGpu(rig, ow, static_cast<int64_t>(q.ids.size()) + 1);
+				const int32_t kept = ExactKeptPrefix(q.ids, offw, 63);
+				const std::vector<int32_t> want(q.ids.begin(), q.ids.begin() + kept);
 				const JumpOut jw = Jump(rig, b, wrong, 64);
-				Compose(rig, bw, wrong, q.ids);
-				CHECK_MSG(jw.st == GS::SSLM_OK && Observe(rig, b.h) == Observe(rig, bw.h),
-				          "[G12.3] a wrong pending token (%d, not %d) is not embedded as given: %s", wrong, t, Name(jw.st));
+				Compose(rig, bw, wrong, want);
+				CHECK_MSG(jw.st == GS::SSLM_OK && jw.forced == want && Observe(rig, b.h) == Observe(rig, bw.h),
+				          "[G12.3] a wrong pending token (%d, not %d) is not embedded as given: %s, kept %s; the chain %s, Off's "
+				          "next after it %s, so Exact keeps %s", wrong, t, Name(jw.st), Str(jw.forced).c_str(), Str(q.ids).c_str(),
+				          Str(offw).c_str(), Str(want).c_str());
 			}
 			CHECK_MSG(sslm_gpu_seq_embed_token(rig.ctx(), c.h, wrong) == GS::SSLM_OK, "[G12.3] embed_token");
 			GSeq d = rig.New(kPotion);
@@ -340,15 +394,45 @@ void Cell_12_8(GRig& rig, const std::vector<int32_t>& prompt) {
 
 // ---- G12.9 -----------------------------------------------------------------------------------------------------
 void Cell_12_9(GRig& rig, const std::vector<int32_t>& prompt) {
-	for (int shape = 0; shape < 3; ++shape) {
-		const char* name = shape == 0 ? "token in hand" : shape == 1 ? "ready" : "fresh";
+	// A token in hand: SSLM_JUMP_EXACT with NULL draft equals NULL options and keeps Exact's prefix of the chain; with a
+	// draft of Off's own next 2 tokens it keeps both.
+	{
+		GSeq s = rig.New(kPotion), twin = rig.New(kPotion), o = rig.New(kPotion), d = rig.New(kPotion);
+		if (s.h && twin.h && o.h && d.h) {
+			const int32_t p = TokenInHand(rig, s, prompt);
+			TokenInHand(rig, twin, prompt);
+			TokenInHand(rig, o, prompt);
+			TokenInHand(rig, d, prompt);
+			const GQuery q = QueryGpu(rig.ctx(), s.h);
+			std::vector<int32_t> offn = OffTokensGpu(rig, o, static_cast<int64_t>(std::max<size_t>(q.ids.size(), 2)) + 1);
+			const int32_t kept = ExactKeptPrefix(q.ids, offn, 7);
+			const std::vector<int32_t> want(q.ids.begin(), q.ids.begin() + kept);
+			const SslmGpuJumpOptions ex = Opts(kExact);
+			const JumpOut a = Jump(rig, s, p, 8, &ex), b = Jump(rig, twin, p, 8);
+			CHECK_MSG(a.st == GS::SSLM_OK && a.forced == want && b.st == GS::SSLM_OK && b.forced == want &&
+			              Observe(rig, s.h) == Observe(rig, twin.h),
+			          "[G12.9] token in hand, exact NULL: %s kept %s; NULL options %s kept %s; Exact keeps %s (the chain %s, Off's "
+			          "next %s)", Name(a.st), Str(a.forced).c_str(), Name(b.st), Str(b.forced).c_str(), Str(want).c_str(),
+			          Str(q.ids).c_str(), Str(offn).c_str());
+			if (offn.size() >= 3 && offn[0] >= 0 && offn[1] >= 0 && offn[2] >= 0) {
+				const std::vector<int32_t> draft(offn.begin(), offn.begin() + 2);
+				const JumpOut jd = JumpDraft(rig, d, p, 8, draft);
+				GS st = GS::SSLM_OK;
+				const int32_t nd = Token(rig.env, d, &st);
+				CHECK_MSG(jd.st == GS::SSLM_OK && jd.forced == draft && nd == offn[2], "[G12.9] token in hand, exact with Off's "
+				          "own draft %s: %s kept %s, the next decode %d (Off's %d)", Str(draft).c_str(), Name(jd.st),
+				          Str(jd.forced).c_str(), nd, offn[2]);
+			} else {
+				CHECK_MSG(false, "[G12.9] precondition: Off's 3 tokens after the choice (%s)", Str(offn).c_str());
+			}
+		}
+	}
+	// Ready and fresh: no pending token, so both forms are no-ops that leave nothing behind (XG37).
+	for (int shape = 1; shape < 3; ++shape) {
+		const char* name = shape == 1 ? "ready" : "fresh";
 		GSeq s = rig.New(kPotion), twin = rig.New(kPotion);
 		if (!s.h || !twin.h) continue;
-		int32_t pending = -1;
-		if (shape == 0) {
-			pending = TokenInHand(rig, s, prompt);
-			TokenInHand(rig, twin, prompt);
-		} else if (shape == 1) {
+		if (shape == 1) {
 			rig.Prompt(s, prompt);
 			rig.Prompt(twin, prompt);
 		}
@@ -357,16 +441,20 @@ void Cell_12_9(GRig& rig, const std::vector<int32_t>& prompt) {
 			const SslmGpuJumpOptions ex = with_draft ? Opts(kExact, draft, 1) : Opts(kExact);
 			const SeqObs before = Observe(rig, s.h);
 			const uint64_t n0 = Submissions(rig.ctx());
-			const JumpOut j = Jump(rig, s, pending, 8, &ex);
-			CHECK_MSG(j.st == GS::SSLM_SEQUENCE_REJECTED && Observe(rig, s.h) == before && Submissions(rig.ctx()) == n0,
-			          "[G12.9] %s, exact %s: %s, sequence %s, %llu submissions", name, with_draft ? "with a draft" : "NULL",
-			          Name(j.st), Observe(rig, s.h) == before ? "unchanged" : "changed",
+			const JumpOut j = Jump(rig, s, -1, 8, &ex);
+			CHECK_MSG(j.st == GS::SSLM_OK && j.count == 0 && Observe(rig, s.h) == before && Submissions(rig.ctx()) == n0,
+			          "[G12.9] %s, exact %s: %s, kept %d, sequence %s, %llu submissions (want Exact's no-op)", name,
+			          with_draft ? "with a draft" : "NULL", Name(j.st), j.count, Observe(rig, s.h) == before ? "unchanged" : "changed",
 			          static_cast<unsigned long long>(Submissions(rig.ctx()) - n0));
 		}
-		if (shape == 2) CHECK_MSG(rig.Bindable(s.h, kPotion), "[G12.9] fresh: not bindable after the refusals");
-		const JumpOut a = Jump(rig, s, pending, 64), b = Jump(rig, twin, pending, 64);
-		CHECK_MSG(a.st == b.st && a.forced == b.forced && Observe(rig, s.h) == Observe(rig, twin.h),
-		          "[G12.9] %s: the canonical call after the refusals differs from a fresh one's", name);
+		if (shape == 2) {
+			CHECK_MSG(!rig.Bindable(s.h, kPotion), "[G12.9] fresh: still bindable after the no-ops (they clear eligibility)");
+		} else {
+			GS st = GS::SSLM_OK, st2 = GS::SSLM_OK;
+			const int32_t a = Token(rig.env, s, &st), b = Token(rig.env, twin, &st2);
+			CHECK_MSG(st == st2 && a == b && rig.Blob(s.h) == rig.Blob(twin.h), "[G12.9] ready: the decode after the no-ops %s %d, "
+			          "an untouched twin's %s %d", Name(st), a, Name(st2), b);
+		}
 	}
 }
 

@@ -6,6 +6,15 @@
 //   (c) (rev 1.4.1, audit N-3) a restore between two verb calls of one chain: LONGKEY at chunk budget 4, whose
 //       26-token start chain takes seven calls. After the first, the verb has set the ready flag at full depth; the
 //       restored sequence's sslm_gpu_seq_ready_for_logits reads 1, and a -1 verb call continues the chain.
+// MR5 RE-POINT (multi-row GPU plan, ruling 29 M1 as widened). 1.18 removes Canonical:
+//   (a), (b) the loop is Exact's host loop (RunGpuJf), and the pinned digest is cell 6.X5's Off stream (kOffGoldens:
+//       33 and 159 tokens), not 1.17's Canonical stream (kGoldenStreams). The restore checks are unchanged.
+//   (c) a restore inside one jump loop, between two Exact passes: LONGKEY at chunk budget 4, the token in hand and a
+//       draft of Off's own next three tokens (computed by decode alone), so the first call keeps 3. The restored
+//       sequence's ready flag reads 1 (unchanged). Retired: "a -1 call continues the chain", which only Canonical had
+//       (it admitted the rest of a forced chain without a pending token); a -1 call on the restored ready shape is
+//       now Exact's no-op (OK, nothing kept, nothing changed), checked instead, and the loop continues with the next
+//       decode and a second Exact call. The stream equals Off's.
 // Box only. Run: sfdg_cell_g9_1.exe [--fixture-dir=DIR]
 #include "sfdg_helpers.h"
 
@@ -64,7 +73,7 @@ int main(int argc, char** argv) {
 		for (const bool pooled : {false, true}) {
 			const char* cell = pooled ? "G9.1 (b) SLM6" : "G9.1 (a) SLM5";
 			if (pooled && !g_pool) continue;
-			for (const GoldenStream& g : kGoldenStreams) {
+			for (const GoldenStream& g : kOffGoldens) {
 				const bool potion = std::string(g.schema) == kPotion;
 				const std::vector<int32_t> prompt = c.Tokenize(potion ? kPromptPotionText : kPromptPrText);
 				GSeq plain = NewSeq(rig, g.schema, pooled);
@@ -82,34 +91,59 @@ int main(int argc, char** argv) {
 				CHECK_MSG(got.stream == want.stream && got.dead_end && restores > 0,
 				          "[%s] %s: %d restores; stream %s, uninterrupted %s", cell, g.schema, restores,
 				          Str(got.stream).c_str(), Str(want.stream).c_str());
-				CHECK_MSG(HexDigest(got.stream) == g.digest, "[%s] %s: digest %s, pinned %s", cell, g.schema,
-				          HexDigest(got.stream).c_str(), g.digest);
+				CHECK_MSG(got.stream.size() == g.length && HexDigest(got.stream) == g.digest, "[%s] %s: %zu tokens, digest %s; "
+				          "Off's pinned %zu, %s", cell, g.schema, got.stream.size(), HexDigest(got.stream).c_str(), g.length, g.digest);
 				Drop(rig, s.h);
 			}
 		}
-		// (c) a restore inside one chain.
+		// (c) a restore between two Exact calls of one loop (MR5 re-point).
 		const std::vector<int32_t> prompt = c.Tokenize(kPromptPotionText);
-		GSeq plain = rig.New(kLongKey);
+		GSeq o = rig.New(kLongKey);
 		GSeq s = rig.New(kLongKey);
-		if (plain.h && s.h) {
-			rig.Prompt(plain, prompt);
+		if (o.h && s.h) {
+			rig.Prompt(o, prompt);
 			rig.Prompt(s, prompt);
-			const GJfRun want = RunGpuJf(rig, plain, 4);
-			const JumpOut first = Jump(rig, s, -1, 4);
-			CHECK_MSG(first.st == GS::SSLM_OK && first.count == 4 && QueryGpu(rig.ctx(), s.h, 0).count > 0,
-			          "[G9.1 (c)] the first call: %s, %d forced, and the chain must go on", Name(first.st), first.count);
-			if (SaveRestore(rig, s, false, "G9.1 (c)")) {
-				CHECK_MSG(ReadyFlag(rig.ctx(), s.h) == 1, "[G9.1 (c)] the restored sequence's ready flag reads %d",
-				          ReadyFlag(rig.ctx(), s.h));
-				const JumpOut next = Jump(rig, s, -1, 4);
-				CHECK_MSG(next.st == GS::SSLM_OK && next.count == 4, "[G9.1 (c)] the -1 call after the restore: %s, %d",
-				          Name(next.st), next.count);
-				GJfRun rest = RunGpuJf(rig, s, 4);
-				std::vector<int32_t> stream = first.forced;
-				stream.insert(stream.end(), next.forced.begin(), next.forced.end());
-				stream.insert(stream.end(), rest.stream.begin(), rest.stream.end());
-				CHECK_MSG(stream == want.stream && rest.dead_end, "[G9.1 (c)] stream %s, uninterrupted %s", Str(stream).c_str(),
-				          Str(want.stream).c_str());
+			// Off's stream, by decode alone: off[0] is the token the first decode puts in hand.
+			std::vector<int32_t> off = OffTokensGpu(rig, o, 400);
+			const bool dead = !off.empty() && off.back() == -2;
+			if (dead) off.pop_back();
+			CHECK_MSG(dead && off.size() >= 9, "[G9.1 (c)] precondition: Off's LONGKEY stream reaches its dead end after 9 or "
+			          "more tokens (%zu, dead end %d)", off.size(), dead);
+			if (dead && off.size() >= 9) {
+				std::vector<int32_t> stream;
+				GS st = GS::SSLM_OK;
+				const int32_t p = Token(rig.env, s, &st);
+				stream.push_back(p);
+				const std::vector<int32_t> d1(off.begin() + 1, off.begin() + 4);
+				const JumpOut first = JumpDraft(rig, s, p, 4, d1);
+				CHECK_MSG(st == GS::SSLM_OK && p == off[0] && first.st == GS::SSLM_OK && first.forced == d1,
+				          "[G9.1 (c)] the first call: the token %d (Off's %d), %s, kept %s (Off's own %s)", p, off[0],
+				          Name(first.st), Str(first.forced).c_str(), Str(d1).c_str());
+				stream.insert(stream.end(), first.forced.begin(), first.forced.end());
+				if (SaveRestore(rig, s, false, "G9.1 (c)")) {
+					CHECK_MSG(ReadyFlag(rig.ctx(), s.h) == 1, "[G9.1 (c)] the restored sequence's ready flag reads %d",
+					          ReadyFlag(rig.ctx(), s.h));
+					s.ready = s.primed = true;
+					s.mid = false;
+					const SeqObs before = Observe(rig, s.h);
+					const JumpOut noop = Jump(rig, s, -1, 4);
+					CHECK_MSG(noop.st == GS::SSLM_OK && noop.count == 0 && Observe(rig, s.h) == before,
+					          "[G9.1 (c)] the -1 call after the restore: %s, %d kept, sequence %s (want Exact's no-op)",
+					          Name(noop.st), noop.count, Observe(rig, s.h) == before ? "unchanged" : "changed");
+					const int32_t p2 = Token(rig.env, s, &st);
+					stream.push_back(p2);
+					const std::vector<int32_t> d2(off.begin() + 5, off.begin() + 8);
+					const JumpOut next = JumpDraft(rig, s, p2, 4, d2);
+					CHECK_MSG(st == GS::SSLM_OK && next.st == GS::SSLM_OK && next.forced == d2,
+					          "[G9.1 (c)] the second call after the restore: the token %d, %s, kept %s (Off's own %s)", p2,
+					          Name(next.st), Str(next.forced).c_str(), Str(d2).c_str());
+					stream.insert(stream.end(), next.forced.begin(), next.forced.end());
+					std::vector<int32_t> rest = OffTokensGpu(rig, s, 400);
+					const bool rest_dead = !rest.empty() && rest.back() == -2;
+					if (rest_dead) rest.pop_back();
+					stream.insert(stream.end(), rest.begin(), rest.end());
+					CHECK_MSG(stream == off && rest_dead, "[G9.1 (c)] stream %s, Off's %s", Str(stream).c_str(), Str(off).c_str());
+				}
 			}
 		}
 		rig.ReleaseSeqs();

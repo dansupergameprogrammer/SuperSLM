@@ -12,6 +12,13 @@
 // prompt is sized so that the 8 rows cross a page boundary, so site 1 leaves a page mapped that the exit must
 // unmap. Before the fix the throw reached the API boundary, which returns the same status without the restore.
 // Box only. Run: sfdg_cell_g12_10.exe [--fixture-dir=DIR]
+// MR5 RE-POINT (multi-row GPU plan, ruling 29 M1 as widened). 1.18 removes Canonical, so the call is an Exact call:
+// after the prompt (3B - 2 tokens) a token in hand, and a draft of Off's own next 7 tokens (computed by decode alone
+// on a twin) at chunk budget 8: one pass of 8 rows from 3B - 2, across the page boundary. S-GJUMPALLOC's three sites
+// are JumpExactInternal's (MR5): 0 after the entry snapshot, 1 after every row's page is mapped, 2 after the pass,
+// before the ready flag moves. Every check above is unchanged; "a canonical call after the failure equals a fresh
+// one's" is re-pointed to the same Exact call (token and draft), which also keeps Off's 7. Retired: the precondition
+// "LONGKEY's start chain >= 8" (Exact keeps no start span); the draft's length is checked instead.
 #include "sfdg_helpers.h"
 
 using namespace sfdg;
@@ -48,27 +55,42 @@ int main(int argc, char** argv) {
 			for (const int32_t site : {0, 1, 2}) {
 				char arm[64];
 				std::snprintf(arm, sizeof arm, "%s, site %d", pooled ? "pooled" : "dedicated", site);
-				GSeq s = NewSeq(rig, pooled), fresh = NewSeq(rig, pooled), twin = NewSeq(rig, pooled);
-				if (!s.h || !fresh.h || !twin.h) continue;
-				for (GSeq* q : {&s, &fresh, &twin}) rig.Prompt(*q, prompt);
-				CHECK_MSG(QueryGpu(rig.ctx(), s.h, 0).count >= 8, "[G12.10] precondition: LONGKEY's start chain >= 8");
+				GSeq s = NewSeq(rig, pooled), fresh = NewSeq(rig, pooled), twin = NewSeq(rig, pooled), o = NewSeq(rig, pooled);
+				if (!s.h || !fresh.h || !twin.h || !o.h) continue;
+				for (GSeq* q : {&s, &fresh, &twin, &o}) rig.Prompt(*q, prompt);
+				GS st = GS::SSLM_OK;
+				int32_t p = -1;
+				for (GSeq* q : {&s, &fresh, &twin}) {
+					const int32_t t = Token(rig.env, *q, &st);
+					CHECK_MSG(st == GS::SSLM_OK && t >= 0 && (p < 0 || t == p), "[G12.10 %s] the token in hand: %s %d", arm, Name(st), t);
+					p = t;
+				}
+				std::vector<int32_t> offn = OffTokensGpu(rig, o, 8);
+				while (!offn.empty() && offn.back() < 0) offn.pop_back();
+				CHECK_MSG(offn.size() >= 8 && offn[0] == p, "[G12.10 %s] precondition: Off's 8 tokens after the prompt (%zu)", arm,
+				          offn.size());
+				if (offn.size() < 8) {
+					rig.ReleaseSeqs();
+					continue;
+				}
+				const std::vector<int32_t> draft(offn.begin() + 1, offn.begin() + 8);
 				if (pooled) {
 					// The precondition for site 1: a successful call maps at least one page.
 					const SeqObs t0 = Observe(rig, twin.h);
-					const JumpOut tj = Jump(rig, twin, -1, 8);
-					CHECK_MSG(tj.st == GS::SSLM_OK && Observe(rig, twin.h).mapped > t0.mapped,
-					          "[G12.10 %s] precondition: the call maps a page (%s, mapped %u -> %u)", arm, Name(tj.st),
-					          t0.mapped, Observe(rig, twin.h).mapped);
+					const JumpOut tj = JumpDraft(rig, twin, p, 8, draft);
+					CHECK_MSG(tj.st == GS::SSLM_OK && tj.forced == draft && Observe(rig, twin.h).mapped > t0.mapped,
+					          "[G12.10 %s] precondition: the call keeps Off's 7 and maps a page (%s, kept %d, mapped %u -> %u)", arm,
+					          Name(tj.st), tj.count, t0.mapped, Observe(rig, twin.h).mapped);
 				}
 				const SeqObs before = Observe(rig, s.h);
 				const SnapRead snap = ReadSnapshot(rig.ctx(), s.h);
 				CHECK_MSG(snap.st == GS::SSLM_OK, "[G12.10 %s] precondition: a valid snapshot at entry (%s)", arm,
 				          Name(snap.st));
 				CHECK_MSG(sslm_gpu_test_only_arm_jump_host_bad_alloc(site) == GS::SSLM_OK, "[G12.10] arm");
-				const JumpOut j = Jump(rig, s, -1, 8);
+				const JumpOut j = JumpDraft(rig, s, p, 8, draft);
 				sslm_gpu_test_only_arm_jump_host_bad_alloc(-1);
 				CHECK_MSG(j.st == GS::SSLM_GPU_ALLOCATION_FAILED && j.count == 0,
-				          "[G12.10 %s] the verb returned %s with %d forced", arm, Name(j.st), j.count);
+				          "[G12.10 %s] the verb returned %s with %d kept", arm, Name(j.st), j.count);
 				const SeqObs after = Observe(rig, s.h);
 				CHECK_MSG(after == before, "[G12.10 %s] the entry state was not restored: context %lld -> %lld, walk %u -> "
 				          "%u, ready %d -> %d, layer %u -> %u, mapped %u -> %u, blob %s", arm,
@@ -78,12 +100,12 @@ int main(int argc, char** argv) {
 				const SnapRead snap_after = ReadSnapshot(rig.ctx(), s.h);
 				CHECK_MSG(snap_after == snap, "[G12.10 %s] the prefill snapshot differs from the entry's (%s)", arm,
 				          Name(snap_after.st));
-				// The sequence decodes as if the call had not been made: a canonical call equals a fresh one's.
-				const JumpOut a = Jump(rig, s, -1, 8), b = Jump(rig, fresh, -1, 8);
-				CHECK_MSG(a.st == GS::SSLM_OK && b.st == GS::SSLM_OK && a.forced == b.forced &&
+				// The sequence decodes as if the call had not been made: the same Exact call equals a fresh one's.
+				const JumpOut a = JumpDraft(rig, s, p, 8, draft), b = JumpDraft(rig, fresh, p, 8, draft);
+				CHECK_MSG(a.st == GS::SSLM_OK && b.st == GS::SSLM_OK && a.forced == b.forced && a.forced == draft &&
 				              Observe(rig, s.h) == Observe(rig, fresh.h),
-				          "[G12.10 %s] the canonical call after the failure differs from a fresh one's (%s, %s)", arm,
-				          Name(a.st), Name(b.st));
+				          "[G12.10 %s] the Exact call after the failure differs from a fresh one's (%s kept %d, %s kept %d)", arm,
+				          Name(a.st), a.count, Name(b.st), b.count);
 				rig.ReleaseSeqs();
 			}
 		}

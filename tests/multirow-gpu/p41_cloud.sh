@@ -82,10 +82,14 @@ E3_FILE=tests/schema-fast-decode-gpu/check_gpu_status_mirrors.py
 # schema-fast-decode suite's Canonical cells retired or re-pointed to Exact (the table in red-suite-mrx.md), the
 # 1183-1185 relabel (21b), and the te425 census rows that move with the verb (e66f893b).
 # Ruling 29 (the MRX review's M1, the same precedent): 1.17's SFD-GPU cells G12.6 and G7.1, re-pointed from Canonical's
-# contract and pinned Canonical streams to Exact expectations computed without the jump verb (red-suite-mr5.md).
+# contract and pinned Canonical streams to Exact expectations computed without the jump verb (red-suite-mr5.md); as
+# widened at MR5: G9.1, G11.1, G12.1-3/9 (sfdg_cell_g12_verb), G12.7, G12.10 and sfdg_helpers.h's loop and Off pins.
 MRX_FILES=(tests/test_schema_fast_decode.cpp tests/schema_fast_decode/sfd_cells_x.inc
 	tests/te425-gpu-alloc-status-red-suite/gpu_status_sites.txt
-	tests/schema-fast-decode-gpu/sfdg_cell_g12_6.cpp tests/schema-fast-decode-gpu/sfdg_cell_g7_1.cpp)
+	tests/schema-fast-decode-gpu/sfdg_cell_g12_6.cpp tests/schema-fast-decode-gpu/sfdg_cell_g7_1.cpp
+	tests/schema-fast-decode-gpu/sfdg_helpers.h tests/schema-fast-decode-gpu/sfdg_cell_g9_1.cpp
+	tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp
+	tests/schema-fast-decode-gpu/sfdg_cell_g12_7.cpp tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp)
 EXCL=(':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}" ":(exclude)$E3_FILE")
 for f in "${MRX_FILES[@]}"; do EXCL+=(":(exclude)$f"); done
 
