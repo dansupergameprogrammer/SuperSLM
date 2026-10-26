@@ -445,10 +445,31 @@ do {
   that is Submitted, mid-token, or already has a chunk open returns
   `SSLM_BUSY`. A bad spec returns `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`: a null
   pointer, `struct_size` too small, a count outside 1..8, a kind other than
-  `SSLM_GPU_ROWS_PROMPT`, or any flag (`flags` must be 0). A token
+  `SSLM_GPU_ROWS_PROMPT` or `SSLM_GPU_ROWS_EXACT_DRAFT`, or any flag (`flags`
+  must be 0). A token
   outside the vocabulary returns `SSLM_TOKEN_ID_OUT_OF_RANGE`. Nothing is
   written on any refusal. The sequence's ready-for-logits state is cleared.
   Its schema binding and walk state are untouched while the chunk is open.
+- **Exact drafts (`SSLM_GPU_ROWS_EXACT_DRAFT`, 1.18.0).** The rows are
+  `[p, d1, ..., d(count-1)]`: p is the pending token the last finish produced
+  (and walked), and the d's are a draft of what follows. A model mapped
+  without `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`, or a sequence not holding its
+  pending token in hand (layer 0, ready flag clear, context > 0), returns
+  `SSLM_SEQUENCE_REJECTED`. Admission is the longest prefix whose drafts are
+  each draftable and legal at the walk state the previous row reaches (every
+  in-range draft on an unbound sequence), capped as above. The closing
+  `sslm_gpu_ready` finishes each row with the decode bridge's own finish and
+  commits rows 0..a-1, where row a-1 is the first whose produced token is not
+  the next row, whose finish fails or dead-ends, or the last row. The
+  sequence is then byte-identical to one that decoded the same a tokens one
+  at a time, the produced token walked (a dead end keeps the walk and sets
+  the ready flag). `sslm_gpu_seq_rows_produced(seq, out_token)` reads the
+  produced token (-2 at a dead end), or returns the failed finish's status
+  with nothing written; `SSLM_BUSY` while a chunk is open, and
+  `SSLM_SEQUENCE_REJECTED` when no Exact close has happened since the last
+  `sslm_gpu_seq_embed_rows` or reset. It takes no claim. When the finish
+  uses the device head, the rows' logits are computed in one submission,
+  timed on its own (`superslm_gpu::LastLogitsStageTiming()`, `gpu_port.h`).
 - **No schema-forced kind.** The branch's provisional schema-forced kind and its
   first-prewalked flag were removed with canonical mode before release
   (1.18.0). Kind 1 is reserved and is a bad spec, and so is any flag.
@@ -1558,7 +1579,22 @@ on a tied device-head model: a host parallel-for hook that does not run every ta
 same row, as the host-head finish already did.
 
 **The jump-forward verb.** `sslm_gpu_seq_jump_forward(ctx, seq, pending_token, chunk_budget, opts, out_forced, cap,
-out_forced_count)` is the GPU twin of `sslm_seq_jump_forward`. In 1.17.0, which had canonical mode only, it admitted, in passes of up to 4 rows
+out_forced_count)` is the GPU twin of `sslm_seq_jump_forward`.
+
+From 1.18.0 its one mode is Exact (NULL options, `SSLM_JUMP_DEFAULT` and `SSLM_JUMP_EXACT` alike), as on the CPU. With
+a pending token in hand it runs p and the draft (the caller's, or the forced chain from the walk state), clipped to
+`chunk_budget - 1` drafts and to the headroom and cut at the first draft that is not draftable or not legal, in passes
+of up to 8 rows on the multi-row path. Each row but the last is finished with the decode bridge's own finish; the call
+keeps the rows up to and including the first whose produced token differs from the next draft, writes the kept
+drafts to `out_forced`, and leaves the ready flag set on the last kept row, so the next decode bridge call produces
+exactly the plain decode loop's token. No pass runs after one that found a mismatch. No pending token, no schema, a
+model without the exact finish, no headroom, or nothing left after the clip is a no-op (OK, count 0). A device or
+allocation failure (a guard refusal included) in the first pass restores the entry state and returns
+`SSLM_DEVICE_LOST` or `SSLM_GPU_ALLOCATION_FAILED`; in a later pass it keeps the earlier passes and returns OK. The
+prefill snapshot is never touched, and `sslm_gpu_seq_last_rows_committed` keeps its value. The rest of this
+paragraph is 1.17.0's canonical contract, kept for its saves.
+
+In 1.17.0, which had canonical mode only, it admitted, in passes of up to 4 rows
 (a pass of one row on the schema-content chunk path), the pending token (when one is given) and then the chain the schema forces from the walk
 state, at most `chunk_budget` rows in all; R rows make ceil(R / 4) layer submissions. `out_forced` receives the
 forced ids admitted (`cap` must be at least `chunk_budget`), and `*out_forced_count` their number, the pending row

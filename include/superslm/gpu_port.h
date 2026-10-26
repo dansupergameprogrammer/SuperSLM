@@ -491,6 +491,20 @@ struct GpuCallTiming {
 };
 GpuCallTiming LastCallTiming();
 
+// Multi-row GPU plan §4.7 (MR5), ruling 27: the GPU time of the most recent widened logits stage -- the logits
+// sites an Exact close (sslm_gpu_seq_embed_rows with SSLM_GPU_ROWS_EXACT_DRAFT) or a jump verb's Exact pass runs
+// for its rows on a device-resident head, in one submission -- between a timestamp before its first row's work and
+// one after its last row's read-back copy, on the GPU's own clock. That stage alone: not the layers, not the host's
+// narrowing and argmax. `rows` is the stage's row count; `stages` counts the stages run in this process (0: none
+// yet). gpu_ms is 0.0 when the queue reports no timestamp frequency. A process-wide diagnostic, like
+// LastCallTiming(): with several threads it is whichever stage published last.
+struct GpuLogitsStageTiming {
+	double gpu_ms = 0.0;
+	uint32_t rows = 0;
+	uint64_t stages = 0;
+};
+GpuLogitsStageTiming LastLogitsStageTiming();
+
 // The ceiling-division formula
 // `ComputeGpuGemmSiteGroupPlan` (below) uses to turn an output width into a group count --
 // `ceil(out_channels / threads_per_group)`, i.e. `(out_channels + threads_per_group - 1) /
