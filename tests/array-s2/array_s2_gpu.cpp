@@ -305,7 +305,10 @@ std::vector<RestoreResult> GpuRestores(GpuSession* s, const std::vector<int32_t>
 		rr.blob_bytes = blobs[k].size();
 		rr.saved_accepting = unbroken->accepting[static_cast<size_t>(rr.after)];
 		rr.saved_state = unbroken->states[static_cast<size_t>(rr.after)];
-		if (opt.state_zero && !ZeroBlobWalkState(&blobs[k], true)) rr.error = "state_zero: unexpected blob magic";
+		if (opt.state_zero) {
+			if (ZeroBlobWalkState(&blobs[k], true)) rr.mutated = true;
+			else rr.error = "state_zero: unexpected blob magic";
+		}
 		SslmGpuSequenceHandle* restored = nullptr;
 		if (rr.error.empty()) {
 			st = sslm_gpu_seq_restore(s->ctx, s->model, blobs[k].data(), blobs[k].size(), &restored);
@@ -371,9 +374,12 @@ std::vector<RestoreResult> GpuTfRestores(GpuSession* s, const std::vector<int32_
 		const int32_t last = doc[static_cast<size_t>(a)];
 		DecodeTrace(s, seq, last, opt.max_tokens, &r.unbroken);
 		sslm_gpu_seq_release(s->ctx, seq);
-		if (opt.state_zero && !ZeroBlobWalkState(&blob, true)) {
-			r.error = "state_zero: unexpected blob magic";
-			continue;
+		if (opt.state_zero) {
+			if (!ZeroBlobWalkState(&blob, true)) {
+				r.error = "state_zero: unexpected blob magic";
+				continue;
+			}
+			r.mutated = true;
 		}
 		SslmGpuSequenceHandle* restored = nullptr;
 		st = sslm_gpu_seq_restore(s->ctx, s->model, blob.data(), blob.size(), &restored);

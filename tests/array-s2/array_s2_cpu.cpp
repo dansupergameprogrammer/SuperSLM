@@ -360,7 +360,10 @@ std::vector<RestoreResult> CpuRestores(CpuSession* s, const std::vector<int32_t>
 		rr.after = after[k];
 		rr.blob_bytes = blobs[k].size();
 		rr.saved_accepting = saved_accepting[k];
-		if (opt.state_zero && !ZeroBlobWalkState(&blobs[k], false)) rr.error = "state_zero: unexpected blob magic";
+		if (opt.state_zero) {
+			if (ZeroBlobWalkState(&blobs[k], false)) rr.mutated = true;
+			else rr.error = "state_zero: unexpected blob magic";
+		}
 		sslm_seq restored = nullptr;
 		st = rr.error.empty() ? sslm_seq_restore(s->model, &s->pool, blobs[k].data(), blobs[k].size(), &restored)
 		                      : SSLM_INVALID_ARGUMENT;
@@ -422,9 +425,12 @@ std::vector<RestoreResult> CpuTfRestores(CpuSession* s, const std::vector<int32_
 		r.blob_bytes = blob.size();
 		DecodeTrace(s, seq, opt.max_tokens, &r.unbroken);
 		sslm_seq_release(seq);
-		if (opt.state_zero && !ZeroBlobWalkState(&blob, false)) {
-			r.error = "state_zero: unexpected blob magic";
-			continue;
+		if (opt.state_zero) {
+			if (!ZeroBlobWalkState(&blob, false)) {
+				r.error = "state_zero: unexpected blob magic";
+				continue;
+			}
+			r.mutated = true;
 		}
 		sslm_seq restored = nullptr;
 		st = sslm_seq_restore(s->model, &s->pool, blob.data(), blob.size(), &restored);

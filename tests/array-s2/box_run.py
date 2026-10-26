@@ -3,13 +3,17 @@ mutants, the timing, and the raw logs that back every figure in RESULTS.md.
 
     python tests\\array-s2\\box_run.py [--model-dir D:\\_artifacts\\SuperSLM\\aex] [--base X.sslm] [--ckpt DIR]
     python tests\\array-s2\\box_run.py --list            # the steps, their commands and state
-    python tests\\array-s2\\box_run.py --redo <step>     # forget one step's result and run from there
+    python tests\\array-s2\\box_run.py --redo <step>     # forget this step and every later one, then run
 
 Each step is short (a few minutes at most), writes its raw output under tests/array-s2/results/ as it
-runs, and records `results/box/<step>.done` when it ends as expected. A rerun skips every step
-already done, so a crash costs only the step in progress. A step that ends otherwise records
-`<step>.failed` and the run stops there; the log names what failed. Steps marked `expect=1` are
-mutant runs: they pass only when the harness fails.
+runs, and records `results/box/<step>.done` when it ends as expected. The record carries the git HEAD
+and, for every step after `build_harness`, the SHA-256 of both harness binaries: a rerun skips a step
+only when its record matches the current HEAD and binaries, so a crash costs only the step in
+progress, and a pull or a rebuild reruns what it invalidates. A `--base` or `--ckpt` that differs
+from the one `locate` recorded stops the run. A step that ends otherwise records
+`<step>.failed` and the run stops there; the log names what failed. A mutant step passes only when
+its log shows the mutant applied and caught by the specific expected detection (an accepting-flag,
+walk-state or token mismatch, or the map refusal), with no setup failure, missing row or restore error.
 
 Before every timed step the script checks that no other harness, test binary or attach is running,
 and stops if one is. Nothing here commits: the box session reviews results/ and RESULTS.md and commits.
@@ -20,6 +24,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -236,25 +241,33 @@ class Box:
         the same mutations applied directly to the clean artifact, so the loaders can be run on both."""
         mdir = self.scratch / "mutants"
         mdir.mkdir(parents=True, exist_ok=True)
-        rc = self.py(log, HERE / "make_mutants.py", REPO / "tools", mdir)
+        ok = self.py(log, HERE / "make_mutants.py", REPO / "tools", mdir) == 0
         lines = []
         for mode in ("accept_shift", "offset_swap"):
             out = mdir / f"{mode}-attach.sslm"
+            out.unlink(missing_ok=True)
             arc = self.run(log, [sys.executable, mdir / mode / "sslm_attach_schema.py", "--base", self.base, "--ckpt",
                                  self.ckpt, *sum((["--schema", s] for s in self.schemas()), []), "--out", out,
                                  "--verifier", self.verifier, "--force"],
                            env_extra={"PYTHONPATH": str(REPO / "tools")}, append=True)
-            lines.append(f"attach_copy {mode} exit={arc} written={out.is_file()}")
+            written = out.is_file()
+            # The fixed verifier accepts accept_shift (structurally valid) and refuses offset_swap.
+            ok_attach = (arc == 0 and written) if mode == "accept_shift" else (arc != 0 and not written)
+            lines.append(f"attach_copy {mode} exit={arc} written={written} as_expected={ok_attach}")
             direct = mdir / f"{mode}.sslm"
+            mark = len(log.read_text(encoding="utf-8", errors="replace"))
             drc = self.py(log, HERE / "scm1_mutants.py", self.artifact, mode, direct, append=True)
-            if drc:
-                return drc
-            vrc = self.run(log, [self.verifier, direct, mdir / f"{mode}.verify.json"], append=True)
-            lines.append(f"direct {mode} sha256={sha256(direct)} verifier_exit={vrc}")
+            applied = drc == 0 and f"MUTANT {mode}:" in log.read_text(encoding="utf-8", errors="replace")[mark:]
+            differs = applied and direct.is_file() and sha256(direct) != sha256(self.artifact)
+            vrc = self.run(log, [self.verifier, direct, mdir / f"{mode}.verify.json"], append=True) if applied else -1
+            ok_verify = vrc == (0 if mode == "accept_shift" else 1)
+            lines.append(f"direct {mode} applied={applied} differs_from_clean={differs} "
+                         f"sha256={sha256(direct) if direct.is_file() else '-'} verifier_exit={vrc} as_expected={ok_verify}")
+            ok = ok and ok_attach and applied and differs and ok_verify
         with open(log, "a", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
+            f.write("\n".join(lines) + f"\nmutant_artifacts ok={ok}\n")
         (RES / "mutants_artifacts.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return rc
+        return 0 if ok else 1
 
     def refused_at_map(self, log: Path, artifact: Path, backend: str) -> int:
         """0 only when the harness exits 2 with the backend's own map call named as the refusal."""
@@ -264,6 +277,86 @@ class Box:
         ok = rc == 2 and f"setup failed: error:{call} " in text
         with open(log, "a", encoding="utf-8") as f:
             f.write(f"refused_at_map={ok} ({call})\n")
+        return 0 if ok else 1
+
+    KILL_CHECKS = ("tokens", "accepting", "states", "restored_state", "restored_accepting", "end",
+                   "forced_end", "forced_tokens", "forced_accepting", "forced_states")
+
+    def planned(self, mode: str, key: str) -> int:
+        if mode == "tfrestore":
+            return sum(1 for l in self.fixtures.read_text(encoding="ascii").splitlines()
+                       if l.startswith(f"tfsave {key}:"))
+        return sum(1 for l in (RES / "saveplan.txt").read_text(encoding="ascii").splitlines()
+                   if l.split()[1:2] == [key])
+
+    def verdict(self, log: Path, ok: bool, why: str) -> int:
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"mutant_killed={ok} ({why})\n")
+        return 0 if ok else 1
+
+    def state_zero_kill(self, log: Path, mode: str, backend: str, key: str) -> int:
+        """The restore-at-state-zero mutant is killed only when the harness exits 1, every planned save
+        point produced a result with the mutant applied (`mutated=1`), the unbroken trace or walk passed,
+        no setup or restore error occurred, and at least one point failed on a trace check."""
+        A, S, F = self.artifact, "intents", self.fixtures
+        args = (["tfrestore", A, S, F, backend, TF_PROMPT, key] if mode == "tfrestore" else
+                ["restore", A, S, F, RES / "gen.txt", RES / "saveplan.txt", backend, key])
+        rc = self.harness(log, *args, "--state-zero")
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        results = [l for l in lines if l.startswith(("PASS ", "FAIL ")) and " after=" in l]
+        traces = [l for l in lines if l.startswith(("PASS ", "FAIL ")) and (" walk tokens=" in l or " trace tokens=" in l)]
+        bad = [l for l in lines if " setup:" in l or "check=error" in l or "no save point" in l or
+               "no teacher-forced" in l or "setup failed" in l]
+        kills = [l for l in results if l.startswith("FAIL ") and
+                 (re.search(r" check=(\w+)", l) or [None, None])[1] in self.KILL_CHECKS]
+        want = self.planned(mode, key)
+        why = (f"exit={rc} results={len(results)}/{want} applied={sum(' mutated=1' in l for l in results)} "
+               f"trace_pass={bool(traces) and all(l.startswith('PASS') for l in traces)} errors={len(bad)} kills={len(kills)}")
+        ok = (rc == 1 and want > 0 and len(results) == want and all(" mutated=1" in l for l in results) and
+              bool(traces) and all(l.startswith("PASS") for l in traces) and not bad and kills)
+        return self.verdict(log, bool(ok), why)
+
+    def accept_shift_walks_kill(self, log: Path, backend: str) -> int:
+        """Killed when a walk admits every token and the accepting check (after the last token, or after
+        any token) fails, with no setup failure."""
+        rc = self.harness(log, "walks", self.scratch / "mutants" / "accept_shift.sslm", "intents", self.fixtures, backend)
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        def field(l, k):
+            for f in l.split():
+                if f.startswith(k + "="):
+                    return f.split("=", 1)[1]
+            return None
+        walks = [l for l in lines if l.startswith(("PASS ", "FAIL ")) and f" {backend} walk " in l]
+        kills = [l for l in walks if l.startswith("FAIL ") and field(l, "admitted") == field(l, "tokens") and
+                 (field(l, "accepting_end") == "0" or field(l, "bad_accepting_at") not in (None, "-1"))]
+        bad = [l for l in lines if "setup failed" in l or "no walk or reject" in l]
+        return self.verdict(log, rc == 1 and bool(kills) and not bad,
+                            f"exit={rc} walks={len(walks)} accepting_kills={len(kills)} errors={len(bad)}")
+
+    def accept_shift_gen_kill(self, log: Path, backend: str) -> int:
+        """Killed when generation runs and ends at the dead end with accepting=0 (the shifted accept set)."""
+        rows = ["ex005", "ex041"]
+        rc = self.harness(log, "gen", self.scratch / "mutants" / "accept_shift.sslm", "intents", self.fixtures,
+                          backend, "plain", *rows)
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        recs = [l for l in lines if l.startswith(f"# {backend} ") and " end=" in l]
+        kills = [l for l in recs if " end=dead_end " in l and " accepting=0 " in l]
+        bad = [l for l in lines if "setup failed" in l or "# FAIL" in l]
+        return self.verdict(log, rc == 1 and len(recs) == len(rows) and bool(kills) and not bad,
+                            f"exit={rc} records={len(recs)}/{len(rows)} dead_end_not_accepting={len(kills)} errors={len(bad)}")
+
+    def canon_info(self, log: Path) -> int:
+        """Canonical jump-forward (being removed in 1.18), information only: plain CPU against canonical,
+        recorded with validity and the first difference. Passes when the check ran to its end, whatever it
+        found; a crash or a missing stream fails."""
+        self.concat(RES / "gen_canon.txt", [BOX / "gen_cpu_plain.log", BOX / "gen_cpu_canon.log"])
+        rc = self.py(log, HERE / "fixtures.py", "check", "--ckpt", self.ckpt, "--gen", RES / "gen_canon.txt",
+                     "--json", RES / "gen_check_canon.json")
+        text = log.read_text(encoding="utf-8", errors="replace")
+        rows = sum(1 for l in text.splitlines() if l.startswith("ex") and ": " in l)
+        ok = rc in (0, 1) and "failures:" in text and "Traceback" not in text and rows == len(ROWS)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"canon_info completed={ok} rows={rows} (information only)\n")
         return 0 if ok else 1
 
     def concat(self, out: Path, parts: list[Path]) -> int:
@@ -317,17 +410,15 @@ class Box:
             parts = [BOX / f"gen_{b}_{v}{sfx}.log" for b, v, _ in variants]
             st.append((f"gen{sfx}", False, (0,), lambda L, sfx=sfx, parts=parts:
                        self.concat(RES / f"gen{sfx}.txt", parts)))
-        # Plain CPU and GPU: every document valid and the two streams identical (must pass).
-        st.append(("gen_plain", False, (0,), lambda L: self.concat(
-            RES / "gen_plain.txt", [BOX / "gen_cpu_plain.log", BOX / "gen_gpu_plain.log"])))
-        st.append(("gen_check_plain", False, (0,), lambda L: self.py(
-            L, HERE / "fixtures.py", "check", "--ckpt", self.ckpt, "--gen", RES / "gen_plain.txt",
-            "--json", RES / "gen_check_plain.json")))
-        # Every variant against plain CPU: canonical jump-forward differs by design (RESULTS.md), so this
-        # report may exit 1; it is the record of which variant differs and where.
-        st.append(("gen_check", False, (0, 1), lambda L: self.py(
-            L, HERE / "fixtures.py", "check", "--ckpt", self.ckpt, "--gen", RES / "gen.txt",
+        # Must pass: plain CPU, plain GPU, exact jump-forward and the full finish -- every document valid
+        # and every stream identical to plain CPU. Any difference, invalid document or crash fails it.
+        st.append(("gen_musteq", False, (0,), lambda L: self.concat(
+            RES / "gen_musteq.txt", [BOX / f"gen_{v}.log" for v in ("cpu_plain", "gpu_plain", "cpu_exact", "cpu_full")])))
+        st.append(("gen_check", False, (0,), lambda L: self.py(
+            L, HERE / "fixtures.py", "check", "--ckpt", self.ckpt, "--gen", RES / "gen_musteq.txt",
             "--json", RES / "gen_check.json")))
+        # Information only: canonical jump-forward, which 1.18 removes.
+        st.append(("gen_canon_info", False, (0,), self.canon_info))
         st.append(("gen_repeat", False, (0,), lambda L: self.same_gen(L, RES / "gen.txt", RES / "gen_run2.txt")))
         st.append(("saves", False, (0,), lambda L: self.py(L, HERE / "fixtures.py", "saves", "--ckpt", self.ckpt,
                                                           "--gen", RES / "gen.txt", "--out", RES / "saveplan.txt")))
@@ -342,21 +433,18 @@ class Box:
                     L, "tfrestore", A, S, F, b, TF_PROMPT, doc)))
             st.append((f"tfrestore_{b}", False, (0,), lambda L, b=b: self.concat(
                 RES / f"tfrestore_{b}.txt", [BOX / f"tfrestore_{b}_{d}.log" for d in TF_DOCS])))
-            # The restore-at-state-zero mutant: each run must fail (exit 1).
-            st.append((f"state_zero_tf_{b}", False, (1,), lambda L, b=b: self.harness(
-                L, "tfrestore", A, S, F, b, TF_PROMPT, "three_intents_0_2_1_conditions", "--state-zero")))
-            st.append((f"state_zero_gen_{b}", False, (1,), lambda L, b=b: self.harness(
-                L, "restore", A, S, F, RES / "gen.txt", RES / "saveplan.txt", b, "ex041", "--state-zero")))
+            # The restore-at-state-zero mutant: applied at every planned point and caught by a trace check.
+            st.append((f"state_zero_tf_{b}", False, (0,), lambda L, b=b: self.state_zero_kill(
+                L, "tfrestore", b, "three_intents_0_2_1_conditions")))
+            st.append((f"state_zero_gen_{b}", False, (0,), lambda L, b=b: self.state_zero_kill(L, "restore", b, "ex041")))
         st.append(("state_zero", False, (0,), lambda L: self.concat(
             RES / "state_zero.txt", [BOX / f"state_zero_{k}_{b}.log" for b in ("cpu", "gpu") for k in ("tf", "gen")])))
         # The two SCM1 mutants.
         st.append(("mutant_artifacts", False, (0,), self.mutant_artifacts))
         mdir = self.scratch / "mutants"
         for b in ("cpu", "gpu"):
-            st.append((f"mutant_accept_shift_walks_{b}", False, (1,), lambda L, b=b: self.harness(
-                L, "walks", mdir / "accept_shift.sslm", S, F, b)))
-            st.append((f"mutant_accept_shift_gen_{b}", False, (1,), lambda L, b=b: self.harness(
-                L, "gen", mdir / "accept_shift.sslm", S, F, b, "plain", "ex005", "ex041")))
+            st.append((f"mutant_accept_shift_walks_{b}", False, (0,), lambda L, b=b: self.accept_shift_walks_kill(L, b)))
+            st.append((f"mutant_accept_shift_gen_{b}", False, (0,), lambda L, b=b: self.accept_shift_gen_kill(L, b)))
             st.append((f"mutant_offset_swap_walks_{b}", False, (0,), lambda L, b=b: self.refused_at_map(
                 L, mdir / "offset_swap.sslm", b)))
         st.append(("mutants", False, (0,), lambda L: self.concat(RES / "mutants.txt", [
@@ -369,24 +457,63 @@ class Box:
         st.append(("gputime_copy", False, (0,), lambda L: self.concat(RES / "gputime.txt", [BOX / "gputime.log"])))
         return st
 
+    def head(self) -> str:
+        # The commit only: the run itself rewrites tracked files under results/.
+        p = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
+        return p.stdout.strip() or "unknown"
+
+    def binaries(self) -> dict:
+        return {"exe": sha256(self.exe) if self.exe.is_file() else None,
+                "seam": sha256(self.seam) if self.seam.is_file() else None}
+
+    def stamp(self, after_build: bool) -> dict:
+        return {"head": self.head(), **(self.binaries() if after_build else {})}
+
+    def state(self, name: str, after_build: bool) -> str:
+        """done (record matches HEAD and, after build_harness, both binaries), stale, or pending."""
+        done = BOX / f"{name}.done"
+        if not done.is_file():
+            return "pending"
+        try:
+            rec = json.loads(done.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return "stale"
+        cur = self.stamp(after_build)
+        return "done" if all(rec.get(k) == v for k, v in cur.items()) else "stale"
+
+    def inputs_agree(self) -> bool:
+        for key in ("base", "ckpt"):
+            given = getattr(self.args, key)
+            if given and self.loc.get(key) and Path(given).resolve() != Path(self.loc[key]).resolve():
+                print(f"STOP: --{key} {given} differs from the {key} this run recorded, {self.loc[key]} "
+                      f"(results/box/locate.json). To change inputs, start a fresh run: --redo locate.")
+                return False
+        return True
+
     def main(self) -> int:
         BOX.mkdir(parents=True, exist_ok=True)
         steps = self.steps()
         names = [s[0] for s in steps]
+        build_idx = names.index("build_harness")
         if self.args.redo:
             if self.args.redo not in names:
                 print(f"unknown step {self.args.redo}; --list shows them")
                 return 2
-            for n in names[names.index(self.args.redo):] if self.args.redo_after else [self.args.redo]:
+            for n in names[names.index(self.args.redo):]:
                 for ext in (".done", ".failed"):
                     (BOX / (n + ext)).unlink(missing_ok=True)
-        for name, timed, expect, fn in steps:
+            if self.args.redo == "locate":
+                (BOX / "locate.json").unlink(missing_ok=True)
+                self.loc = {}
+        if not self.inputs_agree():
+            return 2
+        for idx, (name, timed, expect, fn) in enumerate(steps):
             done = BOX / f"{name}.done"
+            state = self.state(name, idx > build_idx)
             if self.args.list:
-                print(f"{'done   ' if done.is_file() else 'pending'} {name}{'  (timed)' if timed else ''}"
-                      f"{'  expect=' + '/'.join(map(str, expect)) if expect != (0,) else ''}")
+                print(f"{state:7s} {name}{'  (timed)' if timed else ''}")
                 continue
-            if done.is_file():
+            if state == "done":
                 continue
             if timed:
                 hits = self.busy()
@@ -405,7 +532,7 @@ class Box:
                 rc = -1
             wall = time.perf_counter() - t0
             record = {"step": name, "exit": rc, "expected": list(expect), "wall_s": round(wall, 1),
-                      "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                      "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **self.stamp(idx > build_idx)}
             if rc in expect:
                 done.write_text(json.dumps(record) + "\n", encoding="utf-8")
                 print(f"    ok (exit {rc}, {wall:.0f} s)")
@@ -427,8 +554,7 @@ def main(argv=None) -> int:
     ap.add_argument("--artifact-dir", default=r"D:\_artifacts\SuperSLM\array-s2")
     ap.add_argument("--scratch", default=r"D:\_scratch\array-s2")
     ap.add_argument("--list", action="store_true", help="print the steps and their state, run nothing")
-    ap.add_argument("--redo", help="forget this step's result before running")
-    ap.add_argument("--redo-after", action="store_true", help="with --redo: also forget every later step")
+    ap.add_argument("--redo", help="forget this step's result and every later step's before running")
     ap.add_argument("--ignore-busy", action="store_true", help="run timed steps even if another run is seen")
     return Box(ap.parse_args(argv)).main()
 

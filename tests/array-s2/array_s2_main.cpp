@@ -250,6 +250,7 @@ void PrintResult(bool pass, const std::string& backend, const std::string& label
 	            label.c_str(), rr.after, rr.blob_bytes, rr.continuation.ids.size(),
 	            rr.continuation.end.empty() ? "-" : rr.continuation.end.c_str());
 	if (!rr.forced.end.empty()) std::printf(" forced=%zu", rr.forced.ids.size());
+	std::printf(" mutated=%d", rr.mutated ? 1 : 0);
 	if (!pass) std::printf(" check=%s", v.failed.c_str());
 	std::printf("\n");
 	std::fflush(stdout);
@@ -507,6 +508,8 @@ namespace {
 // wall time only. Times exclude the prompt prefill. Every stream must equal the plain GPU run.
 // Output: one `PASS|FAIL gputime` line per prompt, one `steps` line per prompt (wall and gpu_busy ms
 // for each step, in token-position order, from position prompt_len), and one `total` line per head.
+// Step 0 finishes the prompt through the ready-for-logits shortcut (no layer loop): it is listed in
+// `steps` but left out of the means and the busy check. Every other step must have 0 < busy <= wall.
 int GpuTime(const std::vector<uint8_t>& bytes, const std::string& schema, const std::vector<Record>& recs,
             const char* gen_path, const std::vector<std::string>& rows) {
 	const auto refs = ReadGen(gen_path, "gpu");
@@ -534,20 +537,36 @@ int GpuTime(const std::vector<uint8_t>& bytes, const std::string& schema, const 
 			const bool same = have_ref && res.ids == refs.at(r.name);
 			const bool pass = same && res.end == "dead_end" && res.accepting == 1;
 			failures += !pass;
+			// Step 0 finishes the prompt's last token through the ready-for-logits shortcut and runs no
+			// layer loop, so its gpu_busy_ms is the prompt prefill's; it is reported, never averaged.
+			// Every later step runs one layer loop, whose timing must be present: 0 < busy <= wall.
 			double w = 0.0, gb = 0.0;
-			for (size_t k = 0; k < res.step_ms.size(); ++k) {
+			int bad_busy = 0;
+			int32_t first_bad = -1;
+			const bool lengths_ok = res.step_ms.size() == res.step_gpu_busy_ms.size() && res.step_ms.size() >= 2;
+			for (size_t k = 1; k < res.step_ms.size() && k < res.step_gpu_busy_ms.size(); ++k) {
 				w += res.step_ms[k];
 				gb += res.step_gpu_busy_ms[k];
+				if (!(res.step_gpu_busy_ms[k] > 0.0) || res.step_gpu_busy_ms[k] > res.step_ms[k]) {
+					if (first_bad < 0) first_bad = static_cast<int32_t>(k);
+					++bad_busy;
+				}
+			}
+			const bool busy_ok = lengths_ok && bad_busy == 0;
+			failures += !busy_ok;
+			if (!busy_ok) {
+				std::printf("FAIL gputime %s %s gpu_busy missing, zero or above wall on %d step(s), first at step %d%s\n",
+				            head, r.name.c_str(), bad_busy, first_bad, lengths_ok ? "" : " (fewer than 2 steps)");
 			}
 			tokens += res.ids.size();
-			steps += res.step_ms.size();
+			steps += res.step_ms.size() > 0 ? res.step_ms.size() - 1 : 0;
 			ms += res.ms;
 			step_wall += w;
 			step_gpu += gb;
-			const double n = res.step_ms.empty() ? 1.0 : static_cast<double>(res.step_ms.size());
+			const double n = res.step_ms.size() > 1 ? static_cast<double>(res.step_ms.size() - 1) : 1.0;
 			std::printf("%s gputime %s layers_per_slice=%s %s tokens=%zu steps=%zu ms=%.0f ms_per_token=%.1f "
-			            "step_wall_ms=%.2f gpu_busy_ms=%.2f gap_ms=%.2f end=%s same_as_plain_gpu=%s\n",
-			            pass ? "PASS" : "FAIL", head, layers.c_str(), r.name.c_str(), res.ids.size(), res.step_ms.size(),
+			            "layer_loop_steps: wall_ms=%.2f gpu_busy_ms=%.2f gap_ms=%.2f end=%s same_as_plain_gpu=%s\n",
+			            pass && busy_ok ? "PASS" : "FAIL", head, layers.c_str(), r.name.c_str(), res.ids.size(), res.step_ms.size(),
 			            res.ms, res.ids.empty() ? 0.0 : res.ms / static_cast<double>(res.ids.size()), w / n, gb / n,
 			            (w - gb) / n, res.end.c_str(), !have_ref ? "no_reference" : (same ? "yes" : "no"));
 			std::printf("steps %s %s prompt_len=%zu wall_ms", head, r.name.c_str(), r.ids.size());
@@ -563,7 +582,7 @@ int GpuTime(const std::vector<uint8_t>& bytes, const std::string& schema, const 
 		}
 		const double n = steps ? static_cast<double>(steps) : 1.0;
 		std::printf("total gputime %s layers_per_slice=%s prompts=%d tokens=%zu ms=%.0f ms_per_token=%.1f tok_s=%.2f "
-		            "per_step: wall_ms=%.2f gpu_busy_ms=%.2f gap_ms=%.2f\n", head, layers.c_str(), checked, tokens, ms,
+		            "layer_loop_steps: wall_ms=%.2f gpu_busy_ms=%.2f gap_ms=%.2f\n", head, layers.c_str(), checked, tokens, ms,
 		            tokens ? ms / static_cast<double>(tokens) : 0.0, ms > 0 ? 1000.0 * static_cast<double>(tokens) / ms : 0.0,
 		            step_wall / n, step_gpu / n, (step_wall - step_gpu) / n);
 		GpuClose(g);

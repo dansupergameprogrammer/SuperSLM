@@ -54,6 +54,7 @@ struct RestoreResult {
 	int32_t after = -1;
 	size_t blob_bytes = 0;
 	std::string error;             // non-empty when the save point could not be run
+	bool mutated = false;          // --state-zero: the blob's walk state was overwritten before restore
 	int32_t saved_accepting = -1;  // on the unbroken sequence, at the save
 	uint32_t saved_state = 0;      // on the unbroken sequence, at the save (GPU only)
 	int32_t restored_accepting = -1;  // on the restored sequence, before it decodes

@@ -260,6 +260,23 @@ Each item, the code-review finding or audit gap it answers, and what ran in the 
 The synthetic model never reaches a dead end in generation (it runs to the token cap inside a string), so the
 generated-stream `restore` passing path, the GPU, and every timing run only on the box.
 
+**Re-check follow-ups (`poirot-s2-recheck.md`, FIX FIRST):**
+
+- **gen_check.** Plain CPU, plain GPU, exact jump-forward and the full finish are checked together and must exit 0;
+  any difference, invalid document or crash fails the step. Canonical is checked separately as information only
+  (`gen_canon.txt`): its differences are recorded, never a pass condition.
+- **Mutant kills.** A mutant step passes only on the expected detection: the mutant was applied (`mutated=1` on every
+  result, or the `MUTANT` line from the writer), the result count equals the plan, and the failure is an
+  accepting-flag, walk-state or token mismatch, or for offset_swap the expected map refusal. A missing row, a restore
+  error or a mutant that was never applied fails the step. Checked on canned logs for each case and on the real
+  CPU state-zero run (13/13 applied, 13 detections).
+- **Completion markers.** Each records the git HEAD and the hashes of the harness and seam binaries; a change reruns
+  the step (a binary change reruns the steps after the build). A `--base` or `--ckpt` that differs from `locate.json`
+  stops the run with a message; `--redo <step>` reruns that step and every later one.
+- **Timing.** `gputime` fails if `gpu_busy_ms` is 0, missing or above wall for any decode step after step 0. Step 0
+  after the prompt prefill runs no layer loop (the logits are already ready), so it has no busy value of its own and
+  is left out of the check and the means.
+
 ## Findings
 
 1. **`sslm_verify` does not check the SchemaMasks section.**
@@ -298,6 +315,10 @@ generated-stream `restore` passing path, the GPU, and every timing run only on t
   edits outside its own worktree. Commits were pushed to `claude/project-thread-mq1of4` by fast-forward.
 - **GPU coverage of (f).** Jump-forward and the masked finish are CPU verbs. On GPU, (f) is covered only as the
   full-finish witness in (d).
+- **CI for the verifier pytest: known gap.** No workflow runs `tests/t3094-multicommand-s0/converter-v2/`
+  (the pytest runs in `.github/workflows/` cover `tests/ci/`, `tools/`, `tests/reference/` and
+  `tests/t2296-fp-free-open-red-suite`; neither CMake nor `build.bat` collects it). The workflows are
+  left unedited; the box run's `verify_check` step is the only automated runner of `test_cv2_verify_schema_masks.py`.
 - **Build outcome.** The test run is red on the 8 pre-existing cells listed under Build, which this session did not
   investigate.
 
