@@ -6063,7 +6063,9 @@ SslmGpuStatus JumpExactInternal(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
 	} slot_clear;
 #endif
 	// Every row's page mapped before the first pass, as the CPU's pass maps all h rows (XG18: a rejected row's page
-	// leaves dirty), and the pages above the committed length go back on every exit below (SeqJumpExact's §5.10.4).
+	// leaves dirty). The pages above the committed length go back on every exit (SeqJumpExact's §5.10.4): each pass's
+	// close unmaps above its kept rows (RowsCommitPrefix, its floor set to the pass's entry length below; XG17), a
+	// pass's rollback above its entry, and a pass that never opened its chunk through pass_fault.
 	const uint32_t mapped_before = seq->holder != nullptr ? superslm::kv_pages::HolderMapped(seq->holder) : 0u;
 	if (const SslmGpuStatus map_st = MapPooledPagesThrough(seq, seq->context_length + h); map_st != SSLM_OK) {
 		return fail(map_st);
@@ -6086,6 +6088,7 @@ SslmGpuStatus JumpExactInternal(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
 	bool faulted = false;
 	auto pass_fault = [&](int32_t pass, superslm::SslmForwardStatus fs) -> bool {
 		if (seq->rows_chunk != nullptr) RowsRollbackAndClose(seq);
+		unmap_above_committed();
 		faulted = true;
 		(void)fs;
 		return pass == 0;
@@ -6122,6 +6125,12 @@ SslmGpuStatus JumpExactInternal(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
 				if (pass_fault(pass, superslm::SslmForwardStatus::GpuDeviceRemoved)) return fail(first_fault);
 				break;
 			}
+			// The previous pass's close unmapped above its rows: the row's page again (the same page, LIFO).
+			if (const SslmGpuStatus map_st = MapPooledPagesThrough(seq, seq->context_length + 1); map_st != SSLM_OK) {
+				first_fault = map_st;
+				if (pass_fault(pass, superslm::SslmForwardStatus::GpuDeviceRemoved)) return fail(first_fault);
+				break;
+			}
 			seq->live_state.context_length = seq->context_length;
 			SubmitAdmittedChunkForG5Bridge(model, seq, one.chunk_embedding_bytes.data(), 1u, seq->context_length, &one_derived,
 			                                &one_guard, &one_fault);
@@ -6144,6 +6153,10 @@ SslmGpuStatus JumpExactInternal(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
 			break;
 		}
 		superslm_gpu::GpuRowsChunk& c = *seq->rows_chunk;
+		if (seq->pool != nullptr) {
+			// The pass's floor is its entry length, not the up-front mapping: its close and rollback unmap above it.
+			c.entry.holder_mapped = std::max(mapped_before, superslm_gpu::kv_pool::PagesToCover(c.p0, seq->pool->geo.page_positions));
+		}
 		c.verify_next.resize(static_cast<size_t>(n));
 		for (int32_t r = 0; r < n; ++r) c.verify_next[static_cast<size_t>(r)] = off + r + 1 < h ? tokens[static_cast<size_t>(off + r + 1)] : -1;
 		c.readback_fault = Mr5ReadbackFaultFires(pass);  // S-GREADBACK
@@ -6170,7 +6183,6 @@ SslmGpuStatus JumpExactInternal(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
 		if (seq->exact_pass_stop) break;  // a mismatch: no rows past it run (XG13)
 	}
 	(void)faulted;
-	unmap_above_committed();
 	host_bad_alloc_at(2);
 	if (kept < 1) return fail(first_fault != SSLM_OK ? first_fault : SSLM_DEVICE_LOST);  // unreachable: pass 0 kept p
 	seq->ready_for_logits = true;  // at full depth on the last kept row: the next decode call finishes only
