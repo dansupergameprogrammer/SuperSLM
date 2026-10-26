@@ -20,11 +20,10 @@
 #   XG18  the GPU rollback clears `dirty`                                                                  -> gx.2
 #   XG14  RETIRED (ruling 26 Q3: Canonical is removed, so no draft table learns from a canonical generation)
 #   XG21  DEFERRED with the GPU draft table (ruling 26 Q3)
-# The sites: MX19, MX23, XG4a, XG5 and XG6 are lines of RowsCommitPrefix (src/gpu/gpu_1p0.cpp), the close the plan
+# The sites: MX19, MX23, XG4a, XG5, XG6 and XG17 are lines of RowsCommitPrefix (src/gpu/gpu_1p0.cpp), the close the plan
 # says Exact's CommitPrefix(a, a - 1) reuses (§3.5, §4.7); one edit here if MR5's Exact close is a function of its own.
 # MX24 (ExactApplyFinish), XG7, XG12, XG13 (JumpExactInternal) and XG18 (RowsUnmapTailTo): the sites the builder named
 # in build-mr5.md at 8a0ec5e9 (ruling 28 Q3). The RowsCommitPrefix anchors still match there: the Exact close calls it.
-# XG17 is the jump's exit unmap (JumpExactInternal's unmap_above_committed), moved from RowsCommitPrefix at MR5.
 # A mutant that crashes the cells (no verdict line) counts as red.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,7 +38,7 @@ for a in "$@"; do
 		--out=*) OUT="${a#--out=}" ;;
 		--jobs=*) JOBS="${a#--jobs=}" ;;
 		--only=*) ONLY="${a#--only=}" ;;
-		*) sed -n '2,28p' "$0"; exit 2 ;;
+		*) sed -n '2,27p' "$0"; exit 2 ;;
 	esac
 done
 cd "$REPO"
@@ -162,10 +161,10 @@ if want XG12; then host_mutant XG12 mr5 $G 1 '^(\s*)host_bad_alloc_at\(0\);' \
 	'\1host_bad_alloc_at(0);\n\1seq->prefill_hidden_valid = false;  // XG12: the jump clears the prefill snapshot' && must_red XG12 mr5 gx.12; fi
 if want XG13; then host_mutant XG13 mr5 $G 1 '^\s*if \(seq->exact_pass_stop\) break;  // a mismatch: no rows past it run \(XG13\)\n' \
 	'' && must_red XG13 mr5 gx.13; fi
-# XG17 moved (ruling 28 (4)): the jump maps every row's page before its first pass, so each pass's RowsCommitPrefix
-# unmap keeps them all (its entry already holds them) and the jump's own exit unmap is the one that returns them.
-if want XG17; then host_mutant XG17 mr5 $G 1 '^(\s*)\(void\)RowsUnmapTailTo\(seq, std::max\(cover, mapped_before\)\);' \
-	'\1(void)cover; (void)mapped_before;  // XG17: rejected rows stay mapped' && must_red XG17 mr5 gx.2; fi
+# XG17 (e0ed88da): each Exact pass's close returns the pages above its kept rows through RowsCommitPrefix (the pass's
+# floor is its entry length), so the site is RowsCommitPrefix's unmap again.
+if want XG17; then host_mutant XG17 mr5 $G 1 '^(\s*)status = RowsUnmapTailTo\(seq, std::max\(cover, c\.entry\.holder_mapped\)\);' \
+	'\1status = SSLM_OK; (void)cover;  // XG17: rejected rows stay mapped' && must_red XG17 mr5 gx.2; fi
 if want XG18; then host_mutant XG18 mr5 $G 1 '^(\s*)(const superslm::kv_pages::PageStatus ps = superslm::kv_pages::HolderUnmapTail\(seq->holder, keep\);)' \
 	'\1for (uint32_t i = keep; i < superslm::kv_pages::HolderMapped(seq->holder); ++i) seq->holder->pool->dirty[seq->holder->table[i]] = 0;  // XG18\n\1\2' &&
 	must_red XG18 mr5 gx.2; fi
