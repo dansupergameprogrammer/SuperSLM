@@ -303,15 +303,14 @@ enum class SslmGpuStatus : uint32_t {
      * another adapter (its VendorId or DeviceId differs from this context's). Appended LAST, as every
      * GPU status before it; nothing changes and nothing is drawn. Released in 1.16.0. */
     SSLM_RESTORE_PRODUCER_MISMATCH,
-    /* Schema skip-ahead (1.17.0), ordinal 31: sslm_gpu_seq_forced_tokens or sslm_gpu_seq_jump_forward
-     * on a model mapped without a forced-next table (its artifact carries no tokenizer section); since the
-     * multi-row passes, sslm_gpu_seq_embed_rows with SSLM_GPU_ROWS_SCHEMA_FORCED on such a model too. Nothing
+    /* Schema skip-ahead (1.17.0), ordinal 31: sslm_gpu_seq_forced_tokens (and, in 1.17.0, sslm_gpu_seq_jump_forward)
+     * on a model mapped without a forced-next table (its artifact carries no tokenizer section). Nothing
      * changes. The GPU twin of the CPU verbs' SSLM_ARTIFACT_REJECTED, which this enum lacks. */
     SSLM_GPU_FORCED_TABLE_ABSENT,
     /* Schema skip-ahead (1.17.0), ordinal 32: the context cap.
-     *   - sslm_gpu_seq_jump_forward asked for more rows than a dedicated sequence (or a pooled one whose limit
-     *     is its cap) has before its context cap. The rows that fit are committed (h of them, h = 0 included,
-     *     when nothing changes); the call's comment gives the resting state.
+     *   - 1.17.0's sslm_gpu_seq_jump_forward asked for more rows than a dedicated sequence (or a pooled one whose
+     *     limit is its cap) had before its context cap; the rows that fit were committed. (Until MR5 the verb
+     *     refuses every call; see its comment.)
      *   - sslm_gpu_seq_embed_rows (multi-row passes) with no headroom at all before the cap, on a dedicated
      *     sequence or a pooled one whose limit is its cap: nothing is admitted and nothing is written. (A
      *     pooled sequence stopped by a budget limit below its cap gets SSLM_GPU_KV_BUDGET_EXCEEDED instead.) */
@@ -629,27 +628,17 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
  *      open: SSLM_BUSY;
  *   4. a bad spec: SSLM_SEQUENCE_KV_BUFFER_MISMATCH (the branch's argument status). A bad spec is a
  *      null `out_admitted`, a null spec or token pointer, `struct_size` below sizeof(SslmGpuRowsSpec), `count` outside
- *      1..SSLM_GPU_MAX_ROWS, a kind other than SSLM_GPU_ROWS_PROMPT or SSLM_GPU_ROWS_SCHEMA_FORCED
- *      (EXACT_DRAFT is not available yet), a flag other than SSLM_GPU_ROWS_FIRST_PREWALKED, or that flag
- *      with PROMPT;
+ *      1..SSLM_GPU_MAX_ROWS, a kind other than SSLM_GPU_ROWS_PROMPT (EXACT_DRAFT is not available yet; the
+ *      value 1 is reserved and never reused), or any flag (`flags` must be 0);
  *   5. a token outside the vocabulary: SSLM_TOKEN_ID_OUT_OF_RANGE;
- *   6. SCHEMA_FORCED on a model mapped without a forced-next table: SSLM_GPU_FORCED_TABLE_ABSENT;
- *   7. no row fits (below);
- *   8. SCHEMA_FORCED with no schema bound, or whose first matched row (row 0; row 1 under
- *      SSLM_GPU_ROWS_FIRST_PREWALKED, when admitted) is not the token the schema forces at the walk state:
- *      SSLM_SEQUENCE_REJECTED.
+ *   6. no row fits (below).
  * A larger `struct_size` is accepted and the bytes past sizeof(SslmGpuRowsSpec) are never read.
  * Admission: `*out_admitted` receives the longest admitted prefix of the tokens, capped by the
  * context's headroom and, for a budgeted (pooled) sequence, by its budget limit. When nothing fits,
  * the call refuses with the cap's status and writes nothing: SSLM_GPU_CONTEXT_CAP_EXCEEDED at the context
- * cap, SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below the cap. SCHEMA_FORCED is further capped by
- * the longest prefix that matches the forced table from the walk state (sslm_gpu_seq_forced_tokens'
- * chain); under SSLM_GPU_ROWS_FIRST_PREWALKED row 0 (a produced token whose finish already walked it)
- * is embedded but neither matched nor walked, and matching starts at row 1.
+ * cap, SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below the cap.
  * Effects: the sequence's ready-for-logits state is cleared (an abandon or failure restores it); its
- * schema binding is untouched, and so is its walk state while the chunk is open. A PROMPT close leaves
- * the walk unchanged; a SCHEMA_FORCED close advances it over exactly the committed rows (row 0 under
- * FIRST_PREWALKED excluded). A count of 1 behaves exactly as sslm_gpu_seq_embed_token followed by a
+ * schema binding and walk state are untouched, and the close leaves the walk unchanged. A count of 1 behaves exactly as sslm_gpu_seq_embed_token followed by a
  * one-row token.
  *
  * ADVANCING. sslm_decode_step_gpu advances every row of the open chunk by
@@ -703,10 +692,9 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
 #define SSLM_GPU_MAX_ROWS 8
 typedef enum {
     SSLM_GPU_ROWS_PROMPT = 0,
-    SSLM_GPU_ROWS_SCHEMA_FORCED = 1,  /* the chain the bound schema forces (multi-row MR4) */
+    /* 1 is reserved and never reused: a bad spec (the branch-provisional schema-forced kind, removed, E-11 (c)) */
     SSLM_GPU_ROWS_EXACT_DRAFT = 2     /* reserved: a bad spec on this branch */
 } SslmGpuRowsKind;
-#define SSLM_GPU_ROWS_FIRST_PREWALKED 0x1u  /* SCHEMA_FORCED: row 0 already walked by its finish */
 typedef struct SslmGpuRowsSpec {
     uint32_t       struct_size;  /* sizeof(SslmGpuRowsSpec); larger accepted, the tail ignored */
     int32_t        kind;         /* SslmGpuRowsKind */
@@ -1234,10 +1222,11 @@ SslmGpuStatus sslm_gpu_seq_forced_tokens(SslmGpuContext* ctx, SslmGpuSequenceHan
  * Radeon RX 7900 XT only. Canonical mode is deprecated and is removed in 1.18.0.
  * ============================================================================
  *
- * SslmGpuJumpOptions is the GPU twin of sslm_jump_options. `mode` takes the CPU enum's values:
- * SSLM_JUMP_CANONICAL (0) or SSLM_JUMP_EXACT (1). 1.17.0 refuses EXACT (below); the mode and draft fields stay so
- * a later release can accept it with no ABI change. `struct_size` must be sizeof(SslmGpuJumpOptions); canonical
- * mode takes no draft (NULL, count 0). */
+ * SslmGpuJumpOptions is the GPU twin of sslm_jump_options. `mode` takes the CPU enum's values (sslm_abi.h):
+ * SSLM_JUMP_DEFAULT (0) or SSLM_JUMP_EXACT (1), and both select Exact, as NULL options do. Canonical mode was
+ * removed in 1.18.0 (it was deprecated in 1.17.0); its old value is 0, which is why 0 now means the default.
+ * `struct_size` must be sizeof(SslmGpuJumpOptions). `draft`/`draft_count` are Exact's optional draft, with
+ * SSLM_JUMP_EXACT only: SSLM_JUMP_DEFAULT is what NULL options are and takes none. */
 typedef struct SslmGpuJumpOptions {
     uint32_t       struct_size;
     int32_t        mode;
@@ -1245,44 +1234,18 @@ typedef struct SslmGpuJumpOptions {
     int32_t        draft_count;
 } SslmGpuJumpOptions;
 
-/* sslm_gpu_seq_jump_forward admits, in one pass, the pending token (when one is given) and then the chain the bound
- * schema forces from the walk state: the GPU twin of sslm_seq_jump_forward in canonical mode. The GPU is greedy
- * only, so there are no decode parameters. Rows run as multi-row passes of up to 4 rows each (a pass of one row on
- * the schema-content chunk path), so an R-row call makes ceil(R/4) layer submissions; at most `chunk_budget` rows
- * are admitted, the pending row included.
- * `out_forced` receives the forced ids admitted (at most `cap`, which must be >= chunk_budget) and
- * `*out_forced_count` their number; the pending row is not counted. The GPU keeps no forced-token counter.
- *
- * `pending_token` is the caller's: the token the last finish produced, which that finish already walked, or -1 for
- * none. The verb cannot check it is that token (the decode bridge's `token_to_embed_if_needed` has the same
- * contract); a valid but different id is embedded as given. Entry shapes:
- *   - a produced token in hand (layer 0, ready flag clear, context > 0): `pending_token` >= 0. It is embedded
- *     without a walk, then the chain from the current walk state. Also the shape after sslm_gpu_seq_embed_token
- *     with no layers run; the pending token re-embeds over it;
- *   - ready, no pending (the ready flag set, or the primed row: full depth, flag clear): -1. The chain is admitted
- *     and the ready row is never finished;
- *   - fresh and bound, no context: -1. The start span from the start state.
- * Any other shape -- mid-token, a token given in the second or third shape, -1 in the first -- is
- * SSLM_SEQUENCE_REJECTED. With no chain at the walk state the call is a no-op (OK, count 0): a pending token stays
- * the caller's, for the decode bridge.
- * After an admission the ready flag is set at full depth, so the next decode bridge call finishes the last admitted
- * row only. A call that asks for more rows than fit before the limit (h rows left: the context cap, or a pooled
- * sequence's limit) admits the h that fit, walks over them, sets the ready flag (h > 0) and returns
- * SSLM_GPU_CONTEXT_CAP_EXCEEDED, or SSLM_GPU_KV_BUDGET_EXCEEDED for a pooled sequence whose limit is below the cap;
- * at h = 0 nothing changes. The prefill snapshot (sslm_gpu_seq_read_prefill_final_hidden) is cleared at the
- * pass's start and set when every row asked for is admitted, as the schema-content bridge does.
- * A failure in the pass -- SSLM_GPU_ALLOCATION_FAILED for an allocation failure on the device or the host, and
- * SSLM_DEVICE_LOST for every other fault -- restores the entry state -- context length, walk, the saturation counters, the hidden state and scale, the layer index,
- * the ready flag, the prefill snapshot's flag, the dedicated host-mirror rows and a pooled holder's mapped pages
- * -- and returns that status, so the sequence can be decoded as if the call had not been made.
- * Checked in this order; each refusal changes nothing, bindability included: (1) a null context, sequence,
- * `out_forced` or `out_forced_count`, a sequence of another context, `chunk_budget` < 1, `cap` < chunk_budget,
- * or a malformed `opts` (struct_size, an unknown mode, a draft in canonical mode, a negative draft_count, a
- * positive draft_count with a null draft): SSLM_SEQUENCE_KV_BUFFER_MISMATCH; (2) mode SSLM_JUMP_EXACT, with a draft
- * or without: SSLM_SEQUENCE_REJECTED; (3) `pending_token` < -1 or >= the vocabulary: SSLM_TOKEN_ID_OUT_OF_RANGE;
- * (4) no forced-next table: SSLM_GPU_FORCED_TABLE_ABSENT; (5) another thread holds the decode claim, or the
- * sequence is Submitted: SSLM_BUSY; (6) the shape: SSLM_SEQUENCE_REJECTED; (7) the submission guard's statuses.
- * A call that passes them clears the sequence's bind eligibility. An unbound sequence is then a no-op. */
+/* sslm_gpu_seq_jump_forward is the GPU twin of sslm_seq_jump_forward. On the GPU, Exact arrives with the
+ * multi-row branch's MR5. Until then the verb validates its arguments and refuses every call, changing nothing.
+ * Checked in this order; no refusal changes anything, bindability included:
+ *   (1) a null context, sequence, `out_forced` or `out_forced_count`, a sequence of another context,
+ *       `chunk_budget` < 1, `cap` < chunk_budget, or malformed `opts` (struct_size, a mode other than
+ *       SSLM_JUMP_DEFAULT or SSLM_JUMP_EXACT, a draft with SSLM_JUMP_DEFAULT, a negative draft_count, or a
+ *       positive draft_count with a null draft): SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+ *   (2) a multi-row chunk open on the sequence (sslm_gpu_seq_embed_rows): SSLM_BUSY;
+ *   (3) every other call (NULL options, SSLM_JUMP_DEFAULT or SSLM_JUMP_EXACT, with or without a draft):
+ *       SSLM_SEQUENCE_REJECTED, as 1.17.0 refused Exact.
+ * A 1.15-1.17 save made after a Canonical jump still restores (sslm_gpu_seq_restore). The restored sequence
+ * continues under whatever mode the caller asks for. */
 SslmGpuStatus sslm_gpu_seq_jump_forward(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t pending_token,
                                         int32_t chunk_budget, const SslmGpuJumpOptions* opts, int32_t* out_forced,
                                         int32_t cap, int32_t* out_forced_count) noexcept;

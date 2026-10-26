@@ -4618,38 +4618,6 @@ bool LockLiveSeq(sslm_seq_s* seq, std::unique_lock<std::mutex>* out) {
 	return true;
 }
 
-struct JumpPrePassCtx {
-	const sslm_seq_s* seq;
-	const sslm_decode_params* params;  // null: greedy
-	int32_t prewalked;
-	// The replacement anti-LM state PrepareAntiLm built, not yet installed. Freed on every exit that
-	// does not install it, a thrown std::bad_alloc included.
-	AntiLmPtr fresh = NoAntiLm();
-	bool damped = false;  // §5.8's rule applies: damped params and >= 1 forced token to admit
-};
-
-// Runs inside PrefillWholeTokensImpl after its admission pre-scan (every refusal check passed and
-// admit_count >= 1 tokens will be admitted) and before the batched pass writes any row. Under damped
-// params, and only when at least one forced token will be admitted, it runs the first half of §5.8's
-// create-or-re-key block: a replacement state is built if the order differs, but the sequence keeps
-// its live state. The verb installs the replacement only after the pass has admitted a forced token,
-// so a call that fails anywhere -- here, in the page map, or in the pass -- leaves the anti-LM
-// history and order exactly as they were (§5.8, cell 5.2; code review round 1, finding 1). A
-// pending-only admission, an h = 0 call, a refusal and a no-op never get here with forced >= 1.
-// The pass's bad-alloc slot (cell 5.2) is consulted last, after the replacement exists, so it
-// stands for a failure that happens after the re-key has been prepared (finding 3).
-sslm_status JumpPrePass(void* ctx, int32_t admit_count) {
-	JumpPrePassCtx& c = *static_cast<JumpPrePassCtx*>(ctx);
-	const int32_t forced = admit_count - std::min(c.prewalked, admit_count);
-	if (forced >= 1 && c.params && c.params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
-		c.damped = true;
-		const sslm_status st = PrepareAntiLm(c.seq, c.params->anti_lm_max_order, /*from_verb=*/true, &c.fresh);
-		if (st != SSLM_OK) return st;
-	}
-	superslm::internal::MaybeThrowInjectedJumpForwardPassAllocFault();
-	return SSLM_OK;
-}
-
 // Schema fast-decode plan §16 Q6 C (chosen), k from B3: when a one-row pass would thread (bit 1
 // (SSLM_PARALLEL_FOR_MATVEC) set, and the one-row split of the largest projection reaching two or more
 // tasks; PrefillWholeTokensImpl), the verb runs a pass of M = 2..k rows as M one-row threaded passes.
@@ -4680,8 +4648,7 @@ struct ExactPass {
 };
 
 // §5.10.7: the prepare, after every refusal check and before any row runs, so a failed prepare returns
-// its status with nothing changed (cell 5.X7). The pass's bad-alloc slot is consulted after it (cell 5.X1),
-// as JumpPrePass consults it.
+// its status with nothing changed (cell 5.X7). The pass's bad-alloc slot is consulted after it (cell 5.X1).
 sslm_status ExactPrePass(void* ctx, int32_t admit_count) {
 	ExactPass& x = *static_cast<ExactPass*>(ctx);
 	if (admit_count >= 2 && x.params && x.params->mode == SSLM_DECODE_MODE_DAMPED_GREEDY) {
@@ -4849,8 +4816,8 @@ sslm_status RunExactPasses(const sslm_model_s* model, superslm::SequenceLayerSta
 	return SSLM_OK;
 }
 
-// The exact verb past canonical mode's shared checks (sequence locked, layer_index 0, bind eligibility
-// cleared, a schema bound). §5.10.3's precondition, the draft walk, the pass and the rollback.
+// The exact verb past the shared checks (sequence locked, layer_index 0, bind eligibility cleared, a
+// schema bound). §5.10.3's precondition, the draft walk, the pass and the rollback.
 sslm_status SeqJumpExact(const sslm_model_s* model, sslm_seq_s* seq, int32_t chunk_budget,
                          const sslm_decode_params* params, const sslm_jump_options* opts, sslm_workspace ws,
                          int32_t* out_forced, int32_t* out_forced_count) {
@@ -4939,16 +4906,19 @@ sslm_status SeqJumpForwardImpl(sslm_model model, sslm_seq seq, int32_t chunk_bud
                                int32_t* out_forced, int32_t cap, int32_t* out_forced_count) {
 	if (!out_forced_count) return SSLM_INVALID_ARGUMENT;
 	// Plan rev 1.3.3 §5.10.2: the options' refusals come first, with nothing changed (the count unwritten,
-	// the sequence still bindable).
-	bool exact = false;
+	// the sequence still bindable). Multi-row plan erratum E-11 (1.18.0), rulings 21 and 21a: canonical mode is
+	// removed; mode 0 is SSLM_JUMP_DEFAULT and, like NULL options, selects exact mode, as SSLM_JUMP_EXACT does.
 	if (opts) {
 		if (opts->struct_size != sizeof(sslm_jump_options)) return SSLM_INVALID_ARGUMENT;
-		if (opts->mode != SSLM_JUMP_CANONICAL && opts->mode != SSLM_JUMP_EXACT) return SSLM_INVALID_ARGUMENT;
+		if (opts->mode != SSLM_JUMP_DEFAULT && opts->mode != SSLM_JUMP_EXACT) return SSLM_INVALID_ARGUMENT;
 		if (opts->draft_count < 0) return SSLM_INVALID_ARGUMENT;
 		if (!opts->draft && opts->draft_count > 0) return SSLM_INVALID_ARGUMENT;
-		if (opts->mode == SSLM_JUMP_CANONICAL && (opts->draft || opts->draft_count != 0)) return SSLM_INVALID_ARGUMENT;
-		exact = opts->mode == SSLM_JUMP_EXACT;
+		// SSLM_JUMP_DEFAULT is what NULL options are: exact with the forced chain as its draft. A caller's draft
+		// takes SSLM_JUMP_EXACT (the rule canonical mode's value 0 always had).
+		if (opts->mode == SSLM_JUMP_DEFAULT && (opts->draft || opts->draft_count != 0)) return SSLM_INVALID_ARGUMENT;
 	}
+	static constexpr sslm_jump_options kNoDraft{sizeof(sslm_jump_options), SSLM_JUMP_EXACT, nullptr, 0};
+	const sslm_jump_options* const exact_opts = opts ? opts : &kNoDraft;
 	*out_forced_count = 0;
 	if (!model || !seq || chunk_budget < 1 || cap < chunk_budget || !out_forced) return SSLM_INVALID_ARGUMENT;
 	if (params) {
@@ -4964,45 +4934,7 @@ sslm_status SeqJumpForwardImpl(sslm_model model, sslm_seq seq, int32_t chunk_bud
 	// call included.
 	seq->bind_eligible = false;
 	if (!seq->bound_schema) return SSLM_OK;  // no-op: nothing is forced without a schema
-	if (exact) return SeqJumpExact(model, seq, chunk_budget, params, opts, ws, out_forced, out_forced_count);
-	const uint32_t si = seq->bound_schema->index;
-	// §5.4: the pending choice token -- produced (and walked) by the last decode, not yet embedded.
-	const int32_t pending =
-	    (seq->state.layer_index == 0 && !seq->ready_for_logits && seq->current_token >= 0) ? 1 : 0;
-	const int32_t chain_len = ForcedChain(model, si, seq->dfa_walk_state, nullptr, 0);
-	if (chain_len == 0) return SSLM_OK;  // no-op: unforced; the pending token stays for decode_step
-	// §5.3: the pending token, then the chain, up to chunk_budget tokens in all.
-	const int32_t room = chunk_budget - pending;
-	const int32_t take = chain_len < room ? chain_len : room;
-	std::vector<int32_t> tokens(static_cast<size_t>(pending + take));
-	if (pending) tokens[0] = seq->current_token;
-	(void)ForcedChain(model, si, seq->dfa_walk_state, tokens.data() + pending, take);
-
-	JumpPrePassCtx ctx{seq, params, pending};
-	int32_t consumed = 0;
-	const int32_t count = static_cast<int32_t>(tokens.size());
-	const sslm_status st = PrefillWholeTokens(
-	    model, seq->state, seq->pool, seq->kv, HolderLimit(model, seq->kv_mode, seq->kv_budget, seq->kv_origin),
-	    tokens.data(), count, count, &consumed, &seq->current_token, seq->adapter_handle, ws,
-	    SSLM_SPAN_SCHEMA_CONTENT, seq->bound_schema, &seq->dfa_walk_state, &seq->forced_token_count, pending,
-	    &JumpPrePass, &ctx, kJumpForwardSplitMaxTokens);
-	if (consumed > 0) {
-		// As sslm_prefill on consumed > 0 (G8): the last admitted token ran every layer, so the next
-		// decode_step finishes it with no re-embed. Partial admissions rest here too (§5.5).
-		seq->ready_for_logits = true;
-	}
-	const int32_t forced = consumed - std::min(pending, consumed);
-	for (int32_t i = 0; i < forced; ++i) out_forced[i] = tokens[static_cast<size_t>(pending + i)];
-	*out_forced_count = forced;
-	// §5.8: under damped params, every admitted forced token enters the anti-LM history in order (the
-	// pending token entered it when the decode step produced it). The replacement JumpPrePass prepared
-	// is installed only now that a forced token was admitted (a limit status with a partial admission
-	// included); when nothing forced was admitted, ctx.fresh is freed unused and the live state stands.
-	if (forced > 0 && ctx.damped) {
-		InstallAntiLm(seq, std::move(ctx.fresh), params->anti_lm_max_order);
-		for (int32_t i = 0; i < forced; ++i) superslm::AntiLmUpdate(seq->damped_greedy_antilm, out_forced[i]);
-	}
-	return st;
+	return SeqJumpExact(model, seq, chunk_budget, params, exact_opts, ws, out_forced, out_forced_count);
 }
 
 }  // namespace

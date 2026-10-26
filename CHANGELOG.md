@@ -2,6 +2,29 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
+## [1.18.0] - Unreleased
+
+Multi-row GPU dispatch and the threaded-CPU batched fix. This section is in progress and is merged with the CPU
+thread's 1.18.0 section when that lands.
+
+### Removed
+
+- **Canonical jump-forward, on the CPU and the GPU** (deprecated in 1.17.0). Canonical is removed; mode 0 is now
+  `SSLM_JUMP_DEFAULT`, which selects Exact, as do NULL options.
+  - `SSLM_JUMP_CANONICAL` is gone from `sslm_abi.h`. Its value 0 is now the default, so a zero-initialised
+    `sslm_jump_options` or `SslmGpuJumpOptions` keeps working and selects Exact. `SSLM_JUMP_EXACT` keeps its value, 1.
+    Any other mode is refused as malformed options, as before (`SSLM_INVALID_ARGUMENT` on the CPU,
+    `SSLM_SEQUENCE_KV_BUFFER_MISMATCH` on the GPU).
+  - On the CPU, `sslm_seq_jump_forward` with NULL options, or with mode 0, now runs exact mode with the forced chain
+    as its draft. A caller's draft still takes `SSLM_JUMP_EXACT`; a draft with mode 0 is refused, as it was.
+  - On the GPU, `sslm_gpu_seq_jump_forward` gets Exact with multi-row dispatch. A call that passes the argument
+    checks returns `SSLM_SEQUENCE_REJECTED` (1.17.0's Exact refusal) until then.
+  - Saves made by 1.15.0-1.17.0 after a canonical jump still restore. The restored sequence continues under
+    whatever mode the caller asks for.
+  - The multi-row branch's provisional `SSLM_GPU_ROWS_SCHEMA_FORCED` kind and `SSLM_GPU_ROWS_FIRST_PREWALKED` flag
+    of `sslm_gpu_seq_embed_rows` were never released and are removed. Kind 1 is reserved, and a spec with kind 1 or
+    flag bit 0x1 is refused as a bad spec.
+
 ## [1.17.0] - 2026-10-26
 
 Schema skip-ahead on the GPU, and the RTX 50-series fix. `docs/releases/1.17.0.md` is the release note. Three GPU

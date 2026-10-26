@@ -918,8 +918,12 @@ void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_statu
 void RowsDropChunk(SslmGpuSequenceHandle* seq);
 bool RowsChunkOpen(const SslmGpuSequenceHandle* seq) { return seq->rows_chunk != nullptr; }
 SslmGpuStatus RowsRollbackAndClose(SslmGpuSequenceHandle* seq);
-uint32_t RowsForcedPrefix(const SslmGpuSequenceHandle* seq, const int32_t* tokens, uint32_t n, bool prewalked,
-                          std::vector<uint32_t>* walk_after);
+// The schema-forced chunk kind and its first-prewalked flag: public at MR4, removed from gpu_1p0.h at MRX (E-11 (c),
+// ruling 22) and kept internal, with RowsForcedPrefix, for MR5's verify passes. The public verb refuses both.
+constexpr int32_t kRowsKindSchemaForced = 1;
+constexpr uint32_t kRowsFirstPrewalked = 0x1u;
+[[maybe_unused]] uint32_t RowsForcedPrefix(const SslmGpuSequenceHandle* seq, const int32_t* tokens, uint32_t n,
+                                           bool prewalked, std::vector<uint32_t>* walk_after);
 bool RowsOpenChunk(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t kind, uint32_t flags,
                    const int32_t* tokens, uint32_t M, std::vector<uint32_t> walk_after);
 void RowsPublishState(SslmGpuSequenceHandle* seq, const std::vector<int8_t>& codes, const superslm::CarriedScale& scale,
@@ -5639,15 +5643,28 @@ SslmGpuStatus sslm_gpu_seq_jump_forwardImpl(SslmGpuContext* ctx, SslmGpuSequence
 	    cap < chunk_budget) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
+	// Plan erratum E-11 (MRX), rulings 21 and 21a: Canonical is removed. Mode 0 is SSLM_JUMP_DEFAULT and, like NULL
+	// options, selects Exact; SSLM_JUMP_EXACT (1) is Exact; any other value is refused as malformed options.
 	if (opts) {
-		if (opts->struct_size != sizeof(SslmGpuJumpOptions) || (opts->mode != 0 && opts->mode != 1) ||
+		if (opts->struct_size != sizeof(SslmGpuJumpOptions) || (opts->mode != 0 /* SSLM_JUMP_DEFAULT */ && opts->mode != 1 /* SSLM_JUMP_EXACT */) ||
 		    opts->draft_count < 0 || (!opts->draft && opts->draft_count > 0) ||
-		    (opts->mode == 0 && (opts->draft || opts->draft_count != 0))) {
+		    (opts->mode == 0 && (opts->draft || opts->draft_count != 0))) {  // SSLM_JUMP_DEFAULT takes no draft
 			return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 		}
-		// (2) Exact mode is refused in 1.17.0 (G12.9), before the claim, with nothing changed.
-		if (opts->mode == 1) return SSLM_SEQUENCE_REJECTED;
 	}
+	// (2) A chunk is open: SSLM_BUSY, as for every verb that would advance the walk (multi-row plan §4.6, R-17).
+	if (RowsChunkOpen(seq)) return SSLM_BUSY;
+	// (3) Exact, every mode the verb now has, is refused until MR5 builds it on the GPU (1.17.0's G12.9 status),
+	// before the claim, with nothing changed.
+	return SSLM_SEQUENCE_REJECTED;
+}
+
+namespace {
+
+// The forced-row pass behind 1.17's Canonical jump, kept internal after MRX (E-11 (c)): MR5's Exact verify passes
+// are built on it. Unreachable from the public verb until then; the shape checks it runs are 1.17's, from (3) on.
+[[maybe_unused]] SslmGpuStatus JumpForcedRowsInternal(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t pending_token,
+                                                      int32_t chunk_budget, int32_t* out_forced, int32_t* out_forced_count) {
 	SslmGpuModelHandle* model = seq->model;
 	// (3) The pending token's range.
 	if (pending_token < -1 || pending_token >= model->vocab_size) return SSLM_TOKEN_ID_OUT_OF_RANGE;
@@ -5804,8 +5821,8 @@ SslmGpuStatus sslm_gpu_seq_jump_forwardImpl(SslmGpuContext* ctx, SslmGpuSequence
 			}
 		} else {
 			std::vector<uint32_t> walk_after(scan.dfa_states_after.begin() + off, scan.dfa_states_after.begin() + off + n);
-			const uint32_t flags = (off == 0 && pend > 0) ? SSLM_GPU_ROWS_FIRST_PREWALKED : 0u;
-			if (!RowsOpenChunk(ctx, seq, SSLM_GPU_ROWS_SCHEMA_FORCED, flags, rows.data() + off, static_cast<uint32_t>(n),
+			const uint32_t flags = (off == 0 && pend > 0) ? kRowsFirstPrewalked : 0u;
+			if (!RowsOpenChunk(ctx, seq, kRowsKindSchemaForced, flags, rows.data() + off, static_cast<uint32_t>(n),
 			                   std::move(walk_after))) {
 				return pass_fail(superslm::SslmForwardStatus::GpuDeviceRemoved);  // unreachable: the rows are in range
 			}
@@ -5847,6 +5864,8 @@ SslmGpuStatus sslm_gpu_seq_jump_forwardImpl(SslmGpuContext* ctx, SslmGpuSequence
 		throw;
 	}
 }
+
+}  // namespace
 
 SslmGpuStatus sslm_gpu_seq_embed_schema_tokenImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t token) {
 	if (!ctx || !seq || !seq->model || seq->ctx != ctx) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
@@ -8209,44 +8228,29 @@ SslmGpuStatus sslm_gpu_seq_embed_rowsImpl(SslmGpuContext* ctx, SslmGpuSequenceHa
 	SslmGpuModelHandle* model = seq->model;
 	const uint32_t L = model->num_hidden_layers;
 	if ((seq->layer_index != 0 && seq->layer_index != L) || seq->rows_chunk != nullptr) return SSLM_BUSY;
-	// 4. A bad spec: the argument status (§3.7: main's argument-fault status on the branch). PROMPT and, since MR4,
-	// SCHEMA_FORCED exist (EXACT_DRAFT is a bad spec before MR5); FIRST_PREWALKED is the one flag, and only with
-	// SCHEMA_FORCED.
+	// 4. A bad spec: the argument status (§3.7: main's argument-fault status on the branch). PROMPT is the one kind
+	// (EXACT_DRAFT is a bad spec before MR5; the schema-forced kind 1 was removed at MRX, E-11 (c), and its value
+	// stays reserved), and no flag exists (ruling 22: the first-prewalked flag went with it).
 	constexpr uint32_t kSpecV1 = static_cast<uint32_t>(sizeof(SslmGpuRowsSpec));
 	if (spec == nullptr || out_admitted == nullptr || spec->struct_size < kSpecV1 || spec->tokens == nullptr ||
-	    spec->count < 1 || spec->count > SSLM_GPU_MAX_ROWS ||
-	    (spec->kind != SSLM_GPU_ROWS_PROMPT && spec->kind != SSLM_GPU_ROWS_SCHEMA_FORCED) ||
-	    (spec->flags & ~SSLM_GPU_ROWS_FIRST_PREWALKED) != 0u ||
-	    (spec->kind == SSLM_GPU_ROWS_PROMPT && spec->flags != 0u)) {
+	    spec->count < 1 || spec->count > SSLM_GPU_MAX_ROWS || spec->kind != SSLM_GPU_ROWS_PROMPT || spec->flags != 0u) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	// 5. A token outside the vocabulary.
 	for (int32_t r = 0; r < spec->count; ++r) {
 		if (spec->tokens[r] < 0 || spec->tokens[r] >= model->vocab_size) return SSLM_TOKEN_ID_OUT_OF_RANGE;
 	}
-	const bool forced = spec->kind == SSLM_GPU_ROWS_SCHEMA_FORCED;
-	// SCHEMA_FORCED (MR4; rulings item 11): no forced-next table is the table's status, before the cap's.
-	if (forced && !model->forced.present) return SSLM_GPU_FORCED_TABLE_ABSENT;
 	// Admission: the longest prefix within the context's headroom and, pooled, the budget limit. Zero admitted
 	// returns the cap's status: 1.17's SSLM_GPU_CONTEXT_CAP_EXCEEDED at the cap (plan §3.7, R-17),
-	// SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below it, as sslm_gpu_seq_jump_forward does.
+	// SSLM_GPU_KV_BUDGET_EXCEEDED at a budget limit below it.
 	const int64_t p0 = seq->context_length;
 	const int64_t headroom = seq->context_cap - p0;
 	const int64_t limit_room =
 	    (seq->pool != nullptr && seq->limit < seq->context_cap) ? seq->limit - p0 : std::numeric_limits<int64_t>::max();
 	const int64_t admitted = std::max<int64_t>(0, std::min<int64_t>({spec->count, headroom, limit_room}));
 	if (admitted == 0) return headroom <= 0 ? SSLM_GPU_CONTEXT_CAP_EXCEEDED : SSLM_GPU_KV_BUDGET_EXCEEDED;
-	// SCHEMA_FORCED: further capped by the longest prefix that matches the forced table from the walk state; under
-	// FIRST_PREWALKED row 0 is embedded but neither matched nor walked (E25). None matching, or no schema bound, is
-	// SSLM_SEQUENCE_REJECTED (rulings item 11).
-	// Under FIRST_PREWALKED the first matched row is row 1: with a row 1 admitted, only row 0 surviving is a refusal.
-	std::vector<uint32_t> walk_after;
-	const bool prewalked = (spec->flags & SSLM_GPU_ROWS_FIRST_PREWALKED) != 0u;
-	const uint32_t M = forced ? RowsForcedPrefix(seq, spec->tokens, static_cast<uint32_t>(admitted), prewalked,
-	                                             &walk_after)
-	                          : static_cast<uint32_t>(admitted);
-	if (M == 0 || (forced && prewalked && M == 1 && admitted > 1)) return SSLM_SEQUENCE_REJECTED;
-	if (!RowsOpenChunk(ctx, seq, spec->kind, spec->flags, spec->tokens, M, std::move(walk_after))) {
+	const uint32_t M = static_cast<uint32_t>(admitted);
+	if (!RowsOpenChunk(ctx, seq, spec->kind, spec->flags, spec->tokens, M, {})) {
 		return SSLM_TOKEN_ID_OUT_OF_RANGE;  // nothing written
 	}
 	*out_admitted = static_cast<int32_t>(M);

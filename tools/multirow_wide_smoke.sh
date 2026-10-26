@@ -3,7 +3,7 @@
 # tools/cloud_gpu/wine_gpu.sh; run its `setup` once first). MR1 gate: "Wine one-layer smoke equal on pkv_def and
 # pkv_qk" (multirow_wide_smoke.cpp). MR2 and MR3: the recorder through the published verbs against the one-row
 # twin, the batch with open chunks and the provisional statuses (multirow_rows_smoke.cpp; a development aid, the
-# test author's suite grades the cells); in --suite=mr2, MR4's SCHEMA_FORCED, FIRST_PREWALKED and jump cases on F-SFD
+# test author's suite grades the cells); in --suite=mr2, MRX's refusals of the removed schema-forced kind, its flag and Canonical (the jump) on F-SFD
 # (tools/gen_schema_fast_decode_fixture.py). MR4: --suite=bench runs cell 10.2's box bench (multirow_cost_bench.cpp) in a
 # reduced form, to show it closes every M and writes a table header that compiles and mr4_box.py's CSV; the numbers are lavapipe's.
 #
@@ -114,13 +114,13 @@ for s in mr1 mr2; do
 		# The close's refusal path: RoPE tables truncated to 12 positions, so every row at 12 or later refuses.
 		leg "$exe" mr2-refusal-pkv_def --model="$FIX/pkv_def.sslm" --refusal-only --rope-positions=12
 		leg "$exe" mr2-refusal-pkv_qk --model="$FIX/pkv_qk.sslm" --refusal-only --rope-positions=12
-		# MR4: SCHEMA_FORCED, FIRST_PREWALKED and the jump on the recorder, on F-SFD (a forced-next table).
+		# MRX: the removed schema-forced kind and flag, and the jump's modes, refused on F-SFD (a forced-next table).
 		for src in "${MR_FIXTURES:-}" "$REPO/out/mr-p41/fixtures"; do
 			[ -n "$src" ] && [ -f "$src/sfd/fsfd.sslm" ] && [ ! -f "$FIX/sfd/fsfd.sslm" ] && mkdir -p "$FIX/sfd" &&
 				cp "$src/sfd/fsfd.sslm" "$src/sfd/fsfd_ref.txt" "$FIX/sfd/"
 		done
 		[ -f "$FIX/sfd/fsfd.sslm" ] || python3 tools/gen_schema_fast_decode_fixture.py "$FIX/sfd" >/dev/null
-		leg "$exe" mr4-forced-fsfd --model="$FIX/sfd/fsfd.sslm" --forced-schema=potion_shop_order
+		leg "$exe" mrx-forced-fsfd --model="$FIX/sfd/fsfd.sslm" --forced-schema=potion_shop_order
 	fi
 done
 case "$SUITE" in

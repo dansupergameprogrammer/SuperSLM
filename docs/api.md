@@ -445,23 +445,13 @@ do {
   that is Submitted, mid-token, or already has a chunk open returns
   `SSLM_BUSY`. A bad spec returns `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`: a null
   pointer, `struct_size` too small, a count outside 1..8, a kind other than
-  `SSLM_GPU_ROWS_PROMPT` or `SSLM_GPU_ROWS_SCHEMA_FORCED`, a flag other than
-  `SSLM_GPU_ROWS_FIRST_PREWALKED`, or that flag with `PROMPT`. A token
+  `SSLM_GPU_ROWS_PROMPT`, or any flag (`flags` must be 0). A token
   outside the vocabulary returns `SSLM_TOKEN_ID_OUT_OF_RANGE`. Nothing is
   written on any refusal. The sequence's ready-for-logits state is cleared.
   Its schema binding and walk state are untouched while the chunk is open.
-- **Schema-forced rows.** `SSLM_GPU_ROWS_SCHEMA_FORCED` admits the chain the
-  bound schema forces from the walk state (the ids
-  `sslm_gpu_seq_forced_tokens` reports), as far as the given tokens match it
-  and the headroom allows. With `SSLM_GPU_ROWS_FIRST_PREWALKED`, row 0 is a
-  produced token whose finish already walked it: it is embedded but not
-  matched or walked, and matching starts at row 1. The close advances the
-  walk over exactly the rows committed (row 0 excluded under the flag). The
-  checks run in this order, after the spec and token checks: a model mapped
-  without a forced-next table returns `SSLM_GPU_FORCED_TABLE_ABSENT`; no row
-  fitting returns the cap's status as above; no schema bound, or a first
-  matched row (row 1 under the flag, when admitted) that is not the forced
-  token, returns `SSLM_SEQUENCE_REJECTED`.
+- **No schema-forced kind.** The branch's provisional schema-forced kind and its
+  first-prewalked flag were removed with canonical mode before release
+  (1.18.0). Kind 1 is reserved and is a bad spec, and so is any flag.
 - **Advancing.** `sslm_decode_step_gpu` moves every row of the chunk forward
   by the whole layers the budget covers, counted as for one row
   (`DispatchesPerLayer` per layer). A budget below one layer returns
@@ -1308,9 +1298,17 @@ chain is that token, then the chain of the state it leads to. The table costs
   nothing, bind eligibility included. A null `out_count` or `out_accepting`, a
   negative `cap`, or NULL ids with `cap > 0` is `SSLM_INVALID_ARGUMENT`.
 - `sslm_seq_jump_forward(model, seq, chunk_budget, params, opts, ws,
-  out_forced, cap, &forced_count)` (`opts` NULL, or mode
-  `SSLM_JUMP_CANONICAL`: *canonical mode*, described here; mode
-  `SSLM_JUMP_EXACT`: *exact mode*, below) admits the *pending* choice token, if there is one,
+  out_forced, cap, &forced_count)` runs *exact mode* (below) for NULL `opts`,
+  mode `SSLM_JUMP_DEFAULT` (0) and mode `SSLM_JUMP_EXACT` (1). **1.18.0
+  removed canonical mode** (deprecated in 1.17.0). Its value 0 is now
+  `SSLM_JUMP_DEFAULT`, so a zero-initialised options struct selects Exact.
+  `SSLM_JUMP_DEFAULT` is exactly what NULL options give: Exact with the forced
+  chain as the draft. A draft, or `draft_count` != 0, with `SSLM_JUMP_DEFAULT`
+  is `SSLM_INVALID_ARGUMENT`; a caller's draft takes `SSLM_JUMP_EXACT`. Saves
+  made by 1.15.0-1.17.0 after a canonical jump still restore, and continue
+  under the mode the caller asks for. The rest of this item describes canonical
+  mode as 1.15.0-1.17.0 ran it; its refusals, limits, decode parameters and
+  concurrency are the ones exact mode refers to. Canonical mode admitted the *pending* choice token, if there is one,
   then chain tokens, up to `chunk_budget` tokens in all, in one batched layer
   pass through the prefill path, and writes the admitted chain ids (never the
   pending token) to `out_forced`. A token is pending when the last
@@ -1370,18 +1368,20 @@ chain is that token, then the chain of the state it leads to. The table costs
     consumes the token a concurrent `decode_step` would): a concurrent
     `sslm_seq_release` or `decode_step` of the same sequence waits for it.
 
-**Exact mode** (1.15.0; `sslm_jump_options` with mode `SSLM_JUMP_EXACT`) is a
-verified jump-forward: its output, tokens and save blobs included, equals a run
+**Exact mode** (1.15.0; since 1.18.0 the verb's only mode: NULL `opts`,
+`SSLM_JUMP_DEFAULT` or `SSLM_JUMP_EXACT`) is a verified jump-forward: its output, tokens and save blobs included, equals a run
 that never calls the verb.
 - **Options.** `struct_size` must be `sizeof(sslm_jump_options)`. `draft`
   holds `draft_count` token ids, read during the call only; `draft` NULL with
   `draft_count` 0 means the forced chain from the state after the pending
   token, and a non-NULL `draft` with `draft_count` 0 is an empty draft. A
-  wrong `struct_size`, an unknown mode, a negative `draft_count`, a NULL
-  `draft` with `draft_count` > 0, or a draft in canonical mode is
-  `SSLM_INVALID_ARGUMENT`, checked before every other refusal, with nothing
-  changed (`*out_forced_count` unwritten, bind eligibility kept). The other
-  refusals are canonical mode's, in its order.
+  wrong `struct_size`, a mode other than `SSLM_JUMP_DEFAULT` or
+  `SSLM_JUMP_EXACT`, a negative `draft_count`, a NULL `draft` with
+  `draft_count` > 0, or a draft (or `draft_count` != 0) with
+  `SSLM_JUMP_DEFAULT` is `SSLM_INVALID_ARGUMENT`, checked before every other
+  refusal, with nothing changed (`*out_forced_count` unwritten, bind
+  eligibility kept). The other refusals are the ones listed above, in that
+  order.
 - **What it does.** With a pending token p, the draft is clipped to
   `chunk_budget - 1` tokens and to the rows the context cap and the KV budget
   leave after p, then cut at its first token that is out of range, a special
@@ -1405,7 +1405,7 @@ that never calls the verb.
   failed anti-LM create) returns its status with nothing changed. A failure
   after a row is kept, inside a check's finish or a later one-row pass, ends
   the check there: the verified rows are kept and the call returns `SSLM_OK`.
-- **Decode parameters.** As for canonical mode; pass `decode_step` the same
+- **Decode parameters.** Validated as above; pass `decode_step` the same
   ones. Under damped parameters the anti-LM state is created or re-keyed only
   when the pass has two or more rows, installed only once the check's first
   finish has returned a token (a failed first finish leaves the old state and
@@ -1526,11 +1526,14 @@ no save format (`SLM5`, `SLM6`, `SPX1`) changes. Stream equality with the CPU, p
 RTX 5060 and the AMD Radeon RX 7900 XT only. 1.17.0 also fixes the RTX 50-series (Blackwell) GPU results that 1.16.0
 listed as a known issue.
 
-**Canonical mode changes answers, and is deprecated.** It writes the forced text with the tokenizer's split, so the
-model continues from tokens it would not have chosen. On a schema-heavy workload it changed 8 of 44 answers and
-lowered accuracy, where exact mode kept every answer and was nearly as fast, and on array schemas it closes an array
-after its first item. 1.18.0 removes it on the CPU and the GPU. Use exact mode (CPU) where answers matter; on the GPU,
-1.17.0 offers canonical only, and exact runs as off until 1.18.0.
+**Canonical mode is removed in 1.18.0** (on the multi-row branch, unreleased). It changed answers: it wrote the
+forced text with the tokenizer's split, so the model continued from tokens it would not have chosen. On a schema-heavy
+workload it changed 8 of 44 answers, where exact mode kept every answer and was nearly as fast. NULL options,
+`SSLM_JUMP_DEFAULT` (canonical's old value 0) and `SSLM_JUMP_EXACT` now all select Exact, and `SSLM_JUMP_DEFAULT`
+takes no draft, as NULL options take none. **The GPU verb refuses every call with `SSLM_SEQUENCE_REJECTED` until
+multi-row dispatch builds Exact on the GPU (MR5)**, after its argument checks (a mode outside the enum, or a draft with
+`SSLM_JUMP_DEFAULT`, is `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`, and a call with a multi-row chunk open is `SSLM_BUSY`). A 1.17.0 GPU save made after a canonical jump still
+restores. The jump-forward paragraph below describes 1.17.0's canonical verb.
 
 **The forced-text query.** `sslm_gpu_seq_forced_tokens(ctx, seq, out_ids, cap, out_count, out_accepting)` returns
 the text the bound schema forces from the sequence's current walk state, as token ids: the CPU's
@@ -1551,7 +1554,7 @@ on a tied device-head model: a host parallel-for hook that does not run every ta
 same row, as the host-head finish already did.
 
 **The jump-forward verb.** `sslm_gpu_seq_jump_forward(ctx, seq, pending_token, chunk_budget, opts, out_forced, cap,
-out_forced_count)` is the GPU twin of `sslm_seq_jump_forward` in canonical mode. It admits, in passes of up to 4 rows
+out_forced_count)` is the GPU twin of `sslm_seq_jump_forward`. In 1.17.0, which had canonical mode only, it admitted, in passes of up to 4 rows
 (a pass of one row on the schema-content chunk path), the pending token (when one is given) and then the chain the schema forces from the walk
 state, at most `chunk_budget` rows in all; R rows make ceil(R / 4) layer submissions. `out_forced` receives the
 forced ids admitted (`cap` must be at least `chunk_budget`), and `*out_forced_count` their number, the pending row
