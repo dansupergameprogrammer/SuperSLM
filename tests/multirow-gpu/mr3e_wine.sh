@@ -5,12 +5,14 @@
 # Usage: tests/multirow-gpu/mr3e_wine.sh [--out=DIR] [--jobs=N] [--base=REV] [--only=LEG[,LEG...]] [--build-only] [--clean]
 #   --out    default <repo>/out/mr3e
 #   --base   the head before MR3e, which "unchanged" is graded against (default MR3E_BASE, else ae6debb3)
-#   --only   cells | base | abi | mutants | optout   (default: all five)
+#   --only   census | cells | base | abi | mutants | optout   (default: all six)
 #   --clean  delete the build trees, the base worktree and the Wine prefixes afterwards (keeps the logs)
 # Fixtures (MR3E_FIXTURES, default out/mr3e/fixtures): pkv_def and pkv_qk (MR_FIXTURES or the MR1 smoke's, else
 # tools/gen_paged_kv_fixture.py), and pkv_def_refuse from mr2_fixtures.py.
 #
-# Legs (each printed PASS or FAIL; exit 0 only when every leg run passes):
+# Legs (each printed PASS or FAIL; every leg runs and reports whatever an earlier one did; exit 0 only when every leg
+# run passes):
+#   census   tests/ci/check_gpu_status_site_census.py: every status and catch site in src/gpu is in te425's list.
 #   cells    mr3e_cells.exe: sweep (E-7 a) and refusal (E-7 b), each graded in-process against the one-row path.
 #   base     the same executable built from --base's tree. Every `obs` line (status, blob, final hidden, context,
 #            ready flag for every sweep and refusal case) must equal the branch's.
@@ -40,7 +42,7 @@ OUT="$REPO/out/mr3e"
 JOBS=2
 RUN=1
 CLEAN=0
-ONLY="cells,base,abi,mutants,optout"
+ONLY="census,cells,base,abi,mutants,optout"
 BASE="${MR3E_BASE:-ae6debb3}"
 for a in "$@"; do
 	case "$a" in
@@ -95,44 +97,62 @@ run_cells() {  # run_cells DIR LOG [ENV=VAL] -- ARGS...: the executable in DIR, 
 	return $rc
 }
 
+# ------------------------------------------------------------------------------------------------ census
+# First, and with no build: a status or catch site added to src/gpu without its te425 row fails here, not silently.
+if want census; then
+	if python3 tests/ci/check_gpu_status_site_census.py >"$OUT/census.log" 2>&1; then echo "PASS census ($(tail -1 "$OUT/census.log"))"
+	else sed 's/^/    /' "$OUT/census.log" | head -20 || true; echo "FAIL census"; FAILED+=(census); fi
+fi
+
 # ------------------------------------------------------------------------------------------------ build
+# Leg isolation: a build that fails is reported, and only the legs that need its executable are skipped.
+# build_exe TREE SHADERS OBJ EXE: shaders, objects and link; true only when EXE was (re)made.
+build_exe() {
+	rm -f "$4"
+	shaders "$1" "$2" wide && build "$1" "$3" "$EXTRA" "$4" tests/multirow-gpu/mr3e_cells.cpp && [ -f "$4" ]
+}
+CELLS_OK=0
 need_cells=0
 for l in cells mutants optout; do want $l && need_cells=1; done
 if [ $need_cells = 1 ]; then
-	shaders "$REPO" "$CELLS/shaders" wide
 	if [ "$(cat "$CELLS/obj.flags" 2>/dev/null)" != "$FLAGS $EXTRA" ]; then rm -rf "$CELLS/obj"; mkdir -p "$CELLS"; echo "$FLAGS $EXTRA" >"$CELLS/obj.flags"; fi
-	build "$REPO" "$CELLS/obj" "$EXTRA" "$CELLS/mr3e_cells.exe" tests/multirow-gpu/mr3e_cells.cpp
+	if build_exe "$REPO" "$CELLS/shaders" "$CELLS/obj" "$CELLS/mr3e_cells.exe" >"$OUT/build.log" 2>&1; then CELLS_OK=1
+	else tail -5 "$OUT/build.log" | sed 's/^/    /' || true; echo "FAIL build: mr3e_cells.exe ($OUT/build.log); cells, mutants and optout skipped"; FAILED+=(build); fi
 fi
 if [ "$RUN" = 1 ]; then fixtures3e; wine_up; fi
 
 # ------------------------------------------------------------------------------------------------ cells
-if want cells && [ "$RUN" = 1 ]; then
+if want cells && [ "$RUN" = 1 ] && [ $CELLS_OK = 1 ]; then
 	rc=0; run_cells "$CELLS" "$OUT/cells.log" -- --print-obs || rc=$?
-	grep -E "^(FAIL|RED)|cell |cells:|refusal:" "$OUT/cells.log" | head -60 | sed 's/^/    /'
+	{ grep -E "^(FAIL|RED)|cell |cells:|refusal:" "$OUT/cells.log" | head -60 | sed 's/^/    /'; } || true
 	grep '^obs ' "$OUT/cells.log" >"$OUT/obs-branch.txt" || true
 	if [ $rc = 0 ]; then echo "PASS cells"; else echo "FAIL cells (exit $rc, $OUT/cells.log)"; FAILED+=(cells); fi
 fi
 
 # ------------------------------------------------------------------------------------------------ base
+base_ok=1
 if want base; then
-	if [ ! -d "$BT/src" ] || [ "$(git -C "$BT" rev-parse HEAD 2>/dev/null)" != "$(git rev-parse "$BASE^{commit}")" ]; then
+	if [ ! -d "$BT/src" ] || [ "$(git -C "$BT" rev-parse HEAD 2>/dev/null)" != "$(git rev-parse "$BASE^{commit}" 2>/dev/null)" ]; then
 		git worktree remove --force "$BT" 2>/dev/null || rm -rf "$BT"
-		git worktree add --detach "$BT" "$BASE" >/dev/null
+		git worktree add --detach "$BT" "$BASE" >/dev/null 2>&1 || base_ok=0
 	fi
-	mkdir -p "$BT/tests/multirow-gpu"
-	cp "$HERE/mr3e_cells.cpp" "$HERE/mr2_common.h" "$HERE/mr2_entry.h" "$HERE/mingw_d3d12_compat.h" "$BT/tests/multirow-gpu/"
-	shaders "$BT" "$BT/out/m3e/shaders" wide
-	build "$BT" "$BT/out/m3e/obj" "$EXTRA" "$BT/out/m3e/mr3e_cells.exe" tests/multirow-gpu/mr3e_cells.cpp
-	if [ "$RUN" = 1 ]; then
+	if [ $base_ok = 1 ]; then
+		mkdir -p "$BT/tests/multirow-gpu"
+		cp "$HERE/mr3e_cells.cpp" "$HERE/mr2_common.h" "$HERE/mr2_entry.h" "$HERE/mingw_d3d12_compat.h" "$BT/tests/multirow-gpu/"
+		build_exe "$BT" "$BT/out/m3e/shaders" "$BT/out/m3e/obj" "$BT/out/m3e/mr3e_cells.exe" >"$OUT/base-build.log" 2>&1 || base_ok=0
+	fi
+	if [ $base_ok = 0 ]; then echo "FAIL base: no base binary from $BASE ($OUT/base-build.log)"; FAILED+=(base)
+	elif [ $CELLS_OK = 0 ] && [ ! -f "$OUT/obs-branch.txt" ]; then echo "FAIL base: no branch binary to compare"; FAILED+=(base)
+	elif [ "$RUN" = 1 ]; then
 		[ -f "$OUT/obs-branch.txt" ] || { run_cells "$CELLS" "$OUT/cells.log" -- --print-obs || true; grep '^obs ' "$OUT/cells.log" >"$OUT/obs-branch.txt" || true; }
 		ok=1
 		run_cells "$BT/out/m3e" "$OUT/base.log" -- --print-obs || true
 		grep '^obs ' "$OUT/base.log" >"$OUT/obs-base.txt" || true
-		nb="$(wc -l <"$OUT/obs-base.txt")"; nr="$(wc -l <"$OUT/obs-branch.txt")"
+		nb="$(wc -l <"$OUT/obs-base.txt" || echo 0)"; nr="$(wc -l <"$OUT/obs-branch.txt" || echo 0)"
 		[ "$nb" -gt 300 ] || { ok=0; echo "    base: the base binary printed only $nb obs lines ($OUT/base.log)"; }
 		if ! diff -q "$OUT/obs-base.txt" "$OUT/obs-branch.txt" >/dev/null; then
-			ok=0; echo "    base: $(diff "$OUT/obs-base.txt" "$OUT/obs-branch.txt" | grep -c '^>') of $nr obs lines differ from $(git rev-parse --short=8 "$BASE")'s:"
-			diff "$OUT/obs-base.txt" "$OUT/obs-branch.txt" | head -8 | cut -c1-240 | sed 's/^/      /'
+			ok=0; echo "    base: $(diff "$OUT/obs-base.txt" "$OUT/obs-branch.txt" | grep -c '^>' || true) of $nr obs lines differ from $(git rev-parse --short=8 "$BASE")'s:"
+			{ diff "$OUT/obs-base.txt" "$OUT/obs-branch.txt" | head -8 | cut -c1-240 | sed 's/^/      /'; } || true
 		fi
 		if [ $ok = 1 ]; then echo "PASS base ($nr obs lines equal to $(git rev-parse --short=8 "$BASE")'s binary)"; else echo "FAIL base"; FAILED+=(base); fi
 	fi
@@ -190,7 +210,7 @@ open(p,'w').write(s2)" "$d/tree/$file"; then
 	rm -rf "$d/tree" "$d/obj"
 }
 MXE2_RED=0
-if want mutants || want optout; then
+if { want mutants || want optout; } && [ $CELLS_OK = 1 ]; then
 	mkdir -p "$MUT"
 	have_mxe2=0
 	host_mutant MXE2 $G 1 '^(\s*)slice\.real_rows = c\.rows;' \
@@ -200,7 +220,7 @@ if want mutants || want optout; then
 		[ $rc != 0 ] && MXE2_RED=1
 	fi
 fi
-if want mutants && [ "$RUN" = 1 ]; then
+if want mutants && [ "$RUN" = 1 ] && [ $CELLS_OK = 1 ]; then
 	if [ $MXE2_RED = 1 ]; then echo "PASS mutant MXE2 -> red in sweep ($(grep -m1 '^RED cell' "$MUT/MXE2.log" || echo crashed))"
 	else [ "${have_mxe2:-0}" = 1 ] && echo "    MXE2: the sweep stayed green: the bridge runs no multi-row pass with a tail"; echo "FAIL mutant MXE2 survived"; FAILED+=(MXE2); fi
 	if host_mutant MXE1 $G 1 '^((?:static\s+)?(?:inline\s+)?uint32_t\s+PromptRowsCap\s*\([^)]*\)\s*(?:noexcept\s*)?\{)' \
@@ -211,7 +231,7 @@ if want mutants && [ "$RUN" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------------------------------------ opt-out
-if want optout && [ "$RUN" = 1 ]; then
+if want optout && [ "$RUN" = 1 ] && [ $CELLS_OK = 1 ]; then
 	ok=1
 	rc=0; run_cells "$CELLS" "$OUT/optout.log" SSLM_GPU_MULTIROW_PROMPT=0 -- --cells=sweep --quick || rc=$?
 	[ $rc = 0 ] || { ok=0; echo "    optout: the sweep with the opt-out set is red on the branch ($OUT/optout.log)"; }

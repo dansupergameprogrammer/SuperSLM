@@ -6,11 +6,12 @@
 # Usage: tests/multirow-gpu/mr4_wine.sh [--out=DIR] [--jobs=N] [--base=REV] [--only=LEG[,LEG...]] [--build-only]
 #   --out   default <repo>/out/mr4
 #   --base  1.17's revision 8.3 compares against (default MR_BASE_TAG, else the merge base with origin/claude/sfd-gpu-1p17)
-#   --only  contract | cells | c83 | table | sfdg | mutants   (default: contract,cells,c83,table,sfdg)
+#   --only  census | contract | cells | c83 | table | sfdg | mutants   (default: census,contract,cells,c83,table,sfdg)
 # Fixtures: F-SFD (tools/gen_schema_fast_decode_fixture.py) and fsfd_refuse (mr4_fixtures.py) in out/mr4/fixtures (or
 # MR4_FIXTURES), made when absent; pkv_def.sslm (the no-table fixture of 2.3) from MR2's fixtures.
 #
 # Legs (each printed PASS or FAIL; exit 0 only when every leg run passes):
+#   census    tests/ci/check_gpu_status_site_census.py: every status and catch site in src/gpu is in te425's list.
 #   contract  gpu_1p0.h admits SCHEMA_FORCED and FIRST_PREWALKED (neither still marked a reserved bad spec).
 #   cells     mr4_cells.exe: 2.3, 7.9, 8.10 (MR4_CELLS=2.3 runs a subset).
 #   c83       8.3: mr4_83_canon.exe built from 1.17's tree (--base) and from the branch; the canonical loop's lines (tokens,
@@ -33,7 +34,7 @@ WINE_GPU_SOURCED=1 . "$REPO/tools/cloud_gpu/wine_gpu.sh"
 OUT="$REPO/out/mr4"
 JOBS=2
 RUN=1
-ONLY="contract,cells,c83,table,sfdg"
+ONLY="census,contract,cells,c83,table,sfdg"
 BASE="${MR_BASE_TAG:-}"
 for a in "$@"; do
 	case "$a" in
@@ -62,11 +63,21 @@ fixtures4() {
 	mkdir -p "$F4"
 	[ -f "$F4/fsfd.sslm" ] || python3 tools/gen_schema_fast_decode_fixture.py "$F4" >/dev/null
 	[ -f "$F4/fsfd_refuse.sslm" ] && [ "$F4/fsfd_refuse.sslm" -nt "$HERE/mr4_fixtures.py" ] || python3 "$HERE/mr4_fixtures.py" "$F4" >/dev/null
+	# pkv_def (2.3's no-table fixture): mr_lib's fixtures() into F4 itself -- copied from MR_FIXTURES or the MR1
+	# smoke's directory when there, else generated (tools/gen_paged_kv_fixture.py). It used to copy from out/mr2,
+	# which nothing had built on a fresh clone (MR4 re-check N6).
 	if [ ! -f "$F4/pkv_def.sslm" ]; then
-		local OUT_SAVE="$OUT"; OUT="$REPO/out/mr2"; fixtures; OUT="$OUT_SAVE"
-		cp "$REPO/out/mr2/fixtures/pkv_def.sslm" "$F4/"
+		FIX="$F4"
+		fixtures
 	fi
+	[ -f "$F4/pkv_def.sslm" ] || { echo "FAIL fixtures: no pkv_def.sslm in $F4"; return 1; }
 }
+
+# ------------------------------------------------------------------------------------------------ census
+if want census; then
+	if python3 tests/ci/check_gpu_status_site_census.py >"$OUT/census.log" 2>&1; then echo "PASS census ($(tail -1 "$OUT/census.log"))"
+	else { sed 's/^/    /' "$OUT/census.log" | head -20; } || true; echo "FAIL census"; FAILED+=(census); fi
+fi
 
 # ------------------------------------------------------------------------------------------------ contract
 if want contract; then
@@ -98,7 +109,7 @@ if want cells; then
 		(cd "$OUT/cells" && WINEPREFIX="$WINEPREFIX-cells" "$WINE" ./mr4_cells.exe --fixtures="$F4" ${MR4_CELLS:+--cells=$MR4_CELLS}) >"$OUT/cells.log" 2>&1
 		rc=$?
 		set -e
-		grep -E "^(FAIL|RED|7\.9:)|cell |cells:" "$OUT/cells.log" | tr -d '\r' | head -80 | sed 's/^/    /'
+		{ grep -E "^(FAIL|RED|7\.9:)|cell |cells:" "$OUT/cells.log" | tr -d '\r' | head -80 | sed 's/^/    /'; } || true
 		if [ $rc = 0 ]; then echo "PASS cells"; else echo "FAIL cells (exit $rc, $OUT/cells.log)"; FAILED+=(cells); fi
 	fi
 fi
@@ -129,7 +140,7 @@ if want c83; then
 		[ "$n" = 56 ] || { ok=0; echo "    c83: 1.17's binary printed $n of 56 lines"; }
 		if ! diff -q "$OUT/c83-base.txt" "$OUT/c83-branch.txt" >/dev/null; then
 			ok=0; echo "    c83: the branch's canonical loop differs from 1.17's ($(diff "$OUT/c83-base.txt" "$OUT/c83-branch.txt" | grep -c '^>') lines):"
-			diff "$OUT/c83-base.txt" "$OUT/c83-branch.txt" | head -8 | sed 's/^/      /'
+			{ diff "$OUT/c83-base.txt" "$OUT/c83-branch.txt" | head -8 | sed 's/^/      /'; } || true
 		fi
 		# Chunk invariance within the branch (SFD §5.6): every budget gives the same line per schema and kind.
 		inv="$(sed -E 's/ budget [0-9]+ / /' "$OUT/c83-branch.txt" | sort -u | grep -c '^canon ' || true)"
@@ -148,7 +159,7 @@ if want table; then
 	if g++ -std=c++20 -Iinclude -Isrc "$HERE/mr4_table.cpp" -o "$OUT/table/mr4_table" 2>"$OUT/table/build.log"; then
 		if "$OUT/table/mr4_table" | sed 's/^/    /'; then echo "PASS table"; else echo "FAIL table"; FAILED+=(table); fi
 	else
-		grep -m3 "error" "$OUT/table/build.log" | sed 's/^/    /'
+		{ grep -m3 "error" "$OUT/table/build.log" | sed 's/^/    /'; } || true
 		echo "FAIL table: red-unimplemented (the C18 table header mr4_table.cpp names does not compile; $OUT/table/build.log)"; FAILED+=(table)
 	fi
 fi
@@ -191,7 +202,7 @@ if want sfdg; then
 		sfdg_run "$REPO" "$OUT/sfdg/branch" wide "$OUT/sfdg/branch.txt" || ok=0
 		if [ $ok = 1 ] && ! diff -q "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" >/dev/null; then
 			ok=0; echo "    sfdg: the branch's output differs from 1.17's ($(diff "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" | grep -c '^>') lines):"
-			diff "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" | head -12 | sed 's/^/      /'
+			{ diff "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" | head -12 | sed 's/^/      /'; } || true
 		fi
 		awk '/^== /{c=$2} /^exit /{printf "    %-22s exit %s\n", c, $2}' "$OUT/sfdg/branch.txt"  # both binaries: the same
 		if [ $ok = 1 ]; then echo "PASS sfdg (1.17's 15 SFD-GPU cells: the branch's output equals $(git rev-parse --short=8 "$BASE")'s line for line)"
