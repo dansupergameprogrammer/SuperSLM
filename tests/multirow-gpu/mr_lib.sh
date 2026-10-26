@@ -43,8 +43,11 @@ build() {
 
 # Fixtures: tools/gen_paged_kv_fixture.py's (slow: it writes every variant, ~30 min of CPU), reused from MR_FIXTURES
 # or the MR1 smoke's directory when they are already there.
+# fixtures [DEST]: into DEST, else into $OUT/fixtures as OUT stands at the CALL (not when this file was sourced, so a
+# caller that sets OUT or its own fixture directory afterwards is followed). Sets FIX to the directory it filled.
 FIX="$OUT/fixtures"
 fixtures() {
+	FIX="${1:-$OUT/fixtures}"
 	mkdir -p "$FIX"
 	local src
 	for src in "${MR_FIXTURES:-}" "$REPO/out/mr1-smoke/fixtures"; do
