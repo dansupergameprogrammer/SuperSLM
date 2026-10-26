@@ -19,8 +19,8 @@
 #   XG18  the GPU rollback clears `dirty` (RowsRollbackAndClose's unmap only; ruling 33)                   -> gx.2
 # The code review's mutants (code-review/poirot-mr5.md, KM), graduated by ruling 33 with the cells that kill them:
 #   KM1   the Exact commit does not put the rejected rows' device K/V back (decision (b); XG4b's edit)     -> gx.16
-#   KM2   the rollback does not put the chunk's device K/V back (graded on the jump's pass rollback; the     -> gx.16
-#         abandon's rollback is gx.18, red on the engine: the abandon skips EntrySubmitGuard, red-suite-mr5.md)
+#   KM2   the rollback does not put the chunk's device K/V back (graded on the jump's pass rollback)       -> gx.16
+#   KMA   the abandon does not pass the submit guard, so its rollback's restore fails (ruling 35)          -> gx.18
 #   KM19  the first slice's device K/V snapshot is not taken                                                -> gx.16
 #   KM3   the widened logits stage: every row finishes on row 0's logits                                    -> gx.14
 #   KM18  the widened logits stage uploads row 0's codes for every row                                      -> gx.14
@@ -184,9 +184,10 @@ if want XG18; then host_mutant XG18 mr5 $G 1 '^(\s*)(const SslmGpuStatus unmap =
 	'\1if (seq->holder != nullptr)\n\1\tfor (uint32_t i = e.holder_mapped; i < superslm::kv_pages::HolderMapped(seq->holder); ++i) seq->holder->pool->dirty[seq->holder->table[i]] = 0;  // XG18\n\1\2' &&
 	must_red XG18 mr5 gx.2; fi
 # The KM mutants (ruling 33).
-if want KM1; then host_mutant KM1 mr5 $G 1 'if \(!RowsRestoreDeviceKvAbove\(seq, f \+ 1\)\) \{' \
-	'if (false /* KM1 */ && !RowsRestoreDeviceKvAbove(seq, f + 1)) {' && must_red KM1 mr5 gx.16; fi
-if want KM2; then host_mutant KM2 mr5 $G 1 '\(void\)RowsRestoreDeviceKvAbove\(seq, 0\);' '(void)0; /* KM2 */' && must_red KM2 mr5 gx.16; fi
+if want KM1; then host_mutant KM1 mr5 $G 1 'RowsRestoreDeviceKvAbove\(seq, f \+ 1\)' 'SSLM_OK /* KM1 */' && must_red KM1 mr5 gx.16; fi
+if want KM2; then host_mutant KM2 mr5 $G 1 'RowsRestoreDeviceKvAbove\(seq, 0\)' 'SSLM_OK /* KM2 */' && must_red KM2 mr5 gx.16; fi
+# KMA (ruling 35): sslm_gpu_seq_rows_abandon's submit guard dropped, so the rollback's restore fails -> gx.18.
+if want KMA; then host_mutant KMA mr5 $G 1 'if \(seq->rows_chunk->device_kv_snap\) \{' 'if (false /* KMA */) {' && must_red KMA mr5 gx.18; fi
 if want KM19; then host_mutant KM19 mr5 $G 1 'if \(first_slice && \(c\.kind == SSLM_GPU_ROWS_EXACT_DRAFT \|\| c\.kind == kRowsKindExactPass\)\) \{' \
 	'if (false /* KM19 */ && first_slice && (c.kind == SSLM_GPU_ROWS_EXACT_DRAFT || c.kind == kRowsKindExactPass)) {' && must_red KM19 mr5 gx.16; fi
 if want KM3; then host_mutant KM3 mr5 $G 1 'device_stage \? wide\.data\(\) \+ static_cast<size_t>\(r\) \* V : nullptr' \

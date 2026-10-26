@@ -67,8 +67,8 @@
 //   gx.17 Ruling 33 S4: the EXACT_DRAFT guard-refusal close at row j >= 1 (fsfd_refuse): the refusal's status,
 //         last_rows_committed j, the walk past d_j as the Off twin's after j decodes, and the walk, context, ready word
 //         and bytes of the Off twin after its own refused decode of o_j (KM8).
-//   gx.18 Ruling 33 S1: the abandon's rollback after a slice puts every row's device K/V back. RED on MR5: the
-//         abandon verb skips EntrySubmitGuard, so the restore throws and the rollback swallows it (engine finding).
+//   gx.18 Ruling 33 S1: the abandon's rollback after a slice puts every row's device K/V back (green since ruling 35:
+//         the abandon passes the submit guard; KMA).
 //
 // Usage: mr5_cells.exe --fixtures=DIR [--cells=2.2,7.17,...] [--show=N]
 #ifndef WIN32_LEAN_AND_MEAN
@@ -2187,9 +2187,8 @@ void CellGx16(Fsfd& fx) {
 // gx.18 (S1, decision (b), the abandon): an EXACT_DRAFT chunk of 6 rows, one slice (layer 0 writes every row's K/V),
 // then sslm_gpu_seq_rows_abandon. The rollback must put every row's device K/V back (RowsRollbackAndClose's
 // RowsRestoreDeviceKvAbove(seq, 0)): the device buffer equals the Off twin world's, on gx.16's canary background.
-// RED on the MR5 engine (red-suite-mr5.md, ruling 33): the abandon verb does not pass EntrySubmitGuard, so the
-// restore's submission throws PoolSubmitContractError, which the rollback swallows; the rows keep the chunk's layer-0
-// K/V. KM2 is graded here once it is green.
+// Red at a094e72f (ruling 33's finding): the abandon did not pass EntrySubmitGuard, so the restore's submission threw
+// and the rollback swallowed it. Ruling 35 (9493b927) guards the abandon; KMA, which drops that guard, is graded here.
 void CellGx18(Fsfd& fx) {
 	const Model& m = fx.m;
 	const std::vector<int32_t> pr = Prompt(9, 1616u);
