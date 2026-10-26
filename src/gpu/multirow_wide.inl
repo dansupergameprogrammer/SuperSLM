@@ -762,6 +762,14 @@ superslm::SslmForwardStatus RunRowsSliceGpuSubmit(
 		inflight->KeepExternalsAlive(state.kv_uav.Get(), external_weights_resident, external_rope_cos_resident,
 		                             external_rope_sin_resident, adapter_bridge, paged_kv);
 		out_record->dispatches = dispatch_count;
+#if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
+		// The T-2178 probes (tests/support/gpu_chunk_dispatch_instrument.h): one command list submitted, and the
+		// counter's token-layer unit -- every real row through every layer this slice runs -- since MR3e routes the
+		// prompt bridge's passes here (E-7), so the bridge cells that bracket it keep counting its work.
+		++superslm_test::g_gpu_chunk_submit_count_probe;
+		superslm_test::g_gpu_chunk_dispatch_count_probe +=
+		    static_cast<int64_t>(slice.real_rows) * std::min(slice.layers, num_hidden_layers - slice.start_layer);
+#endif
 		*out_inflight = std::move(token);
 		return superslm::SslmForwardStatus::Ok;
 	} catch (...) {

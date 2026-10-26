@@ -264,6 +264,11 @@ struct SslmGpuContext {
 
 	// Multi-row plan §3.4 and §8 (MR2): the per-chunk row sets' free list and the recorder's seams.
 	superslm_gpu::GpuRowsContextState rows;
+
+	// Multi-row plan erratum E-7 (MR3e), ruling 19: whether SslmGpuSeqPrefillPromptForG5Bridge reads the prompt
+	// through the multi-row recorder. Read once, at create, from the process environment: SSLM_GPU_MULTIROW_PROMPT=0
+	// forces the one-row path (E-7 (c)); unset or any other value leaves the multi-row path on.
+	bool multirow_prompt = true;
 };
 
 // T-2851 (B, design Sec4.6 item 2): everything the device logits step reuses, owned by one mapped
@@ -917,6 +922,11 @@ uint32_t RowsForcedPrefix(const SslmGpuSequenceHandle* seq, const int32_t* token
                           std::vector<uint32_t>* walk_after);
 bool RowsOpenChunk(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t kind, uint32_t flags,
                    const int32_t* tokens, uint32_t M, std::vector<uint32_t> walk_after);
+void RowsPublishState(SslmGpuSequenceHandle* seq, const std::vector<int8_t>& codes, const superslm::CarriedScale& scale,
+                      uint32_t layer_index, int64_t context_length,
+                      const uint64_t (&counters)[superslm_gpu::kGpuRowsCounterCount]);
+std::vector<size_t> RowsMirrorOffsetsAt(SslmGpuSequenceHandle* seq, int64_t pos);
+SslmGpuStatus RowsUnmapTailTo(SslmGpuSequenceHandle* seq, uint32_t keep);
 }  // namespace
 
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
@@ -2120,6 +2130,12 @@ SslmGpuStatus sslm_gpu_context_createImpl(GpuContextConfig cfg, SslmGpuContext**
 	}
 
 	SslmGpuContext* ctx = new SslmGpuContext();
+	{
+		// E-7 (c), ruling 19: the prompt bridge's opt-out, read once here (SSLM_GPU_ADAPTER_INDEX's precedent).
+		char buf[8] = {};
+		const DWORD n = GetEnvironmentVariableA("SSLM_GPU_MULTIROW_PROMPT", buf, sizeof(buf));
+		ctx->multirow_prompt = !(n == 1 && buf[0] == '0');
+	}
 	// Device::Init() does not throw (1.8.0): a failed setup is recorded as a SetupFailure kind. The
 	// fault classifier's rules in order: a device that reports itself removed is SSLM_DEVICE_LOST
 	// (rule 1); a setup that ran out of memory -- a host allocation, or E_OUTOFMEMORY from any D3D12
@@ -5049,6 +5065,49 @@ SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
 // "reuse the already-computed final residual, do not re-embed" shortcut the CPU ABI already gives
 // every real caller, closing the exact duplicate-KV-commit gap session 3 diagnosed in this
 // bridge's own prior caller (`tools/t2132_g5_gpu_parity_gpu.cpp`'s hand-rolled `PrefillPrompt`).
+namespace {
+
+// Multi-row plan erratum E-7 (MR3e), ruling 19a: the prompt bridge's pass height H, the rows one multi-row pass
+// carries. dispatch_budget counts dispatches and a wide dispatch is one dispatch (plan §4.1, RowsDecodeStep's own
+// reading), so the budget bounds the layers per submission, not the rows: H is the row cap (SSLM_GPU_MAX_ROWS = 8),
+// capped by the rows left, whenever the budget buys at least one layer (budget >= dispatches per layer), and 1
+// otherwise. 1 under the opt-out (SSLM_GPU_MULTIROW_PROMPT=0, read at context create). H = 1 is the shipped one-row
+// path, byte for byte.
+// MR3e: writes `rows` (HD bytes each, back to back) into the handle's device K/V buffer at the host-mirror byte
+// offsets `offsets` (the device buffer and the host mirror share one layout: every readback copies a row from its
+// device offset to the same mirror offset). The guard-refusal replay calls it to put a refused pass's device rows
+// back as they were at the pass's entry, so the one-row replay reads back what the one-row path alone would have
+// read: that path copies every row of its sub-chunk back to the mirror, refused or not. On the process's device, as
+// the pool upload (its latch rule and its ledger reset); the bridge already passed its entry guard. Throws on any
+// D3D12 failure; the caller classifies.
+void PromptRestoreDeviceKvRowsSync(SslmGpuSequenceHandle* seq, const std::vector<size_t>& offsets,
+                                   const std::vector<uint8_t>& rows, size_t hd) {
+	if (offsets.empty()) return;
+	superslm_gpu::harness::Device& dev = superslm_gpu::harness::GetDevice();
+	const Microsoft::WRL::ComPtr<ID3D12Resource>& buf = seq->pool != nullptr ? seq->pool->pool_buf : seq->kv_buf;
+	bool& latch = seq->pool != nullptr ? seq->pool->kv_needs_resume_barrier : seq->kv_needs_resume_barrier;
+	const Microsoft::WRL::ComPtr<ID3D12Resource> staging = dev.Upload(rows.data(), rows.size());
+	dev.BeginRecording();
+	// ---- no allocation and no throw from here to CloseListOrThrow ----
+	superslm_gpu::harness::RecordKvTransitionFromLatch(dev.list.Get(), buf.Get(), latch, D3D12_RESOURCE_STATE_COPY_DEST);
+	for (size_t k = 0; k < offsets.size(); ++k) {
+		superslm_gpu::harness::RecordCopyBufferRegion(dev.list.Get(), buf.Get(), offsets[k], staging.Get(), k * hd, hd);
+	}
+	superslm_gpu::harness::RecordTransition(dev.list.Get(), buf.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	dev.CloseListOrThrow();
+	dev.SubmitAndWaitKeepingAlive(/*retry=*/false, staging, buf);
+	latch = false;
+}
+
+uint32_t PromptRowsCap(const SslmGpuContext* ctx, const SslmGpuModelHandle* model, uint32_t dispatch_budget, uint32_t rows_left) {
+	if (!ctx->multirow_prompt || rows_left < 2) return 1u;
+	if (model->dispatches_per_layer == 0u || dispatch_budget < model->dispatches_per_layer) return 1u;
+	return std::min<uint32_t>(static_cast<uint32_t>(SSLM_GPU_MAX_ROWS), rows_left);
+}
+
+}  // namespace
+
 SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                   const int32_t* tokens, int32_t count,
                                                   uint32_t dispatch_budget) {
@@ -5093,8 +5152,109 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 	int64_t derived_count = 0;
 	bool guard_rejected = false;
 	superslm::SslmForwardStatus chunk_fault = superslm::SslmForwardStatus::Ok;
-	SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data(), scan.admit_count,
-	                                chunk_open_ctxlen, &derived_count, &guard_rejected, &chunk_fault);
+	// Multi-row plan erratum E-7 (MR3e): the admitted rows run on the multi-row recorder in passes of up to H rows
+	// (PromptRowsCap), each pass a PROMPT chunk sliced at floor(budget / dispatches per layer) layers per submission
+	// and closed before the next pass records. A pass of one row (a tail, or H = 1) runs on the one-row path itself,
+	// as before. The recorder leaves exactly what the one-row path leaves (plan §3.5), so every exit below reads the
+	// same handle it read before MR3e: a guard refusal commits the rows before the refused one and lands in the same
+	// short-count branch; a fault rolls its pass back to the pass's entry. The bridge takes no per-handle claim
+	// (ruling 19): the row-chunk internals are called directly, never through the claimed verbs. The ready flag and
+	// the rows query keep their entry values across the passes (the exits below set the flag as before).
+	const uint32_t H = scan.admit_count > 0 ? PromptRowsCap(ctx, model, dispatch_budget, scan.admit_count) : 1u;
+	if (H <= 1u) {
+		SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data(), scan.admit_count,
+		                                chunk_open_ctxlen, &derived_count, &guard_rejected, &chunk_fault);
+	} else {
+		const bool entry_ready = seq->ready_for_logits;
+		const int32_t entry_last_rows_committed = seq->last_rows_committed;
+		auto restore_entry_flags = [&] {
+			seq->ready_for_logits = entry_ready;
+			seq->last_rows_committed = entry_last_rows_committed;
+		};
+		const size_t block_bytes = scan.chunk_embedding_bytes.size() / scan.admit_count;
+		try {
+			for (uint32_t off = 0; off < scan.admit_count;) {
+				const uint32_t n = std::min(H, scan.admit_count - off);
+				if (n == 1u) {
+					int64_t one_derived = 0;
+					seq->live_state.context_length = seq->context_length;
+					SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data() + off * block_bytes, 1u,
+					                                seq->context_length, &one_derived, &guard_rejected, &chunk_fault);
+					if (one_derived < 1) break;
+				} else {
+					// The pass's K/V mirror rows at entry, for the guard-refusal replay below.
+					std::vector<size_t> pass_offsets;
+					for (uint32_t r = 0; r < n; ++r) {
+						const std::vector<size_t> o = RowsMirrorOffsetsAt(seq, seq->context_length + r);
+						pass_offsets.insert(pass_offsets.end(), o.begin(), o.end());
+					}
+					const size_t hd = model->head_dim;
+					std::vector<uint8_t> pass_mirror(pass_offsets.size() * hd);
+					for (size_t k = 0; k < pass_offsets.size(); ++k) {
+						std::memcpy(pass_mirror.data() + k * hd, KvHostBase(seq) + pass_offsets[k], hd);
+					}
+					if (!RowsOpenChunk(ctx, seq, SSLM_GPU_ROWS_PROMPT, 0u, tokens + off, n, {})) {
+						chunk_fault = superslm::SslmForwardStatus::GpuOperationFailed;  // unreachable: pre-scanned rows
+						break;
+					}
+					const superslm_gpu::GpuRowsEntrySnapshot pass_entry = seq->rows_chunk->entry;
+					SslmGpuStatus closed = SSLM_OK;
+					bool submit_failed = false;
+					while (seq->rows_chunk != nullptr) {
+						const SslmGpuStatus sub = RowsDecodeStep(ctx, seq, seq->bound_adapter, dispatch_budget);
+						if (sub != SSLM_OK) {
+							if (seq->rows_chunk != nullptr) RowsRollbackAndClose(seq);
+							closed = sub;
+							submit_failed = true;
+							break;
+						}
+						int32_t ready = 0;
+						(void)RowsReady(seq, /*block=*/1, &ready, &closed);
+						if (closed != SSLM_OK) break;  // closed (a refusal commits its prefix) or rolled back
+					}
+					if (closed != SSLM_OK) {
+						// A refusal decoded at the close is the guard's; everything else is a fault, as the one-row
+						// path classifies a short count by where it came from.
+						if (closed == SSLM_GPU_ALLOCATION_FAILED) {
+							chunk_fault = superslm::SslmForwardStatus::GpuAllocationFailed;
+						} else if (submit_failed || closed == SSLM_DEVICE_LOST || closed == SSLM_GPU_SHADER_BINARY_STALE) {
+							chunk_fault = superslm::SslmForwardStatus::GpuDeviceRemoved;
+						} else {
+							// A guard refusal at row j. The header leaves the refused handle's residual unspecified, but
+							// the bridge keeps the one it always left (E-7 (b)): the pass is put back as it was at its
+							// entry -- the residual, layer, length, counters and its K/V rows, in the mirror and on the
+							// device -- and its rows are replayed on the one-row path, which refuses at the same row
+							// and leaves its own residual.
+							// The replay starts on a sub-chunk boundary of that path (a pass starts at a multiple of 8,
+							// the path splits at 4), so its split is the one the whole call would have made.
+							RowsPublishState(seq, pass_entry.hidden_codes, pass_entry.hidden_scale, pass_entry.layer_index,
+							                 pass_entry.context_length, pass_entry.counters);
+							for (size_t k = 0; k < pass_offsets.size(); ++k) {
+								std::memcpy(KvHostBase(seq) + pass_offsets[k], pass_mirror.data() + k * hd, hd);
+							}
+							(void)RowsUnmapTailTo(seq, pass_entry.holder_mapped);
+							PromptRestoreDeviceKvRowsSync(seq, pass_offsets, pass_mirror, hd);
+							int64_t replayed = 0;
+							SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data() + off * block_bytes, n,
+							                                seq->context_length, &replayed, &guard_rejected, &chunk_fault);
+							if (replayed < static_cast<int64_t>(n)) break;
+							off += n;  // the replay committed every row (not expected): carry on
+							continue;
+						}
+						break;
+					}
+				}
+				off += n;
+			}
+		} catch (...) {
+			if (seq->rows_chunk != nullptr) RowsRollbackAndClose(seq);
+			restore_entry_flags();
+			throw;
+		}
+		restore_entry_flags();
+		derived_count = seq->context_length - chunk_open_ctxlen;
+		if (derived_count < 0) derived_count = 0;
+	}
 
 	// D-SLM3622 (design Sec5 step 5): the device-computed fallback -- a rejection the pre-scan
 	// could not see, discovered only via the post-chunk readback -- overrides whatever the

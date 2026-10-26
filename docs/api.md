@@ -504,6 +504,31 @@ The widened shaders (`*_wide_h2.cso`, `*_wide_h4.cso`, `*_wide_h8.cso`) are
 built and installed beside the one-row shaders. A chunk of one row runs the
 one-row shaders.
 
+#### The prompt bridge reads through the same path
+
+`SslmGpuSeqPrefillPromptForG5Bridge` (the verb an embedder's GPU encode
+calls) reads its admitted tokens through the multi-row path, in passes of up
+to 8 rows. Its signature, statuses and results are unchanged. The final
+hidden state (`sslm_gpu_seq_read_prefill_final_hidden`), the K/V rows and
+the save blob are byte-identical to feeding the same tokens one call per
+token.
+
+- **Pass height.** `dispatch_budget` counts dispatches, and a widened
+  dispatch is one dispatch. So the budget bounds the layers each submission
+  runs, `floor(budget / DispatchesPerLayer)`, not the rows a pass carries. A
+  budget of at least one layer gives passes of 8 rows (fewer for the last
+  pass). A budget below one layer reads one row at a time, as before. A
+  pass of one row runs the one-row shaders.
+- **Refusals and threads.** Every refusal and claim rule is the bridge's
+  existing one. A guard refusal commits the rows before the refused one and
+  returns `SSLM_SEQUENCE_REJECTED`. The bridge takes no per-handle claim.
+  It does not open a chunk that outlives the call: `sslm_gpu_seq_rows_open`
+  reads 0 afterwards, and `sslm_gpu_seq_last_rows_committed` keeps its value.
+- **Opting out.** Set the environment variable `SSLM_GPU_MULTIROW_PROMPT=0`
+  before `sslm_gpu_context_create` to force the one-row path for every
+  sequence of that context. The variable is read once, when the context is
+  created. Unset, or any other value, leaves the multi-row path on.
+
 ### Thread safety
 
 Calls against **different** sequence handles are safe to make from
