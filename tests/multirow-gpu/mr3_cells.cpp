@@ -640,6 +640,8 @@ void Cell21(const mr2::Model& m) {
 		refused(&s, ARG, F("unknown kind %d", k));
 	}
 	{
+		// MRX (E-11, ruling 20), marked, not changed yet: kind 1 is a bad spec (ARG) again, with and without
+		// FIRST_PREWALKED, whatever the table (mrx_gpu g.3); s1/s3 re-point to ARG and the literal 1 when MRX lands.
 		SslmGpuRowsSpec s1 = Spec(rows, SSLM_GPU_ROWS_SCHEMA_FORCED), s2 = Spec(rows, SSLM_GPU_ROWS_EXACT_DRAFT);
 		// Ruling 15 (the R-17 flip, ruling 11's order): since MR4 SCHEMA_FORCED is a valid kind, so on this model, mapped
 		// without a forced-next table, it is the table's status, still with nothing written. EXACT_DRAFT stays a bad spec

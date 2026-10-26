@@ -10,6 +10,10 @@
 // walk <state> ready <flag> ctx <len>", after a 41-token-or-less prompt of the 1.17 suite's own shape. A failed call
 // prints "FAIL ...".
 // Usage: mr4_83_canon.exe --fixtures=DIR
+// MRX (E-11, ruling 20): RE-POINT to an Exact loop. The canonical loop here passes opts NULL, which MRX makes Exact;
+// the GPU refuses Exact until MR5, so after MRX this file's branch binary stops at its first jump. It stays as 1.17's
+// reference (mrx_gpu.cpp's recorder is its successor for saves); an Exact loop against the same 1.17 lines replaces it
+// at MR5. Marked, not deleted (red-suite-mrx.md).
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif

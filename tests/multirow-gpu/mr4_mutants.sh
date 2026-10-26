@@ -13,6 +13,9 @@
 # (MXK1-MXK6 are the code review's K1-K6, ruling 18.) A mutant that crashes the cells (no verdict line) counts as red.
 # The site: the bool embed_rows derives from SSLM_GPU_ROWS_FIRST_PREWALKED for admission (its name contains "prewalk";
 # the bad-spec check that refuses the flag with PROMPT is not the site). One edit here if the engine names it otherwise.
+# MRX (E-11, ruling 20), marked, not deleted (red-suite-mrx.md): MX16 and MXK1 RETIRE with SCHEMA_FORCED (their cells
+# 8.10 and 2.3 retire); MXK2 and MXK2b retire with s1 until MR5 re-points it; MXK3-MXK5 stay (4.6j/e/f, chunk opened
+# with PROMPT); MXK6 stays with n1 re-pointed (PROMPT close, then an Exact jump).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"

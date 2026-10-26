@@ -119,6 +119,7 @@ def check102(path):
 
 
 def canon105(path, margin, spans):
+    # MRX (E-11, ruling 20), marked, not deleted: Canonical's frames retire, or re-point to Exact's with MR6.
     rows = load(path)
     bad = [b for b in clock_problems(rows) if "logits=0" in b]  # C(M) is priced from the GPU clock only
     one_row = sum(spans)

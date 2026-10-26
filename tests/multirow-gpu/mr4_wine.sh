@@ -24,6 +24,10 @@
 #             (Wine noise and the per-run durations removed). Not a pass/fail claim on the cells, which are box-only:
 #             some fail on the base itself under Wine (review N3), and must fail the same way on the branch.
 #   mutants   MX16 (mr4_mutants.sh).
+# MRX (E-11, ruling 20), marked, not deleted (red-suite-mrx.md): the contract leg RETIRES (it requires
+# SSLM_GPU_ROWS_SCHEMA_FORCED, which MRX removes: mrx_cpu.sh's header leg requires the opposite); c83 RE-POINTS to an
+# Exact loop at MR5 (opts NULL means Exact, refused on the GPU until then); cells: see mr4_cells.cpp's MRX block; the
+# 10.5 Canonical frames (mr4_box.py canon105) retire or re-point to Exact with MR6.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"

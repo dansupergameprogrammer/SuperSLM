@@ -32,6 +32,17 @@
 // Verdicts: statuses, whole save blobs against the one-row twin in the same process, the walk state (the bench
 // bridge's G5 accessor), and 1.17's own verbs.
 //
+// MRX (E-11, ruling 20): Canonical removal. MARKED, not deleted (red-suite-mrx.md has the table and the reasons):
+//   2.3 (SCHEMA_FORCED precedence, admission, M1's ordered pair)   RETIRED: the public SCHEMA_FORCED kind is removed;
+//                                                                   kind 1 is a bad spec (mrx_gpu g.3).
+//   8.10 (FIRST_PREWALKED)                                          RETIRED with the kind (the flag only meant SCHEMA_FORCED).
+//   7.9 (the jump rests at entry, opts NULL)                        RE-POINT to Exact at MR5: NULL means Exact, which
+//                                                                   the GPU refuses until MR5.
+//   s1 (guard refusal inside a SCHEMA_FORCED chunk)                 RETIRED as a public-verb cell; MR5's verify-pass
+//                                                                   refusal re-points it.
+//   4.6j, 4.6e, 4.6f (verbs with a chunk open)                      KEPT: open the chunk with PROMPT instead.
+//   n1 (last_rows_committed across a jump)                          RE-POINT: a PROMPT chunk's close, then an Exact jump.
+// Until MRX lands these run as written; after it 2.3, 8.10 and s1 stop compiling (the kind's name leaves gpu_1p0.h).
 // Usage: mr4_cells.exe --fixtures=DIR [--cells=2.3,7.9,8.10,s1,4.6j,4.6e,4.6f,n1] [--show=N]
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
