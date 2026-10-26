@@ -103,7 +103,9 @@ if want MXK2b; then host_mutant MXK2b $G 1 '^(\s*)(// The refusal: CommitPrefix\
 # MXK3 (ruling 22a): the public jump verb's chunk-open guard, step (2) after the arguments and the options and before
 # MRX's SSLM_SEQUENCE_REJECTED; removed, 4.6j's call returns SEQUENCE_REJECTED, not BUSY. The 1.17 site in the
 # internal forced-row pass (before "(6) The entry shape") is unreachable from the verb and is not the site.
-if want MXK3; then host_mutant MXK3 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) return SSLM_BUSY;(\n\s*// \(3\) Exact, every mode the verb now has)' \
+# MR5 (ruling 28 (4)): the anchor follows the verb's step (3) comment; the Exact pass re-checks a chunk open after the
+# token range and the table, so 4.6j grades MXK3 on an out-of-range pending token (BUSY first, per ruling 22a).
+if want MXK3; then host_mutant MXK3 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) return SSLM_BUSY;(\n\s*// \(3\) on: Exact \(MR5\), every mode the verb has)' \
 	'\1(void)0;  // MXK3: the jump guard removed\2' && must_red MXK3 4.6j; fi
 if want MXK4; then host_mutant MXK4 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) return SSLM_BUSY;(  // multi-row plan §4\.6 \(R-17\): a chunk is open\n\s*SslmGpuModelHandle\* model = seq->model;\n\s*if \(token < 0)' \
 	'\1(void)0;  // MXK4: the embed_schema_token guard removed\2' && must_red MXK4 4.6e; fi

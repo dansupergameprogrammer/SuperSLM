@@ -53,6 +53,7 @@
 //   gx.11 S-GVERIFY "always equal" with a legal, always-wrong draft turns gx.1's comparison red (guard vitality).
 //   gx.12 The prefill snapshot reads the same after every Exact call (XG12).
 //   gx.13 A mismatch in the first pass: no later pass runs (S-GEXACTPASSES; XG13).
+//         Ruling 28 Q2: XG13 is graded on the legal-wrong-draft case (10..15 drafts, 2 passes; passes == 1).
 //
 // Usage: mr5_cells.exe --fixtures=DIR [--cells=2.2,7.17,...] [--show=N]
 #ifndef WIN32_LEAN_AND_MEAN
@@ -1775,6 +1776,40 @@ void CellGx13(Fsfd& fx) {
 		Check(j.count == (wrong ? 2 : 23), F("%s: kept %d", tag.c_str(), j.count));
 		if (wrong) Check(passes == 1, F("%s: %d Exact passes ran, want 1 (no rows past the mismatch; XG13)", tag.c_str(), passes));
 		else Check(passes >= 3, F("%s: %d Exact passes ran for 24 rows, want 3 or more (passes of at most %d rows)", tag.c_str(), passes, SSLM_GPU_MAX_ROWS));
+	}
+	// Ruling 28 Q2: a legal, wrong draft that the draft walk admits whole. A special id cuts the draft before the pass
+	// (the case above), so XG13 needs this one: at a choice point, draft a legal token X != Off's next token and X's
+	// legal continuation, 10..15 drafts, so the jump spans 2 passes of at most 8 rows. Row 1 mismatches in the first
+	// pass, so exactly one pass runs and nothing is kept. Under S-GVERIFY ("always equal") the same draft runs both
+	// passes, which proves the draft really spans two (the case is not vacuous).
+	{
+		const std::string tag = "a legal wrong draft over 2 passes";
+		const Choice ch = FindChoice(m, 1, 9);
+		Check(ch.c >= 0, tag + ": no choice point with a legal wrong token and a continuation of 9 or more (fsfd_ref.txt)");
+		if (ch.c < 0) return;
+		std::vector<int32_t> d = {ch.x};
+		d.insert(d.end(), ch.tail.begin(), ch.tail.end());
+		if (d.size() > 15) d.resize(15);
+		const int32_t budget = 1 + static_cast<int32_t>(d.size());
+		for (int always_equal = 0; always_equal <= 1; ++always_equal) {
+			const std::string t2 = tag + (always_equal ? " (S-GVERIFY always equal)" : "");
+			World w(m);
+			SslmGpuSequenceHandle* s = w.Seq(false, 240, ch.schema);
+			Hist h;
+			if (!s || !Replay(w, m, s, ch.prompt, ch.c + 1, &h)) { Check(false, t2 + ": history"); continue; }
+			GpuExactPassLogResetForTest();
+			SetGpuExactVerifyAlwaysEqualForTest(always_equal);
+			const Jump j = DoJump(w, s, h.pend, budget, SSLM_JUMP_EXACT, d.data(), static_cast<int32_t>(d.size()));
+			SetGpuExactVerifyAlwaysEqualForTest(0);
+			const int32_t passes = GpuExactPassCountForTest();
+			StatusIs(j.st, S::SSLM_OK, t2);
+			if (always_equal) {
+				Check(passes >= 2, F("%s: %d Exact passes ran for %d rows, want 2 (the draft must span two passes)", t2.c_str(), passes, budget));
+			} else {
+				Check(j.count == 0, F("%s: kept %d, want 0 (row 1 is the wrong token)", t2.c_str(), j.count));
+				Check(passes == 1, F("%s: %d Exact passes ran for %d rows, want 1 (no pass after the mismatch; XG13)", t2.c_str(), passes, budget));
+			}
+		}
 	}
 }
 

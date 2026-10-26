@@ -5,7 +5,7 @@ every product in Python ints, divisions as exact floor and ceiling, never floats
 
   10.2  python3 mr4_box.py check102 TABLE.csv [--pre-mr5]
         The cost table the 10.2 bench files (rulings item 12: the builder's bench writes it). One row per
-        (model, M, logits): `model,M,logits,runs,warmup,median_us,p95_us,max_us,clock[,wall_*]`, M = 1..8, logits 0 (C(M),
+        (model, M, logits): `model,M,logits,runs,warmup,median_us,p95_us,max_us,clock[,wall_*][,logits_stage_gpu_us]`, M = 1..8, logits 0 (C(M),
         the recorder's GPU time: clock `gpu`) and 1 (the wall stand-in for the logits stage: clock `wall`, information
         only), for the 0.5B and the 1.5B. Ruling 18b: r(M) comes only from the logits = 0 rows, and g(M) is never derived
         from the logits = 1 rows (g stays at its estimate until MR5's GPU bracket). Red if a row is missing, if runs != 30
@@ -14,10 +14,12 @@ every product in Python ints, divisions as exact floor and ceiling, never floats
         C(4) / (4 x C(1)) <= 0.6 at the median (MB2's gate, re-checked here). Prints r(M) per mille from the GPU maxima
         (MR-D15), the values the shipped header takes for this card (MR7 takes the per-M maximum across certified cards).
         MR5 (ruling 18a; 18b's flag flipped, GPU_LOGITS_BRACKET): MR5's widened logits stage brings its own GPU timestamp
-        bracket, so the logits = 1 rows are clock `gpu` (a `wall` row is now red) and g(M) is derived from them:
-        g(M) per mille = ceil((W(M) - C(M)) x 1000 / C(1)) at the maxima, W(M) being the logits = 1 row (the with-logits
-        figure, C + the logits stage, as tools/multirow_cost_bench.cpp defines it) and C(M) the logits = 0 row. Red if
-        W(M) < C(M). `check102 TABLE.csv --pre-mr5` grades a table under 18b's old rule (MB4's tables).
+        bracket, so the logits = 1 rows are clock `gpu` (a `wall` row is now red) and g(M) is derived from them.
+        Ruling 27 / ruling 28 (5): the bracket times the logits stage alone, so g(M) per mille =
+        ceil(logits_stage_gpu_us(M) x 1000 / C(1)), no W - C subtraction. logits_stage_gpu_us is the logits = 1 row's
+        column (the widened logits stage's GPU time, the maximum over the timed runs, in whole us rounded up; the
+        builder's name, build-mr5.md) and C(1) the logits = 0, M = 1 maximum. Red if the column is missing or not
+        positive on a logits = 1 row. `check102 TABLE.csv --pre-mr5` grades a table under 18b's old rule (MB4's tables).
   10.5  python3 mr4_box.py canon105 TABLE.csv [--margin=150] [--spans=3,5,6,5,2]   RETIRED at MRX (prints RETIRED)
         Canonical over B2's spans, red if not faster: the M-row frames are >= 1.17's one-row Canonical frames at the default
         budget (one row per frame: sum of spans). C18: frames are decided from the configuration alone, so they follow from
@@ -81,6 +83,9 @@ def load(path):
         for r in csv.DictReader(f):
             row = {k: int(r[k]) for k in ("runs", "warmup", "median_us", "p95_us", "max_us")}
             row["clock"] = (r.get("clock") or "").strip()
+            stage = (r.get("logits_stage_gpu_us") or "").strip()
+            if stage:
+                row["logits_stage_gpu_us"] = int(stage)
             rows[(r["model"], int(r["M"]), int(r["logits"]))] = row
     return rows
 
@@ -104,17 +109,19 @@ def clock_problems(rows, bracket=None):
 
 
 def g_per_mille(rows, model):
-    """Ruling 18a (MR5): g(M) = G(M) / C(1) per mille, G(M) = W(M) - C(M) at the maxima; (values, problems)."""
+    """Ruling 18a (MR5) as ruled in 27 and 28 (5): g(M) = ceil(logits_stage_gpu_us(M) x 1000 / C(1)) per mille, the
+    logits = 1 row's stage column over C(1)'s maximum, no W - C subtraction; (values, problems)."""
     g, bad = [], []
     c1 = rows.get((model, 1, 0))
     for M in range(1, 9):
-        c, w = rows.get((model, M, 0)), rows.get((model, M, 1))
-        if not (c1 and c and w):
+        w = rows.get((model, M, 1))
+        if not (c1 and w):
             continue
-        if w["max_us"] < c["max_us"]:
-            bad.append("%s M=%d: the with-logits maximum %d < C(M)'s %d (no logits stage to price)" % (model, M, w["max_us"], c["max_us"]))
+        stage = w.get("logits_stage_gpu_us")
+        if stage is None or stage <= 0:
+            bad.append("%s M=%d logits=1: logits_stage_gpu_us %r, want a positive whole us (MR5's logits-stage bracket)" % (model, M, stage))
             continue
-        g.append(ceil_div((w["max_us"] - c["max_us"]) * 1000, c1["max_us"]))
+        g.append(ceil_div(stage * 1000, c1["max_us"]))
     return g, bad
 
 
@@ -142,8 +149,8 @@ def check102(path, bracket=None):
             if bracket:
                 g, gbad = g_per_mille(rows, model)
                 bad.extend(gbad)
-                print("10.2 %s: r(M) per mille %s (logits = 0, clock gpu); g(M) per mille %s (logits = 1 minus logits = 0, clock gpu;"
-                      " ruling 18a)" % (model, r, g))
+                print("10.2 %s: r(M) per mille %s (logits = 0, clock gpu); g(M) per mille %s (logits_stage_gpu_us / C(1), clock gpu;"
+                      " rulings 18a, 27)" % (model, r, g))
             else:
                 print("10.2 %s: r(M) per mille %s (logits = 0, clock gpu); g(M) not derived (ruling 18b: the logits = 1 rows are"
                       " the wall stand-in, information only)" % (model, r))
@@ -211,19 +218,24 @@ def self_test():
         bad.append("MR5 clock rules: logits = 1 rows on the wall clock are not red")
     if len(clock_problems(table("wall", "gpu"))) != 8:
         bad.append("MR5 clock rules: logits = 0 rows on the wall clock are not red")
-    # g(M) from the brackets: C = {1: 6,200; 2: 7,900; 4: 11,500; 8: 18,600} with W = C + 310 x M gives
-    # g(M) = ceil(310 M x 1000 / 6,200) = 50 M per mille; W(2) < C(2) is red.
+    # g(M) from the logits-stage bracket (rulings 27, 28 (5)): C(1) = 6,200 and logits_stage_gpu_us = 310 x M give
+    # g(M) = ceil(310 M x 1000 / 6,200) = 50 M per mille, whatever W(M) and C(M) are (no subtraction: a W below C, as
+    # the old rule would have flagged, changes nothing); 311 at M = 1 rounds up to 51; a missing or zero column is red.
     gt = {}
     for M in range(1, 9):
         c = cost.get(M, 6200 + (M - 1) * 1700)
         gt[("0.5B", M, 0)] = {"max_us": c}
-        gt[("0.5B", M, 1)] = {"max_us": c + 310 * M}
+        gt[("0.5B", M, 1)] = {"max_us": c - 1, "logits_stage_gpu_us": 310 * M}
     g, gbad = g_per_mille(gt, "0.5B")
     if gbad or g != [50 * M for M in range(1, 9)]:
         bad.append("g(M): %s %s, want %s" % (g, gbad, [50 * M for M in range(1, 9)]))
-    gt[("0.5B", 2, 1)] = {"max_us": 7899}
-    if len(g_per_mille(gt, "0.5B")[1]) != 1:
-        bad.append("g(M): a with-logits maximum below C(M) is not red")
+    gt[("0.5B", 1, 1)]["logits_stage_gpu_us"] = 311
+    if g_per_mille(gt, "0.5B")[0][:1] != [51]:
+        bad.append("g(M): ceil(311 x 1000 / 6,200) is not 51")
+    del gt[("0.5B", 2, 1)]["logits_stage_gpu_us"]
+    gt[("0.5B", 3, 1)]["logits_stage_gpu_us"] = 0
+    if len(g_per_mille(gt, "0.5B")[1]) != 2:
+        bad.append("g(M): a missing or zero logits_stage_gpu_us is not red")
     for b in bad:
         print("RED self-test: " + b)
     print("%s mr4_box self-test" % ("RED" if bad else "PASS"))

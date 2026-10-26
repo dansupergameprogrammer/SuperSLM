@@ -696,6 +696,13 @@ void CellS3(Fsfd& fx, int verb) {
 			else if (verb == 1) st = sslm_gpu_seq_embed_schema_token(w.ctx, a, chain[3]);
 			else st = sslm_gpu_seq_forced_tokens(w.ctx, a, out.data(), 64, &n, &acc);
 			StatusIs(st, S::SSLM_BUSY, tag);
+			if (verb == 0) {
+				// Ruling 22a's order: arguments, options, the chunk-open guard (BUSY), then the rest. At MR5 the Exact pass
+				// re-checks a chunk open after the pending token's range and the table, so only a call the later checks
+				// would refuse tells the public guard apart (MXK3): an out-of-range pending token is still BUSY.
+				const S st2 = sslm_gpu_seq_jump_forward(w.ctx, a, m.vocab(), 8, nullptr, out.data(), 64, &n);
+				StatusIs(st2, S::SSLM_BUSY, tag + ", pending token out of range (the guard comes first; MXK3)");
+			}
 			Check(n == -9 && acc == -9 && std::all_of(out.begin(), out.end(), [](int32_t v) { return v == -7; }),
 			      F("%s: an out parameter was written (count %d, accepting %d)", tag.c_str(), n, acc));
 			const Obs after = observe_open();

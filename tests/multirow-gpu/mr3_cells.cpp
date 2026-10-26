@@ -641,10 +641,12 @@ void Cell21(const mr2::Model& m) {
 	}
 	{
 		// MRX (E-11, rulings 20 and 22): kind 1 (the removed SCHEMA_FORCED) is a bad spec (ARG) again, with and without
-		// bit 0x1 (the removed FIRST_PREWALKED), whatever the table (mrx_gpu g.3). EXACT_DRAFT stays a bad spec until MR5.
+		// bit 0x1 (the removed FIRST_PREWALKED), whatever the table (mrx_gpu g.3). MR5 (ruling 28 Q1): EXACT_DRAFT is a
+		// valid kind, so it is no longer a bad spec; on this handle (no token in hand, or no device logits head) it is
+		// SSLM_SEQUENCE_REJECTED, nothing written.
 		SslmGpuRowsSpec s1 = Spec(rows, 1), s2 = Spec(rows, SSLM_GPU_ROWS_EXACT_DRAFT);
 		refused(&s1, ARG, "kind 1 (SCHEMA_FORCED, removed at MRX)");
-		refused(&s2, ARG, "kind EXACT_DRAFT before MR5");
+		refused(&s2, S::SSLM_SEQUENCE_REJECTED, "kind EXACT_DRAFT (MR5: not in hand)");
 		SslmGpuRowsSpec s3 = Spec(rows, 1, 0x1u);
 		refused(&s3, ARG, "kind 1 + flag 0x1 (SCHEMA_FORCED + FIRST_PREWALKED, removed at MRX)");
 	}
