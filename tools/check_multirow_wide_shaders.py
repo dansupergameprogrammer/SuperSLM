@@ -18,6 +18,15 @@ Checks, each selected with --checks (default: all of them, in this order):
                    element of the same array) is followed by GroupMemoryBarrierWithGroupSync before
                    that array is touched again or the enclosing loop iterates;
                  - dxc's disassembly of every compiled variant names no wave-operation feature.
+  helper       The Blackwell helper-use lint (multi-row rulings 17 and 20): every widened shader whose one-row
+               source reaches SaturatingAdd64Gpu_ (through its includes) reaches it too, and through the one
+               definition, the carry-explicit form in the one-row funnel_guards.hlsli (an explicit 32-bit carry,
+               no native `ua + ub`); no widened source defines the helper or carries an inline copy of the old
+               native body. With the compile check, every such variant's DXIL also carries the helper's carry
+               pattern (an i32 add compared unsigned-less-than its own operand). KNOWN EXCEPTION (ruling 20):
+               native 64-bit adds are not counted. The fixed helper's negative-saturation branch still compiles
+               to a native carrying add; it is unreachable and unchanged since 1.16, and the clean engine
+               passes the RTX 5060 with its other native adds, so the lint asks for the helper, not for zero adds.
   host         The host lane-plan lint (4.7): in the host widened recorder, the widened GEMM's lane
                count comes only from ComputeGpuGemmSiteGroupPlan:
                  - every GpuGemmSiteGroupPlan is initialised by a ComputeGpuGemmSiteGroupPlan call,
@@ -51,11 +60,19 @@ REPO = Path(__file__).resolve().parent.parent
 HS = (2, 4, 8)
 GEMM_SITES = ("q_proj", "kv_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 GROUPSHARED_LIMIT = 32768
-ALL_CHECKS = ("gen", "subst", "compile", "determinism", "groupshared", "lint", "host")
+ALL_CHECKS = ("gen", "subst", "compile", "determinism", "groupshared", "lint", "helper", "host")
 
 # 32 and 64 literals that are data widths, not lane counts. Keyed by header file name and the
 # line's text with comments removed and whitespace collapsed; each entry says why it is a width.
 LITERAL_ALLOWLIST = {
+    # 1.17.0's carry-explicit SaturatingAdd64Gpu_ (the RTX 50-series fix): the 64-bit operands split into and joined
+    # from their 32-bit halves.
+    ("funnel_guards.hlsli", "uint alo = (uint)(ua & 0xFFFFFFFFULL), ahi = (uint)(ua >> 32);"):
+        "SaturatingAdd64Gpu_: the high 32-bit half of a 64-bit operand",
+    ("funnel_guards.hlsli", "uint blo = (uint)(ub & 0xFFFFFFFFULL), bhi = (uint)(ub >> 32);"):
+        "SaturatingAdd64Gpu_: the high 32-bit half of a 64-bit operand",
+    ("funnel_guards.hlsli", "int64_t out_val = (int64_t)(((uint64_t)hi << 32) | (uint64_t)lo);"):
+        "SaturatingAdd64Gpu_: the 32-bit halves joined into the 64-bit sum",
     ("site_common.hlsli", "for (int i = 0; i < 32; ++i)"):
         "IntSqrtU64Gpu: one iteration per result bit of a 64-bit square root",
     ("site_common.hlsli", "const int64_t kC32_2 = (2 * ((int64_t)32 << 31) + 17) / 34;"):
@@ -546,6 +563,135 @@ def check_lint(rep, wide_dir, include_dir, built):
                        f"features")
 
 
+# ---- the helper-use lint (rulings 17, 20) --------------------------------------------------------
+
+HELPER = "SaturatingAdd64Gpu_"
+HELPER_DEF_RE = re.compile(r"\b(?:int64_t|int64|long)\s+" + HELPER + r"\s*\([^)]*\)\s*\{")
+HELPER_USE_RE = re.compile(r"\b" + HELPER + r"\s*\(")
+# The old native body (pre-1.17): the two 64-bit halves added natively, `(int64_t)(ua + ub)`, in any spelling.
+OLD_BODY_RE = re.compile(r"\(\s*(?:int64_t|int64)\s*\)\s*\(\s*(\w+)\s*\+\s*(\w+)\s*\)")
+CARRY_RE = re.compile(r"\buint\s+(\w+)\s*=\s*\(\s*(\w+)\s*<\s*(\w+)\s*\)\s*\?\s*1u\s*:\s*0u\s*;")
+
+
+def _closure(start: Path, include_dir: Path):
+    """{file name: (path, comment-stripped code)} for `start` and every header it includes."""
+    seen, stack = {}, [start]
+    while stack:
+        p = stack.pop()
+        if p.name in seen:
+            continue
+        code = strip_comments(p.read_text(encoding="utf-8"))
+        seen[p.name] = (p, code)
+        for inc in INCLUDE_RE.findall(p.read_text(encoding="utf-8")):
+            found = next((c for c in (p.parent / inc, include_dir / inc) if c.exists()), None)
+            if found is None:
+                raise FileNotFoundError(f"{p.name}: #include \"{inc}\" not found")
+            stack.append(found)
+    return seen
+
+
+def _helper_body(code: str, at: int) -> str:
+    i = code.index("{", at)
+    depth = 0
+    for j in range(i, len(code)):
+        depth += {"{": 1, "}": -1}.get(code[j], 0)
+        if depth == 0:
+            return code[i:j + 1]
+    return code[i:]
+
+
+def check_helper(rep, wide_dir, include_dir, built, dxc=None):
+    bad = 0
+    # (widened source, its one-row sources): a generated site has one; the hand-written GEMM stands for the six
+    # one-row *_gemm_site.hlsl.
+    pairs = [(w, [include_dir / (w.name[:-len("_wide.hlsl")] + ".hlsl")]) for w in sorted(wide_dir.glob("*_site_wide.hlsl"))]
+    gemm = wide_dir / "proj_gemm_wide.hlsl"
+    if gemm.exists():
+        pairs.append((gemm, [include_dir / f"{g}_gemm_site.hlsl" for g in GEMM_SITES]))
+    # No widened source defines the helper or copies the old native body.
+    for w in sorted(wide_dir.glob("*.hlsl*")):
+        code = strip_comments(w.read_text(encoding="utf-8"))
+        if HELPER_DEF_RE.search(code):
+            rep.fail("helper", f"{w.name}: defines {HELPER} (an inline copy; widened shaders take the one-row helper)")
+            bad += 1
+        for m in OLD_BODY_RE.finditer(code):
+            line = code.count("\n", 0, m.start()) + 1
+            rep.fail("helper", f"{w.name}:{line}: the old native 64-bit add body {m.group(0)!r}")
+            bad += 1
+    users = []
+    for wide, bases in pairs:
+        missing = [b.name for b in bases if not b.exists()]
+        if missing:
+            rep.fail("helper", f"{wide.name}: no one-row source {', '.join(missing)}")
+            bad += 1
+            continue
+        try:
+            cbs = [_closure(b, include_dir) for b in bases]
+            cw = _closure(wide, include_dir)
+        except FileNotFoundError as e:
+            rep.fail("helper", str(e))
+            bad += 1
+            continue
+        if not any(HELPER_USE_RE.search(c) for cb in cbs for _p, c in cb.values()):
+            continue
+        base = bases[0]
+        defs = [(n, p, c, m.start()) for n, (p, c) in cw.items() for m in HELPER_DEF_RE.finditer(c)]
+        if not any(HELPER_USE_RE.search(c) for _p, c in cw.values()):
+            rep.fail("helper", f"{wide.name}: its one-row source {base.name} reaches {HELPER}, the widened shader does not")
+            bad += 1
+            continue
+        if len(defs) != 1 or defs[0][0] != "funnel_guards.hlsli" or defs[0][1].resolve().parent != include_dir.resolve():
+            rep.fail("helper", f"{wide.name}: {HELPER} must have exactly one definition, the one-row funnel_guards.hlsli; "
+                               f"found {[(d[0], str(d[1])) for d in defs]}")
+            bad += 1
+            continue
+        body = _helper_body(defs[0][2], defs[0][3])
+        if OLD_BODY_RE.search(body) or not CARRY_RE.search(body):
+            rep.fail("helper", f"{wide.name}: the {HELPER} it reaches is not the carry-explicit form")
+            bad += 1
+            continue
+        users.append(wide)
+    # DXIL: where a one-row source's compiled DXIL carries the helper's carry pattern, every widened variant of it does
+    # too (counted as tools/dxil_carry_census.py counts it). A one-row shader that includes the helper but never calls
+    # it on a live path carries none, and its widened variants are not asked to.
+    checked = 0
+    if built and dxc:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("dxil_carry_census", REPO / "tools" / "dxil_carry_census.py")
+        census = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(census)
+        one_row = {}
+        with tempfile.TemporaryDirectory(prefix="sslm_helper_") as td:
+            for wide in users:
+                for base in dict(pairs)[wide]:
+                    ll = Path(td) / (base.stem + ".ll")
+                    ok, err = census.compile_one(dxc, str(base), str(include_dir), str(ll))
+                    if not ok:
+                        rep.fail("helper", f"{base.name}: one-row compile failed: {err.strip()[:200]}")
+                        bad += 1
+                        continue
+                    one_row[base.stem] = census.analyse(str(ll))[0]
+        for name, cso in sorted(built.items()):
+            asm = Path(str(cso) + ".asm")
+            wide = next((w for w in users if name.startswith(w.stem + "_h")), None)
+            base_stem = name[:-len("_wide_h2")] if wide is not None else None
+            if wide is None and "_gemm_wide_h" in name and gemm in users:
+                wide, base_stem = gemm, name.split("_gemm_wide_h")[0] + "_gemm_site"
+            if wide is None or not asm.exists() or base_stem not in one_row:
+                continue
+            want = one_row[base_stem]
+            got = census.analyse(str(asm))[0]
+            checked += 1
+            if want > 0 and got == 0:
+                rep.fail("helper", f"{name}: the one-row {base_stem} carries {want} carry pattern(s), this variant none: "
+                                   f"the carry-explicit {HELPER} did not survive")
+                bad += 1
+    if not bad:
+        rep.ok("helper", f"{len(users)} widened shaders reach {HELPER} where their one-row sources do, through the one "
+                         f"carry-explicit definition; no inline copy or old body; {checked} variants' DXIL checked against "
+                         f"their one-row sources' carry patterns (native i64 adds not counted: ruling 20's exception)")
+
+
 def check_host(rep, host: Path):
     if not host.exists():
         rep.fail("host", f"{host}: not found")
@@ -639,6 +785,8 @@ def main(argv):
         check_groupshared(rep, built)
     if "lint" in checks:
         check_lint(rep, wide_dir, include_dir, built)
+    if "helper" in checks:
+        check_helper(rep, wide_dir, include_dir, built, dxc)
     if "host" in checks:
         check_host(rep, Path(a.host))
     if tmp:
