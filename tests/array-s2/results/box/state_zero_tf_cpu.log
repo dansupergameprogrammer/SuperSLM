@@ -1,0 +1,17 @@
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt cpu ex041 three_intents_0_2_1_conditions --state-zero
+PASS cpu tf three_intents_0_2_1_conditions walk tokens=184
+FAIL cpu tf three_intents_0_2_1_conditions:open_intents after=3 blob=201327648 continuation=64 end=max_tokens forced=1 mutated=1 check=tokens at=5 want=1311 got=56431
+FAIL cpu tf three_intents_0_2_1_conditions:open_conditions after=21 blob=201327648 continuation=64 end=max_tokens forced=0 mutated=1 check=tokens at=22 want=28503 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:close_conditions after=22 blob=201327648 continuation=54 end=dead_end forced=0 mutated=1 check=tokens at=23 want=1335 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:comma_intents after=29 blob=201327648 continuation=30 end=dead_end forced=1 mutated=1 check=tokens at=31 want=1311 got=396
+FAIL cpu tf three_intents_0_2_1_conditions:string_intent after=43 blob=201327648 continuation=31 end=dead_end forced=0 mutated=1 check=tokens at=44 want=2198 got=90
+FAIL cpu tf three_intents_0_2_1_conditions:open_conditions after=47 blob=201327648 continuation=31 end=dead_end forced=1 mutated=1 check=tokens at=48 want=28503 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:comma_conditions after=80 blob=201327648 continuation=64 end=max_tokens forced=1 mutated=1 check=tokens at=82 want=5778 got=56431
+FAIL cpu tf three_intents_0_2_1_conditions:close_conditions after=115 blob=201327648 continuation=64 end=max_tokens forced=0 mutated=1 check=tokens at=116 want=1335 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:comma_intents after=122 blob=201327648 continuation=64 end=max_tokens forced=1 mutated=1 check=tokens at=124 want=1311 got=56431
+FAIL cpu tf three_intents_0_2_1_conditions:open_conditions after=140 blob=201327648 continuation=30 end=dead_end forced=1 mutated=1 check=tokens at=142 want=5778 got=56431
+FAIL cpu tf three_intents_0_2_1_conditions:string_condition after=149 blob=201327648 continuation=35 end=dead_end forced=0 mutated=1 check=tokens at=150 want=823 got=90
+FAIL cpu tf three_intents_0_2_1_conditions:close_conditions after=175 blob=201327648 continuation=64 end=max_tokens forced=0 mutated=1 check=tokens at=176 want=1335 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:close_intents after=182 blob=201327648 continuation=64 end=max_tokens forced=0 mutated=1 check=tokens at=183 want=92 got=4913
+# exit 1
+mutant_killed=True (exit=1 results=13/13 applied=13 trace_pass=True errors=0 kills=13)

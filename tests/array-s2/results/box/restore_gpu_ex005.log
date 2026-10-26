@@ -1,0 +1,12 @@
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex005
+PASS gpu ex005 trace tokens=110
+PASS gpu ex005 kind=x:open_intents after=3 blob=201327620 continuation=106 end=dead_end mutated=0
+PASS gpu ex005 kind=c:open_conditions+x:close_conditions after=23 blob=201327620 continuation=86 end=dead_end mutated=0
+PASS gpu ex005 kind=b:comma_intents after=30 blob=201327620 continuation=79 end=dead_end mutated=0
+PASS gpu ex005 kind=c:open_conditions+x:close_conditions after=49 blob=201327620 continuation=60 end=dead_end mutated=0
+PASS gpu ex005 kind=b:comma_intents after=56 blob=201327620 continuation=53 end=dead_end mutated=0
+PASS gpu ex005 kind=c:open_conditions+x:close_conditions after=75 blob=201327620 continuation=34 end=dead_end mutated=0
+PASS gpu ex005 kind=b:comma_intents after=82 blob=201327620 continuation=27 end=dead_end mutated=0
+PASS gpu ex005 kind=c:open_conditions+x:close_conditions after=101 blob=201327620 continuation=8 end=dead_end mutated=0
+PASS gpu ex005 kind=x:close_intents after=108 blob=201327620 continuation=1 end=dead_end mutated=0
+# exit 0

@@ -1,0 +1,4 @@
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe walks D:\_scratch\array-s2\mutants\offset_swap.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt cpu
+setup failed: error:sslm_model_map 4
+# exit 2
+refused_at_map=True (sslm_model_map)

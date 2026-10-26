@@ -1,0 +1,20 @@
+# cmd /c D:\SuperSLM\.worktrees\array-s2\tools\build_verify.bat   (env {'VSDEVCMD': '"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\Tools\\VsDevCmd.bat"'})
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+artifact.cpp
+sha256.cpp
+tokenizer.cpp
+model.cpp
+intmath.cpp
+silu_lut.cpp
+matmul.cpp
+proof_manifest.cpp
+trace_hook.cpp
+checked_chain_funnel.cpp
+forward_sites.cpp
+parallel_split.cpp
+gpu_inflight_registry.cpp
+decode_digest.cpp
+sslm_verify.cpp
+Generating Code...
+# exit 0

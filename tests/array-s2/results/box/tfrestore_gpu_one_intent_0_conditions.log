@@ -1,0 +1,7 @@
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt gpu ex041 one_intent_0_conditions
+PASS gpu tf one_intent_0_conditions walk tokens=31 states 2 5 9 12 13 18 23 37 46 49 55 56 57 73 84 90 96 97 97 113 127 134 142 145 154 161 179 193 199 210 213
+PASS gpu tf one_intent_0_conditions:open_intents after=3 blob=201327620 continuation=64 end=max_tokens forced=27 mutated=0
+PASS gpu tf one_intent_0_conditions:open_conditions after=21 blob=201327620 continuation=34 end=dead_end forced=9 mutated=0
+PASS gpu tf one_intent_0_conditions:close_conditions after=22 blob=201327620 continuation=58 end=dead_end forced=8 mutated=0
+PASS gpu tf one_intent_0_conditions:close_intents after=29 blob=201327620 continuation=1 end=dead_end forced=1 mutated=0
+# exit 0

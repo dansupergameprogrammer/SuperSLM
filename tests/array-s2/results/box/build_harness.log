@@ -1,0 +1,184 @@
+# cmd /c D:\SuperSLM\.worktrees\array-s2\tests\array-s2\build_harness.bat   (env {'VSDEVCMD': '"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\Tools\\VsDevCmd.bat"'})
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+artifact.cpp
+sha256.cpp
+tokenizer.cpp
+model.cpp
+intmath.cpp
+silu_lut.cpp
+matmul.cpp
+proof_manifest.cpp
+trace_hook.cpp
+checked_chain_funnel.cpp
+forward_sites.cpp
+parallel_split.cpp
+gpu_inflight_registry.cpp
+decode_digest.cpp
+kv_pages.cpp
+spx1_format.cpp
+sslm_abi.cpp
+damped_greedy_antilm.cpp
+damped_greedy_topk.cpp
+damped_greedy_phaseD.cpp
+Generating Code...
+Compiling...
+superslm_gpu.cpp
+D:\SuperSLM\.worktrees\array-s2\src\gpu\d3d12_harness.h(1248): warning C4996: '_wfopen': This function or variable may be unsafe. Consider using _wfopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+D:\SuperSLM\.worktrees\array-s2\src\gpu\d3d12_harness.h(1251): warning C4996: 'fopen': This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+gpu_1p0.cpp
+D:\SuperSLM\.worktrees\array-s2\src\gpu\d3d12_harness.h(1248): warning C4996: '_wfopen': This function or variable may be unsafe. Consider using _wfopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+D:\SuperSLM\.worktrees\array-s2\src\gpu\d3d12_harness.h(1251): warning C4996: 'fopen': This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4370): warning C4244: '=': conversion from 'const _Ty' to 'signed char', possible loss of data
+        with
+        [
+            _Ty=int
+        ]
+src\gpu\gpu_1p0.cpp(3795): note: see reference to function template instantiation 'void std::fill<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,int>(const _FwdIt,const _FwdIt,const int &)' being compiled
+        with
+        [
+            _Ty=int8_t,
+            _FwdIt=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<int8_t>>>
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4370): warning C4244: '=': conversion from 'const _Ty' to 'unsigned char', possible loss of data
+        with
+        [
+            _Ty=int
+        ]
+src\gpu\gpu_1p0.cpp(3825): note: see reference to function template instantiation 'void std::fill<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,int>(const _FwdIt,const _FwdIt,const int &)' being compiled
+        with
+        [
+            _Ty=uint8_t,
+            _FwdIt=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<uint8_t>>>
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4324): warning C4244: 'initializing': conversion from 'const _Ty' to 'signed char', possible loss of data
+        with
+        [
+            _Ty=int
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4346): note: see reference to function template instantiation 'void std::_Fill_memset<signed char*,_Ty>(_CtgIt,const _Ty,const size_t)' being compiled
+        with
+        [
+            _Ty=int,
+            _CtgIt=signed char *
+        ]
+src\gpu\gpu_1p0.cpp(3795): note: see reference to function template instantiation 'void std::fill<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,int>(const _FwdIt,const _FwdIt,const int &)' being compiled
+        with
+        [
+            _Ty=int8_t,
+            _FwdIt=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<int8_t>>>
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4324): warning C4244: 'initializing': conversion from 'const _Ty' to 'unsigned char', possible loss of data
+        with
+        [
+            _Ty=int
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4346): note: see reference to function template instantiation 'void std::_Fill_memset<unsigned char*,_Ty>(_CtgIt,const _Ty,const size_t)' being compiled
+        with
+        [
+            _Ty=int,
+            _CtgIt=unsigned char *
+        ]
+src\gpu\gpu_1p0.cpp(3825): note: see reference to function template instantiation 'void std::fill<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,int>(const _FwdIt,const _FwdIt,const int &)' being compiled
+        with
+        [
+            _Ty=uint8_t,
+            _FwdIt=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<uint8_t>>>
+        ]
+array_s2_main.cpp
+tests\array-s2\array_s2_main.cpp(516): warning C4996: 'getenv': This function or variable may be unsafe. Consider using _dupenv_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+array_s2_cpu.cpp
+array_s2_gpu.cpp
+tests\array-s2\array_s2_gpu.cpp(24): warning C4996: 'getenv': This function or variable may be unsafe. Consider using _dupenv_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+Generating Code...
+artifact.cpp
+sha256.cpp
+tokenizer.cpp
+model.cpp
+intmath.cpp
+silu_lut.cpp
+matmul.cpp
+proof_manifest.cpp
+trace_hook.cpp
+checked_chain_funnel.cpp
+forward_sites.cpp
+parallel_split.cpp
+gpu_inflight_registry.cpp
+decode_digest.cpp
+kv_pages.cpp
+spx1_format.cpp
+sslm_abi.cpp
+damped_greedy_antilm.cpp
+damped_greedy_topk.cpp
+damped_greedy_phaseD.cpp
+Generating Code...
+Compiling...
+superslm_gpu.cpp
+D:\SuperSLM\.worktrees\array-s2\src\gpu\d3d12_harness.h(1248): warning C4996: '_wfopen': This function or variable may be unsafe. Consider using _wfopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+D:\SuperSLM\.worktrees\array-s2\src\gpu\d3d12_harness.h(1251): warning C4996: 'fopen': This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+gpu_1p0.cpp
+D:\SuperSLM\.worktrees\array-s2\src\gpu\d3d12_harness.h(1248): warning C4996: '_wfopen': This function or variable may be unsafe. Consider using _wfopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+D:\SuperSLM\.worktrees\array-s2\src\gpu\d3d12_harness.h(1251): warning C4996: 'fopen': This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4370): warning C4244: '=': conversion from 'const _Ty' to 'signed char', possible loss of data
+        with
+        [
+            _Ty=int
+        ]
+src\gpu\gpu_1p0.cpp(3795): note: see reference to function template instantiation 'void std::fill<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,int>(const _FwdIt,const _FwdIt,const int &)' being compiled
+        with
+        [
+            _Ty=int8_t,
+            _FwdIt=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<int8_t>>>
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4370): warning C4244: '=': conversion from 'const _Ty' to 'unsigned char', possible loss of data
+        with
+        [
+            _Ty=int
+        ]
+src\gpu\gpu_1p0.cpp(3825): note: see reference to function template instantiation 'void std::fill<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,int>(const _FwdIt,const _FwdIt,const int &)' being compiled
+        with
+        [
+            _Ty=uint8_t,
+            _FwdIt=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<uint8_t>>>
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4324): warning C4244: 'initializing': conversion from 'const _Ty' to 'signed char', possible loss of data
+        with
+        [
+            _Ty=int
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4346): note: see reference to function template instantiation 'void std::_Fill_memset<signed char*,_Ty>(_CtgIt,const _Ty,const size_t)' being compiled
+        with
+        [
+            _Ty=int,
+            _CtgIt=signed char *
+        ]
+src\gpu\gpu_1p0.cpp(3795): note: see reference to function template instantiation 'void std::fill<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,int>(const _FwdIt,const _FwdIt,const int &)' being compiled
+        with
+        [
+            _Ty=int8_t,
+            _FwdIt=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<int8_t>>>
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4324): warning C4244: 'initializing': conversion from 'const _Ty' to 'unsigned char', possible loss of data
+        with
+        [
+            _Ty=int
+        ]
+C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\include\xutility(4346): note: see reference to function template instantiation 'void std::_Fill_memset<unsigned char*,_Ty>(_CtgIt,const _Ty,const size_t)' being compiled
+        with
+        [
+            _Ty=int,
+            _CtgIt=unsigned char *
+        ]
+src\gpu\gpu_1p0.cpp(3825): note: see reference to function template instantiation 'void std::fill<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<_Ty>>>,int>(const _FwdIt,const _FwdIt,const int &)' being compiled
+        with
+        [
+            _Ty=uint8_t,
+            _FwdIt=std::_Vector_iterator<std::_Vector_val<std::_Simple_types<uint8_t>>>
+        ]
+array_s2_main.cpp
+tests\array-s2\array_s2_main.cpp(516): warning C4996: 'getenv': This function or variable may be unsafe. Consider using _dupenv_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+array_s2_cpu.cpp
+array_s2_gpu.cpp
+tests\array-s2\array_s2_gpu.cpp(24): warning C4996: 'getenv': This function or variable may be unsafe. Consider using _dupenv_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+Generating Code...
+# exit 0

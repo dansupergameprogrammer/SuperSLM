@@ -1,0 +1,13 @@
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\array-s2\tests\array-s2\fixtures.py check --ckpt D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-7ae5576 --gen D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen_musteq.txt --json D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen_check.json
+ex005: valid cpu=110t/dead_end cpu_exact=110t/dead_end cpu_full=110t/dead_end gpu=110t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+ex006: valid cpu=32t/dead_end cpu_exact=32t/dead_end cpu_full=32t/dead_end gpu=32t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+ex033: valid cpu=32t/dead_end cpu_exact=32t/dead_end cpu_full=32t/dead_end gpu=32t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+ex034: valid cpu=58t/dead_end cpu_exact=58t/dead_end cpu_full=58t/dead_end gpu=58t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+ex035: valid cpu=65t/dead_end cpu_exact=65t/dead_end cpu_full=65t/dead_end gpu=65t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+ex041: valid cpu=183t/dead_end cpu_exact=183t/dead_end cpu_full=183t/dead_end gpu=183t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+ex042: valid cpu=59t/dead_end cpu_exact=59t/dead_end cpu_full=59t/dead_end gpu=59t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+ex051: valid cpu=59t/dead_end cpu_exact=59t/dead_end cpu_full=59t/dead_end gpu=59t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+ex052: valid cpu=102t/dead_end cpu_exact=102t/dead_end cpu_full=102t/dead_end gpu=102t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+ex053: valid cpu=67t/dead_end cpu_exact=67t/dead_end cpu_full=67t/dead_end gpu=67t/dead_end identical_cpu_vs_cpu_exact=True identical_cpu_vs_cpu_full=True identical_cpu_vs_gpu=True
+failures: 0
+# exit 0

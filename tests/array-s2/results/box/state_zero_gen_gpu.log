@@ -1,0 +1,11 @@
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex041 --state-zero
+PASS gpu ex041 trace tokens=183
+FAIL gpu ex041 kind=x:open_intents after=4 blob=201327620 continuation=55 end=dead_end mutated=1 check=tokens at=6 want=1311 got=56431
+FAIL gpu ex041 kind=x:open_conditions after=22 blob=201327620 continuation=377 end=max_tokens mutated=1 check=tokens at=24 want=81 got=258
+FAIL gpu ex041 kind=b:comma_conditions after=61 blob=201327620 continuation=105 end=dead_end mutated=1 check=tokens at=62 want=81 got=4913
+FAIL gpu ex041 kind=b:comma_conditions after=99 blob=201327620 continuation=104 end=dead_end mutated=1 check=tokens at=100 want=81 got=4913
+FAIL gpu ex041 kind=b:comma_conditions after=136 blob=201327620 continuation=177 end=dead_end mutated=1 check=tokens at=137 want=81 got=4913
+FAIL gpu ex041 kind=b:close_conditions after=175 blob=201327620 continuation=182 end=dead_end mutated=1 check=tokens at=176 want=57947 got=4913
+FAIL gpu ex041 kind=b:close_intents after=182 blob=201327620 continuation=217 end=max_tokens mutated=1 check=tokens at=183 want=none got=4913
+# exit 1
+mutant_killed=True (exit=1 results=7/7 applied=7 trace_pass=True errors=0 kills=7)

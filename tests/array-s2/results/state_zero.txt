@@ -1,0 +1,56 @@
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt cpu ex041 three_intents_0_2_1_conditions --state-zero
+PASS cpu tf three_intents_0_2_1_conditions walk tokens=184
+FAIL cpu tf three_intents_0_2_1_conditions:open_intents after=3 blob=201327648 continuation=64 end=max_tokens forced=1 mutated=1 check=tokens at=5 want=1311 got=56431
+FAIL cpu tf three_intents_0_2_1_conditions:open_conditions after=21 blob=201327648 continuation=64 end=max_tokens forced=0 mutated=1 check=tokens at=22 want=28503 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:close_conditions after=22 blob=201327648 continuation=54 end=dead_end forced=0 mutated=1 check=tokens at=23 want=1335 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:comma_intents after=29 blob=201327648 continuation=30 end=dead_end forced=1 mutated=1 check=tokens at=31 want=1311 got=396
+FAIL cpu tf three_intents_0_2_1_conditions:string_intent after=43 blob=201327648 continuation=31 end=dead_end forced=0 mutated=1 check=tokens at=44 want=2198 got=90
+FAIL cpu tf three_intents_0_2_1_conditions:open_conditions after=47 blob=201327648 continuation=31 end=dead_end forced=1 mutated=1 check=tokens at=48 want=28503 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:comma_conditions after=80 blob=201327648 continuation=64 end=max_tokens forced=1 mutated=1 check=tokens at=82 want=5778 got=56431
+FAIL cpu tf three_intents_0_2_1_conditions:close_conditions after=115 blob=201327648 continuation=64 end=max_tokens forced=0 mutated=1 check=tokens at=116 want=1335 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:comma_intents after=122 blob=201327648 continuation=64 end=max_tokens forced=1 mutated=1 check=tokens at=124 want=1311 got=56431
+FAIL cpu tf three_intents_0_2_1_conditions:open_conditions after=140 blob=201327648 continuation=30 end=dead_end forced=1 mutated=1 check=tokens at=142 want=5778 got=56431
+FAIL cpu tf three_intents_0_2_1_conditions:string_condition after=149 blob=201327648 continuation=35 end=dead_end forced=0 mutated=1 check=tokens at=150 want=823 got=90
+FAIL cpu tf three_intents_0_2_1_conditions:close_conditions after=175 blob=201327648 continuation=64 end=max_tokens forced=0 mutated=1 check=tokens at=176 want=1335 got=4913
+FAIL cpu tf three_intents_0_2_1_conditions:close_intents after=182 blob=201327648 continuation=64 end=max_tokens forced=0 mutated=1 check=tokens at=183 want=92 got=4913
+# exit 1
+mutant_killed=True (exit=1 results=13/13 applied=13 trace_pass=True errors=0 kills=13)
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt cpu ex041 --state-zero
+PASS cpu ex041 trace tokens=183
+FAIL cpu ex041 kind=x:open_intents after=4 blob=201327648 continuation=55 end=dead_end mutated=1 check=tokens at=6 want=1311 got=56431
+FAIL cpu ex041 kind=x:open_conditions after=22 blob=201327648 continuation=377 end=max_tokens mutated=1 check=tokens at=24 want=81 got=258
+FAIL cpu ex041 kind=b:comma_conditions after=61 blob=201327648 continuation=105 end=dead_end mutated=1 check=tokens at=62 want=81 got=4913
+FAIL cpu ex041 kind=b:comma_conditions after=99 blob=201327648 continuation=104 end=dead_end mutated=1 check=tokens at=100 want=81 got=4913
+FAIL cpu ex041 kind=b:comma_conditions after=136 blob=201327648 continuation=177 end=dead_end mutated=1 check=tokens at=137 want=81 got=4913
+FAIL cpu ex041 kind=b:close_conditions after=175 blob=201327648 continuation=182 end=dead_end mutated=1 check=tokens at=176 want=57947 got=4913
+FAIL cpu ex041 kind=b:close_intents after=182 blob=201327648 continuation=217 end=max_tokens mutated=1 check=tokens at=183 want=none got=4913
+# exit 1
+mutant_killed=True (exit=1 results=7/7 applied=7 trace_pass=True errors=0 kills=7)
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt gpu ex041 three_intents_0_2_1_conditions --state-zero
+PASS gpu tf three_intents_0_2_1_conditions walk tokens=184 states 2 5 9 12 13 18 23 39 46 49 55 56 57 73 84 90 96 97 97 113 127 134 142 145 154 161 179 193 199 12 13 18 23 37 46 49 55 56 57 73 84 90 96 97 97 113 127 134 135 149 157 167 185 197 208 212 214 230 241 246 252 253 269 280 284 301 321 325 331 332 333 349 360 365 372 373 381 385 390 399 405 406 411 414 419 431 438 442 443 444 444 460 471 476 482 483 499 510 514 536 551 555 561 562 563 579 590 595 602 603 611 615 620 626 634 142 145 154 161 179 193 199 12 13 18 23 30 46 49 55 56 57 73 84 90 96 97 97 113 127 134 135 149 157 168 185 197 208 212 214 214 230 241 246 252 253 269 280 284 301 321 325 331 332 333 349 360 365 372 373 381 385 390 399 404 142 145 154 161 179 193 199 210 213
+FAIL gpu tf three_intents_0_2_1_conditions:open_intents after=3 blob=201327620 continuation=64 end=max_tokens forced=1 mutated=1 check=restored_state want=12 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:open_conditions after=21 blob=201327620 continuation=64 end=max_tokens forced=0 mutated=1 check=restored_state want=134 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:close_conditions after=22 blob=201327620 continuation=54 end=dead_end forced=0 mutated=1 check=restored_state want=142 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:comma_intents after=29 blob=201327620 continuation=30 end=dead_end forced=1 mutated=1 check=restored_state want=12 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:string_intent after=43 blob=201327620 continuation=31 end=dead_end forced=0 mutated=1 check=restored_state want=97 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:open_conditions after=47 blob=201327620 continuation=31 end=dead_end forced=1 mutated=1 check=restored_state want=134 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:comma_conditions after=80 blob=201327620 continuation=64 end=max_tokens forced=1 mutated=1 check=restored_state want=405 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:close_conditions after=115 blob=201327620 continuation=64 end=max_tokens forced=0 mutated=1 check=restored_state want=142 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:comma_intents after=122 blob=201327620 continuation=64 end=max_tokens forced=1 mutated=1 check=restored_state want=12 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:open_conditions after=140 blob=201327620 continuation=30 end=dead_end forced=1 mutated=1 check=restored_state want=134 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:string_condition after=149 blob=201327620 continuation=35 end=dead_end forced=0 mutated=1 check=restored_state want=214 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:close_conditions after=175 blob=201327620 continuation=64 end=max_tokens forced=0 mutated=1 check=restored_state want=142 got=0
+FAIL gpu tf three_intents_0_2_1_conditions:close_intents after=182 blob=201327620 continuation=64 end=max_tokens forced=0 mutated=1 check=restored_state want=210 got=0
+# exit 1
+mutant_killed=True (exit=1 results=13/13 applied=13 trace_pass=True errors=0 kills=13)
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex041 --state-zero
+PASS gpu ex041 trace tokens=183
+FAIL gpu ex041 kind=x:open_intents after=4 blob=201327620 continuation=55 end=dead_end mutated=1 check=tokens at=6 want=1311 got=56431
+FAIL gpu ex041 kind=x:open_conditions after=22 blob=201327620 continuation=377 end=max_tokens mutated=1 check=tokens at=24 want=81 got=258
+FAIL gpu ex041 kind=b:comma_conditions after=61 blob=201327620 continuation=105 end=dead_end mutated=1 check=tokens at=62 want=81 got=4913
+FAIL gpu ex041 kind=b:comma_conditions after=99 blob=201327620 continuation=104 end=dead_end mutated=1 check=tokens at=100 want=81 got=4913
+FAIL gpu ex041 kind=b:comma_conditions after=136 blob=201327620 continuation=177 end=dead_end mutated=1 check=tokens at=137 want=81 got=4913
+FAIL gpu ex041 kind=b:close_conditions after=175 blob=201327620 continuation=182 end=dead_end mutated=1 check=tokens at=176 want=57947 got=4913
+FAIL gpu ex041 kind=b:close_intents after=182 blob=201327620 continuation=217 end=max_tokens mutated=1 check=tokens at=183 want=none got=4913
+# exit 1
+mutant_killed=True (exit=1 results=7/7 applied=7 trace_pass=True errors=0 kills=7)

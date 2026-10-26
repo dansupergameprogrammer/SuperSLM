@@ -1,0 +1,4 @@
+attach_copy accept_shift exit=0 written=True as_expected=True
+direct accept_shift applied=True differs_from_clean=True sha256=e642e8a75debe4302ace659d6ebb54cb8adb9d192888e0e8ee75b90c6bf20401 verifier_exit=0 as_expected=True
+attach_copy offset_swap exit=1 written=False as_expected=True
+direct offset_swap applied=True differs_from_clean=True sha256=7f9627dc3a81c0fb700dbfbb66cb8046beb589c773dda4a71ad140e902e90e98 verifier_exit=1 as_expected=True

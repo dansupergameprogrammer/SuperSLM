@@ -1,0 +1,33 @@
+compiled IntentDoc v2 in 5.9 s: 635 states, 3074805 transitions
+PASS walk one_intent_0_conditions tokens=29 admitted=29 accepting_before_end=0
+PASS walk one_intent_1_condition tokens=62 admitted=62 accepting_before_end=0
+PASS walk three_intents_0_2_1_conditions tokens=175 admitted=175 accepting_before_end=0
+PASS reject trailing_comma@28 tokens=29 admitted=28 accepting_before_end=0
+PASS reject empty_intents@4 tokens=5 admitted=4 accepting_before_end=0
+PASS reject missing_target@13 tokens=23 admitted=13 accepting_before_end=0
+PASS reject trailing_comma_conditions@54 tokens=62 admitted=54 accepting_before_end=0
+PASS walk tf_one_intent_0_conditions tokens=31 admitted=31 accepting_before_end=0
+PASS walk tf_one_intent_1_condition tokens=65 admitted=65 accepting_before_end=0
+PASS walk tf_three_intents_0_2_1_conditions tokens=184 admitted=184 accepting_before_end=0
+PASS tfsave one_intent_0_conditions:open_intents after=3
+PASS tfsave one_intent_0_conditions:open_conditions after=21
+PASS tfsave one_intent_0_conditions:close_conditions after=22
+PASS tfsave one_intent_0_conditions:close_intents after=29
+PASS tfsave one_intent_1_condition:open_intents after=3
+PASS tfsave one_intent_1_condition:open_conditions after=21
+PASS tfsave one_intent_1_condition:close_conditions after=56
+PASS tfsave one_intent_1_condition:close_intents after=63
+PASS tfsave three_intents_0_2_1_conditions:open_intents after=3
+PASS tfsave three_intents_0_2_1_conditions:open_conditions after=21
+PASS tfsave three_intents_0_2_1_conditions:close_conditions after=22
+PASS tfsave three_intents_0_2_1_conditions:comma_intents after=29
+PASS tfsave three_intents_0_2_1_conditions:string_intent after=43
+PASS tfsave three_intents_0_2_1_conditions:open_conditions after=47
+PASS tfsave three_intents_0_2_1_conditions:comma_conditions after=80
+PASS tfsave three_intents_0_2_1_conditions:close_conditions after=115
+PASS tfsave three_intents_0_2_1_conditions:comma_intents after=122
+PASS tfsave three_intents_0_2_1_conditions:open_conditions after=140
+PASS tfsave three_intents_0_2_1_conditions:string_condition after=149
+PASS tfsave three_intents_0_2_1_conditions:close_conditions after=175
+PASS tfsave three_intents_0_2_1_conditions:close_intents after=182
+checks=31 failures=0

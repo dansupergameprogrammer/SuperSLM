@@ -1,0 +1,14 @@
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\array-s2\tests\array-s2\fixtures.py check --ckpt D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-7ae5576 --gen D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen_canon.txt --json D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen_check_canon.json
+ex005: valid cpu=110t/dead_end cpu_canon=30t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 8899, 'b': 66582} identical_cpu_vs_cpu_canon=False
+ex006: valid cpu=32t/dead_end cpu_canon=28t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 8899, 'b': 66582} identical_cpu_vs_cpu_canon=False
+ex033: valid cpu=32t/dead_end cpu_canon=30t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 8899, 'b': 66582} identical_cpu_vs_cpu_canon=False
+ex034: valid cpu=58t/dead_end cpu_canon=28t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 8899, 'b': 66582} identical_cpu_vs_cpu_canon=False
+ex035: valid cpu=65t/dead_end cpu_canon=29t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 8899, 'b': 66582} identical_cpu_vs_cpu_canon=False
+ex041: valid cpu=183t/dead_end cpu_canon=28t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 788, 'b': 66582} identical_cpu_vs_cpu_canon=False
+ex042: valid cpu=59t/dead_end cpu_canon=29t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 788, 'b': 66582} identical_cpu_vs_cpu_canon=False
+ex051: valid cpu=59t/dead_end cpu_canon=30t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 8899, 'b': 66582} identical_cpu_vs_cpu_canon=False
+ex052: valid cpu=102t/dead_end cpu_canon=29t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 8899, 'b': 66582} identical_cpu_vs_cpu_canon=False
+ex053: valid cpu=67t/dead_end cpu_canon=30t/dead_end mismatch_cpu_vs_cpu_canon={'position': 3, 'a': 8899, 'b': 66582} identical_cpu_vs_cpu_canon=False
+failures: 10
+# exit 1
+canon_info completed=True rows=10 (information only)

@@ -1,0 +1,34 @@
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\array-s2\tests\array-s2\make_mutants.py D:\SuperSLM\.worktrees\array-s2\tools D:\_scratch\array-s2\mutants
+wrote D:\_scratch\array-s2\mutants\accept_shift
+wrote D:\_scratch\array-s2\mutants\offset_swap
+# exit 0
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\_scratch\array-s2\mutants\accept_shift\sslm_attach_schema.py --base D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-combined.sslm --ckpt D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-7ae5576 --schema intents:D:\SuperSLM\.worktrees\array-s2\tests\t3094-multicommand-s0\v2\intentdoc-v2.schema.json --schema intent_gate:D:\SuperSLM\.worktrees\array-s2\tests\t3094-multicommand-s0\v2\g1.schema.json --out D:\_scratch\array-s2\mutants\accept_shift-attach.sslm --verifier D:\SuperSLM\.worktrees\array-s2\out\sslm_verify.exe --force   (env {'PYTHONPATH': 'D:\\SuperSLM\\.worktrees\\array-s2\\tools'})
+MUTANT accept_shift: accepting[0] 213 -> 214 (state_count 635, accepting [213])
+wrote D:\_scratch\array-s2\mutants\accept_shift-attach.sslm
+fingerprint 8dc2ff7f4f55fdb5ce57cfaa2ec585c5bfefab2c017f7426af616c16c0cace3e
+SCM1 bytes 59614386
+schema intents: {"dfa_states": 635, "minItems": {"/properties/intents": 1, "/properties/intents/items/properties/conditions": 0}, "nfa_states": 681, "recursion_depth": 6, "serialized_mask_bytes": 36660995, "token_transitions": 3074805, "tracked_temporary_bytes": 165514483}
+schema intent_gate: {"dfa_states": 399, "minItems": {}, "nfa_states": 424, "recursion_depth": 4, "serialized_mask_bytes": 22953415, "token_transitions": 1921739, "tracked_temporary_bytes": 133260439}
+verified: independent loader accepted the artifact
+# exit 0
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\array-s2\tests\array-s2\scm1_mutants.py D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm accept_shift D:\_scratch\array-s2\mutants\accept_shift.sslm
+MUTANT accept_shift: accepting[0] 213 -> 214 (state_count 635, accepting [213])
+# exit 0
+# D:\SuperSLM\.worktrees\array-s2\out\sslm_verify.exe D:\_scratch\array-s2\mutants\accept_shift.sslm D:\_scratch\array-s2\mutants\accept_shift.verify.json
+OK  artifact=D:\_scratch\array-s2\mutants\accept_shift.sslm  manifest=D:\_scratch\array-s2\mutants\accept_shift.verify.json  fingerprint=8dc2ff7f4f55fdb5ce57cfaa2ec585c5bfefab2c017f7426af616c16c0cace3e
+# exit 0
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\_scratch\array-s2\mutants\offset_swap\sslm_attach_schema.py --base D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-combined.sslm --ckpt D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-7ae5576 --schema intents:D:\SuperSLM\.worktrees\array-s2\tests\t3094-multicommand-s0\v2\intentdoc-v2.schema.json --schema intent_gate:D:\SuperSLM\.worktrees\array-s2\tests\t3094-multicommand-s0\v2\g1.schema.json --out D:\_scratch\array-s2\mutants\offset_swap-attach.sslm --verifier D:\SuperSLM\.worktrees\array-s2\out\sslm_verify.exe --force   (env {'PYTHONPATH': 'D:\\SuperSLM\\.worktrees\\array-s2\\tools'})
+sslm_attach_schema: refused: verification failed: the independent artifact verifier rejected the attached artifact (exit 1: REJECTED: SchemaMasksRejected -- BadSchemaStateOffsets)
+MUTANT offset_swap: state_offsets[1]=2 <-> state_offsets[2]=4
+# exit 1
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\array-s2\tests\array-s2\scm1_mutants.py D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm offset_swap D:\_scratch\array-s2\mutants\offset_swap.sslm
+MUTANT offset_swap: state_offsets[1]=2 <-> state_offsets[2]=4
+# exit 0
+# D:\SuperSLM\.worktrees\array-s2\out\sslm_verify.exe D:\_scratch\array-s2\mutants\offset_swap.sslm D:\_scratch\array-s2\mutants\offset_swap.verify.json
+REJECTED: SchemaMasksRejected -- BadSchemaStateOffsets
+# exit 1
+attach_copy accept_shift exit=0 written=True as_expected=True
+direct accept_shift applied=True differs_from_clean=True sha256=e642e8a75debe4302ace659d6ebb54cb8adb9d192888e0e8ee75b90c6bf20401 verifier_exit=0 as_expected=True
+attach_copy offset_swap exit=1 written=False as_expected=True
+direct offset_swap applied=True differs_from_clean=True sha256=7f9627dc3a81c0fb700dbfbb66cb8046beb589c773dda4a71ad140e902e90e98 verifier_exit=1 as_expected=True
+mutant_artifacts ok=True

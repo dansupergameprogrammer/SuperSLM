@@ -1,0 +1,12 @@
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe walks D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt cpu
+PASS cpu walk one_intent_0_conditions tokens=29 admitted=29 refused_at=-1 refusal=- accepting_end=1 bad_accepting_at=-1 ms=761
+PASS cpu walk one_intent_1_condition tokens=62 admitted=62 refused_at=-1 refusal=- accepting_end=1 bad_accepting_at=-1 ms=1618
+PASS cpu walk three_intents_0_2_1_conditions tokens=175 admitted=175 refused_at=-1 refusal=- accepting_end=1 bad_accepting_at=-1 ms=4603
+PASS cpu reject trailing_comma@28 tokens=29 admitted=28 refused_at=28 refusal=unreachable accepting_end=0 bad_accepting_at=-1 ms=723
+PASS cpu reject empty_intents@4 tokens=5 admitted=4 refused_at=4 refusal=unreachable accepting_end=0 bad_accepting_at=-1 ms=103
+PASS cpu reject missing_target@13 tokens=23 admitted=13 refused_at=13 refusal=unreachable accepting_end=0 bad_accepting_at=-1 ms=335
+PASS cpu reject trailing_comma_conditions@54 tokens=62 admitted=54 refused_at=54 refusal=unreachable accepting_end=0 bad_accepting_at=-1 ms=1509
+PASS cpu walk tf_one_intent_0_conditions tokens=31 admitted=31 refused_at=-1 refusal=- accepting_end=1 bad_accepting_at=-1 ms=880
+PASS cpu walk tf_one_intent_1_condition tokens=65 admitted=65 refused_at=-1 refusal=- accepting_end=1 bad_accepting_at=-1 ms=1787
+PASS cpu walk tf_three_intents_0_2_1_conditions tokens=184 admitted=184 refused_at=-1 refusal=- accepting_end=1 bad_accepting_at=-1 ms=4973
+# exit 0

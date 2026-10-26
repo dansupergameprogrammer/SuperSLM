@@ -1,12 +1,18 @@
-map cpu base ok=1 ms=411.9 
-map gpu base ok=1 ms=768.6 vram_delta=378798080 
-map cpu schema ok=1 ms=597.7 
-map gpu schema ok=1 ms=989.7 vram_delta=438435840 
-map cpu base ok=1 ms=359.8 
-map gpu base ok=1 ms=648.6 vram_delta=378798080 
-map cpu schema ok=1 ms=601.5 
-map gpu schema ok=1 ms=966.9 vram_delta=438435840 
-map cpu base ok=1 ms=363.2 
-map gpu base ok=1 ms=703.6 vram_delta=378798080 
-map cpu schema ok=1 ms=613.0 
-map gpu schema ok=1 ms=988.0 vram_delta=438435840 
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe map D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-combined.sslm D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents
+map cpu base ok=1 ms=331.3 
+map gpu base ok=1 ms=534.1 vram_delta=379060224 
+map cpu schema ok=1 ms=535.8 
+map gpu schema ok=1 ms=677.7 vram_delta=438829056 
+# exit 0
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe map D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-combined.sslm D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents
+map cpu base ok=1 ms=324.0 
+map gpu base ok=1 ms=520.1 vram_delta=379060224 
+map cpu schema ok=1 ms=505.8 
+map gpu schema ok=1 ms=689.2 vram_delta=438829056 
+# exit 0
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe map D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-combined.sslm D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents
+map cpu base ok=1 ms=322.4 
+map gpu base ok=1 ms=508.3 vram_delta=379060224 
+map cpu schema ok=1 ms=508.7 
+map gpu schema ok=1 ms=675.1 vram_delta=438829056 
+# exit 0

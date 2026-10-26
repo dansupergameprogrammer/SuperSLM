@@ -1,0 +1,30 @@
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt gpu ex041 one_intent_0_conditions
+PASS gpu tf one_intent_0_conditions walk tokens=31 states 2 5 9 12 13 18 23 37 46 49 55 56 57 73 84 90 96 97 97 113 127 134 142 145 154 161 179 193 199 210 213
+PASS gpu tf one_intent_0_conditions:open_intents after=3 blob=201327620 continuation=64 end=max_tokens forced=27 mutated=0
+PASS gpu tf one_intent_0_conditions:open_conditions after=21 blob=201327620 continuation=34 end=dead_end forced=9 mutated=0
+PASS gpu tf one_intent_0_conditions:close_conditions after=22 blob=201327620 continuation=58 end=dead_end forced=8 mutated=0
+PASS gpu tf one_intent_0_conditions:close_intents after=29 blob=201327620 continuation=1 end=dead_end forced=1 mutated=0
+# exit 0
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt gpu ex041 one_intent_1_condition
+PASS gpu tf one_intent_1_condition walk tokens=65 states 2 5 9 12 13 18 23 32 46 49 55 56 57 73 84 90 96 97 97 113 127 134 135 149 157 168 185 197 208 212 214 214 230 241 246 252 253 269 280 284 301 321 325 331 332 333 349 360 365 372 373 381 385 390 399 404 142 145 154 161 179 193 199 210 213
+PASS gpu tf one_intent_1_condition:open_intents after=3 blob=201327620 continuation=64 end=max_tokens forced=61 mutated=0
+PASS gpu tf one_intent_1_condition:open_conditions after=21 blob=201327620 continuation=60 end=dead_end forced=43 mutated=0
+PASS gpu tf one_intent_1_condition:close_conditions after=56 blob=201327620 continuation=64 end=max_tokens forced=8 mutated=0
+PASS gpu tf one_intent_1_condition:close_intents after=63 blob=201327620 continuation=1 end=dead_end forced=1 mutated=0
+# exit 0
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt gpu ex041 three_intents_0_2_1_conditions
+PASS gpu tf three_intents_0_2_1_conditions walk tokens=184 states 2 5 9 12 13 18 23 39 46 49 55 56 57 73 84 90 96 97 97 113 127 134 142 145 154 161 179 193 199 12 13 18 23 37 46 49 55 56 57 73 84 90 96 97 97 113 127 134 135 149 157 167 185 197 208 212 214 230 241 246 252 253 269 280 284 301 321 325 331 332 333 349 360 365 372 373 381 385 390 399 405 406 411 414 419 431 438 442 443 444 444 460 471 476 482 483 499 510 514 536 551 555 561 562 563 579 590 595 602 603 611 615 620 626 634 142 145 154 161 179 193 199 12 13 18 23 30 46 49 55 56 57 73 84 90 96 97 97 113 127 134 135 149 157 168 185 197 208 212 214 214 230 241 246 252 253 269 280 284 301 321 325 331 332 333 349 360 365 372 373 381 385 390 399 404 142 145 154 161 179 193 199 210 213
+PASS gpu tf three_intents_0_2_1_conditions:open_intents after=3 blob=201327620 continuation=64 end=max_tokens forced=180 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:open_conditions after=21 blob=201327620 continuation=32 end=dead_end forced=162 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:close_conditions after=22 blob=201327620 continuation=32 end=dead_end forced=161 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:comma_intents after=29 blob=201327620 continuation=26 end=dead_end forced=154 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:string_intent after=43 blob=201327620 continuation=11 end=dead_end forced=140 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:open_conditions after=47 blob=201327620 continuation=8 end=dead_end forced=136 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:comma_conditions after=80 blob=201327620 continuation=41 end=dead_end forced=103 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:close_conditions after=115 blob=201327620 continuation=8 end=dead_end forced=68 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:comma_intents after=122 blob=201327620 continuation=64 end=max_tokens forced=61 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:open_conditions after=140 blob=201327620 continuation=64 end=max_tokens forced=43 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:string_condition after=149 blob=201327620 continuation=64 end=max_tokens forced=34 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:close_conditions after=175 blob=201327620 continuation=8 end=dead_end forced=8 mutated=0
+PASS gpu tf three_intents_0_2_1_conditions:close_intents after=182 blob=201327620 continuation=1 end=dead_end forced=1 mutated=0
+# exit 0

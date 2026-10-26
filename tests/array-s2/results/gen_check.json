@@ -12,12 +12,6 @@
    "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 30,
-   "text": "{\"intents\":[{\"action\":\"wait\",\"subject\":\"the beacon\",\"target\":\"the bridge\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 110,
@@ -30,12 +24,6 @@
    "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 8899,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true
@@ -53,12 +41,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the gate\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 28,
-   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the\",\"target\":\"the\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 32,
@@ -71,12 +53,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the gate\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 8899,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true
@@ -94,12 +70,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"beacon\",\"target\":\"beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 30,
-   "text": "{\"intents\":[{\"action\":\"fire\",\"subject\":\"beacon\",\"target\":\"beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 32,
@@ -112,12 +82,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"beacon\",\"target\":\"beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 8899,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true
@@ -135,12 +99,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":true},{\"action\":\"fire\",\"subject\":\"the gate\",\"target\":\"the bridge\",\"conditions\":[],\"depends_on_previous\":true}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 28,
-   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"bridge\",\"target\":\"gate\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 58,
@@ -153,12 +111,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":true},{\"action\":\"fire\",\"subject\":\"the gate\",\"target\":\"the bridge\",\"conditions\":[],\"depends_on_previous\":true}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 8899,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true
@@ -176,12 +128,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"alarmed\",\"target\":\"alarm\",\"conditions\":[{\"role\":\"during\",\"entity\":\"alarmed\",\"state\":\"alarm\",\"cmp\":\"at_most\",\"value\":\"none\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 29,
-   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"alarm\",\"target\":\"scanning\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 65,
@@ -194,12 +140,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"alarmed\",\"target\":\"alarm\",\"conditions\":[{\"role\":\"during\",\"entity\":\"alarmed\",\"state\":\"alarm\",\"cmp\":\"at_most\",\"value\":\"none\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 8899,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true
@@ -217,12 +157,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"you\",\"target\":\"target\",\"conditions\":[{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"none\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"scan\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"fire\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"neither\",\"negated\":true,\"watch\":\"new\"}],\"depends_on_previous\":true}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 28,
-   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"you\",\"target\":\"scan\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 183,
@@ -235,12 +169,6 @@
    "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"you\",\"target\":\"target\",\"conditions\":[{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"none\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"scan\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"fire\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"neither\",\"negated\":true,\"watch\":\"new\"}],\"depends_on_previous\":true}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 788,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true
@@ -258,12 +186,6 @@
    "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"puls\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"pulses\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 29,
-   "text": "{\"intents\":[{\"action\":\"wait\",\"subject\":\"pulse\",\"target\":\"puls\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 59,
@@ -276,12 +198,6 @@
    "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"puls\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"pulses\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 788,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true
@@ -299,12 +215,6 @@
    "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"north ridge\",\"target\":\"horn interval\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"horn interval\",\"target\":\"north ridge\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 30,
-   "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"north ridge\",\"target\":\"horn interval\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 59,
@@ -317,12 +227,6 @@
    "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"north ridge\",\"target\":\"horn interval\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"horn interval\",\"target\":\"north ridge\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 8899,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true
@@ -340,12 +244,6 @@
    "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"tower\",\"target\":\"fall\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"move\",\"subject\":\"tower\",\"target\":\"down\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"hold\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 29,
-   "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"tower\",\"target\":\"flying\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 102,
@@ -358,12 +256,6 @@
    "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"tower\",\"target\":\"fall\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"move\",\"subject\":\"tower\",\"target\":\"down\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"hold\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 8899,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true
@@ -381,12 +273,6 @@
    "text": "{\"intents\":[{\"action\":\"fire\",\"subject\":\"north ridge\",\"target\":\"north ridge\",\"conditions\":[{\"role\":\"start\",\"entity\":\"north ridge\",\"state\":\"north ridge\",\"cmp\":\"none\",\"value\":\"all\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
    "valid": true
   },
-  "cpu_canon": {
-   "end": "dead_end",
-   "tokens": 30,
-   "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"north ridge\",\"target\":\"horn interval\",\"conditions\":[],\"depends_on_previous\":false}]}",
-   "valid": true
-  },
   "cpu_exact": {
    "end": "dead_end",
    "tokens": 67,
@@ -399,12 +285,6 @@
    "text": "{\"intents\":[{\"action\":\"fire\",\"subject\":\"north ridge\",\"target\":\"north ridge\",\"conditions\":[{\"role\":\"start\",\"entity\":\"north ridge\",\"state\":\"north ridge\",\"cmp\":\"none\",\"value\":\"all\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
    "valid": true
   },
-  "mismatch_cpu_vs_cpu_canon": {
-   "position": 3,
-   "a": 8899,
-   "b": 66582
-  },
-  "identical_cpu_vs_cpu_canon": false,
   "identical_cpu_vs_cpu_exact": true,
   "identical_cpu_vs_cpu_full": true,
   "identical_cpu_vs_gpu": true

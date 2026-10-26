@@ -1,0 +1,12 @@
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\array-s2\tests\array-s2\fixtures.py build --ckpt D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-7ae5576 --out D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt
+wrote 44 records to D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt
+teacher-forced save points: 21, every one exactly at its byte
+  close_conditions: 5
+  close_intents: 3
+  comma_conditions: 1
+  comma_intents: 2
+  open_conditions: 5
+  open_intents: 3
+  string_condition: 1
+  string_intent: 1
+# exit 0

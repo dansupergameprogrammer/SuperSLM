@@ -1,0 +1,30 @@
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt cpu ex041 one_intent_0_conditions
+PASS cpu tf one_intent_0_conditions walk tokens=31
+PASS cpu tf one_intent_0_conditions:open_intents after=3 blob=201327648 continuation=64 end=max_tokens forced=27 mutated=0
+PASS cpu tf one_intent_0_conditions:open_conditions after=21 blob=201327648 continuation=34 end=dead_end forced=9 mutated=0
+PASS cpu tf one_intent_0_conditions:close_conditions after=22 blob=201327648 continuation=58 end=dead_end forced=8 mutated=0
+PASS cpu tf one_intent_0_conditions:close_intents after=29 blob=201327648 continuation=1 end=dead_end forced=1 mutated=0
+# exit 0
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt cpu ex041 one_intent_1_condition
+PASS cpu tf one_intent_1_condition walk tokens=65
+PASS cpu tf one_intent_1_condition:open_intents after=3 blob=201327648 continuation=64 end=max_tokens forced=61 mutated=0
+PASS cpu tf one_intent_1_condition:open_conditions after=21 blob=201327648 continuation=60 end=dead_end forced=43 mutated=0
+PASS cpu tf one_intent_1_condition:close_conditions after=56 blob=201327648 continuation=64 end=max_tokens forced=8 mutated=0
+PASS cpu tf one_intent_1_condition:close_intents after=63 blob=201327648 continuation=1 end=dead_end forced=1 mutated=0
+# exit 0
+# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt cpu ex041 three_intents_0_2_1_conditions
+PASS cpu tf three_intents_0_2_1_conditions walk tokens=184
+PASS cpu tf three_intents_0_2_1_conditions:open_intents after=3 blob=201327648 continuation=64 end=max_tokens forced=180 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:open_conditions after=21 blob=201327648 continuation=32 end=dead_end forced=162 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:close_conditions after=22 blob=201327648 continuation=32 end=dead_end forced=161 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:comma_intents after=29 blob=201327648 continuation=26 end=dead_end forced=154 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:string_intent after=43 blob=201327648 continuation=11 end=dead_end forced=140 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:open_conditions after=47 blob=201327648 continuation=8 end=dead_end forced=136 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:comma_conditions after=80 blob=201327648 continuation=41 end=dead_end forced=103 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:close_conditions after=115 blob=201327648 continuation=8 end=dead_end forced=68 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:comma_intents after=122 blob=201327648 continuation=64 end=max_tokens forced=61 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:open_conditions after=140 blob=201327648 continuation=64 end=max_tokens forced=43 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:string_condition after=149 blob=201327648 continuation=64 end=max_tokens forced=34 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:close_conditions after=175 blob=201327648 continuation=8 end=dead_end forced=8 mutated=0
+PASS cpu tf three_intents_0_2_1_conditions:close_intents after=182 blob=201327648 continuation=1 end=dead_end forced=1 mutated=0
+# exit 0

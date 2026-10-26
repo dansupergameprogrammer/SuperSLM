@@ -1,0 +1,71 @@
+dxc: C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe  (NOT the pinned 10.0.19041.0 build.bat uses)
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\attention_score_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\attention_score_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\attn_norm_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\attn_norm_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\attn_residual_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\attn_residual_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\bias_wide.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\bias_wide.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\check_rdp_exponent.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\check_rdp_exponent.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\combine_carried.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\combine_carried.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\commit_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\commit_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\context_accumulate_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\context_accumulate_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\ctx_fold_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\ctx_fold_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\descriptor_table_readback.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\descriptor_table_readback.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\down_proj_gemm_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\down_proj_gemm_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\down_proj_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\down_proj_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\dyn_recip.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\dyn_recip.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\gate_proj_gemm_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\gate_proj_gemm_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\gate_proj_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\gate_proj_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\kv_proj_gemm_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\kv_proj_gemm_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\kv_proj_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\kv_proj_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\logits_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\logits_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\mlp_act_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\mlp_act_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\mlp_norm_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\mlp_norm_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\mlp_residual_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\mlp_residual_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\o_proj_gemm_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\o_proj_gemm_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\o_proj_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\o_proj_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\q_proj_gemm_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\q_proj_gemm_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\q_proj_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\q_proj_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\qk_norm_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\qk_norm_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\reduce_max_abs_i64_scheme0.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\reduce_max_abs_i64_scheme0.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\reduce_max_abs_i64_scheme1.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\reduce_max_abs_i64_scheme1.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\requant_chain_checked.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\requant_chain_checked.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\requant_wide.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\requant_wide.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\rope_commit_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\rope_commit_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\rope_guard_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\rope_guard_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\softmax_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\softmax_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\up_proj_gemm_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\up_proj_gemm_site.hlsl -O3 -HV 2018 -WX
+# exit 0
+# C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe -T cs_6_2 -E main -Fo D:\SuperSLM\.worktrees\array-s2\out\shaders\up_proj_site.cso D:\SuperSLM\.worktrees\array-s2\src\gpu\shaders\up_proj_site.hlsl -O3 -HV 2018 -WX
+# exit 0

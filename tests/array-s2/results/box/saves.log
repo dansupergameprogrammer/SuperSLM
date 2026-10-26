@@ -1,0 +1,9 @@
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\array-s2\tests\array-s2\fixtures.py saves --ckpt D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-7ae5576 --gen D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt --out D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt
+wrote 54 save points to D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt
+  after close_conditions: exact 16, bundled 3, crossed 0
+  after close_intents: exact 9, bundled 1, crossed 0
+  after comma_conditions: exact 0, bundled 3, crossed 0
+  after comma_intents: exact 1, bundled 8, crossed 0
+  after open_conditions: exact 1, bundled 2, crossed 16
+  after open_intents: exact 10, bundled 0, crossed 0
+# exit 0

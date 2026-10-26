@@ -1,0 +1,8 @@
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\array-s2\tests\array-s2\verify_schema_masks_check.py D:\SuperSLM\.worktrees\array-s2\out\sslm_verify.exe   (env {'T3094_TOKENIZER_DIR': 'D:\\_artifacts\\SuperSLM\\aex\\qwen2.5-0.5b-instruct-7ae5576'})
+PASS attach: must exit 0; exit 0 reject_status=None diagnostic=''  [sslm_attach_schema.py --verifier <binary under test>]
+PASS clean: must accept; exit 0 reject_status=None diagnostic=''  [clean: SCM1 unchanged]
+PASS accept_shift: must accept; exit 0 reject_status=None diagnostic=''  [accept_shift: accepting[0] 213 -> 214 (state_count 635, accepting [213])]
+PASS offset_swap: must reject (BadSchemaStateOffsets); exit 1 reject_status=SchemaMasksRejected diagnostic='BadSchemaStateOffsets'  [offset_swap: state_offsets[1]=2 <-> state_offsets[2]=4]
+PASS header_word: must reject (SchemaMasksOutOfBounds); exit 1 reject_status=SchemaMasksRejected diagnostic='SchemaMasksOutOfBounds'  [header_word: SCM1 u32 at offset 16 raised by 4]
+PASS: 5 of 5 with D:\SuperSLM\.worktrees\array-s2\out\sslm_verify.exe
+# exit 0

@@ -1,0 +1,6 @@
+wrote D:\_scratch\array-s2\intents-only.sslm
+fingerprint 65599fa49b04b9073a4d184fae4069dfc638df27db92819ee7bc3a93c0cab96c
+SCM1 bytes 36660995
+schema intents: {"dfa_states": 635, "minItems": {"/properties/intents": 1, "/properties/intents/items/properties/conditions": 0}, "nfa_states": 681, "recursion_depth": 6, "serialized_mask_bytes": 36660995, "token_transitions": 3074805, "tracked_temporary_bytes": 165514483}
+verified: independent loader accepted the artifact
+measure: exit=0 wall_s=18.80 main_peak_bytes=2005708800 max_child_peak_bytes=1681510400
