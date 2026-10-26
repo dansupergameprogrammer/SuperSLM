@@ -1180,9 +1180,9 @@ void Cell_X_2_1() {
 	    {"mode -1", XOpts(-1, nullptr, 0)},
 	    {"exact, draft_count -1", XOpts(SSLM_JUMP_EXACT, draft, -1)},
 	    {"exact, NULL draft with draft_count 3", XOpts(SSLM_JUMP_EXACT, nullptr, 3)},
-	    {"canonical, a draft", XOpts(SSLM_JUMP_CANONICAL, draft, 0)},
-	    {"canonical, draft_count 2", XOpts(SSLM_JUMP_CANONICAL, nullptr, 2)},
-	    {"canonical, draft and count", XOpts(SSLM_JUMP_CANONICAL, draft, 2)},
+	    {"default (mode 0), a draft", XOpts(SSLM_JUMP_DEFAULT, draft, 0)},
+	    {"default (mode 0), draft_count 2", XOpts(SSLM_JUMP_DEFAULT, nullptr, 2)},
+	    {"default (mode 0), draft and count", XOpts(SSLM_JUMP_DEFAULT, draft, 2)},
 	};
 	for (const Case& c : cases) {
 		{

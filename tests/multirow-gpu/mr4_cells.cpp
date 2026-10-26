@@ -42,8 +42,9 @@
 //                                                                   refusal re-points it.
 //   4.6j, 4.6e, 4.6f (verbs with a chunk open)                      KEPT: open the chunk with PROMPT instead.
 //   n1 (last_rows_committed across a jump)                          RE-POINT: a PROMPT chunk's close, then an Exact jump.
-// Until MRX lands these run as written; after it 2.3, 8.10 and s1 stop compiling (the kind's name leaves gpu_1p0.h).
-// Usage: mr4_cells.exe --fixtures=DIR [--cells=2.3,7.9,8.10,s1,4.6j,4.6e,4.6f,n1] [--show=N]
+// Applied at MRX (ruling 22): 2.3, 8.10 and s1 are compiled out (#if 0) and out of the table; 4.6j/e/f and n1 open
+// their chunk with PROMPT; 7.9 and n1 are red until MR5 (the GPU refuses Exact).
+// Usage: mr4_cells.exe --fixtures=DIR [--cells=7.9,4.6j,4.6e,4.6f,n1] [--show=N]
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -245,6 +246,7 @@ int32_t Produce(World& w, const Model& m, SslmGpuSequenceHandle* s, int32_t last
 int32_t NotForced(int32_t forced) { return forced == 220 ? 221 : 220; }  // an ordinary id, never the forced one
 
 // ------------------------------------------------------------------------------------------------ 2.3
+#if 0  // MRX (E-11, ruling 22): RETIRED with the public SCHEMA_FORCED kind (red-suite-mrx.md); kept for MR5.
 void Cell23(Fsfd& fx) {
 	g_cell = "2.3";
 	const Model& m = fx.m;
@@ -449,6 +451,7 @@ void Cell810(Fsfd& fx) {
 		}
 	Check(cases >= 4, F("only %d forced spans after a produced token were found", cases));
 }
+#endif  // 2.3, 8.10 RETIRED
 
 // ------------------------------------------------------------------------------------------------ 7.9
 // fsfd_refuse (the last layer's attn_residual patched, mr4_fixtures.py) refuses some rows and not others. A prompt
@@ -555,6 +558,7 @@ void Cell79(Fsfd& rf) {
 // only (§3.5). The reference is 1.17's shipped schema path, the schema-content bridge, fed the same rows after the
 // same history: the save blob equals it byte for byte, the walk word included. j = 0, j = 3 and M = 1, dedicated
 // and pooled, on fsfd_refuse (the refusing row found on the one-row path). MXK2 and MXK2b (the walk over row j) go red.
+#if 0  // MRX (E-11, ruling 22): RETIRED with the public SCHEMA_FORCED kind (red-suite-mrx.md); kept for MR5.
 void CellS1(Fsfd& rf) {
 	const Model& m = rf.m;
 	int r = -1;
@@ -627,6 +631,7 @@ void CellS1(Fsfd& rf) {
 			}
 		}
 }
+#endif  // s1 RETIRED
 
 // S3: §4.6's R-17 rows. With a chunk open (at layer 0 and at a mid layer, dedicated and pooled), jump_forward,
 // embed_schema_token and forced_tokens each return SSLM_BUSY and write nothing: the handle (blob, walk, layer,
@@ -648,8 +653,8 @@ void CellS3(Fsfd& fx, int verb) {
 			if (chain.size() < 5) { Check(false, tag + ": chain"); continue; }
 			const std::vector<int32_t> span(chain.begin(), chain.begin() + 3);
 			int32_t adm = -9, adm2 = -9;
-			Check(EmbedRows(w, a, SSLM_GPU_ROWS_SCHEMA_FORCED, span, 0, &adm) == S::SSLM_OK && adm == 3 &&
-			          EmbedRows(w, t, SSLM_GPU_ROWS_SCHEMA_FORCED, span, 0, &adm2) == S::SSLM_OK && adm2 == 3,
+			Check(EmbedRows(w, a, SSLM_GPU_ROWS_PROMPT, span, 0, &adm) == S::SSLM_OK && adm == 3 &&
+			          EmbedRows(w, t, SSLM_GPU_ROWS_PROMPT, span, 0, &adm2) == S::SSLM_OK && adm2 == 3,
 			      tag + ": open the chunks");
 			if (mid) Check(mr2::Slice(w, a, m.dpl()) == S::SSLM_OK && mr2::Slice(w, t, m.dpl()) == S::SSLM_OK, tag + ": one layer");
 			// With the chunk open the save is refused (CHUNK_OPEN), so the observation is everything but the blob;
@@ -689,7 +694,8 @@ void CellS3(Fsfd& fx, int verb) {
 }
 
 // N1: last_rows_committed keeps its entry value across a jump (the verb's passes are internal; LastRowsKeep): after a
-// prompt (0) and after a 3-row SCHEMA_FORCED close (3), a jump of 8 rows leaves it there. MXK6 goes red.
+// prompt (0) and after a 3-row PROMPT close (3), an Exact jump (opts NULL) of 8 rows leaves it there (green at MR5).
+// MXK6 goes red.
 void CellN1(Fsfd& fx) {
 	const Model& m = fx.m;
 	for (int pooled = 0; pooled <= 1; ++pooled)
@@ -702,7 +708,7 @@ void CellN1(Fsfd& fx) {
 			if (entry_rows) {
 				const std::vector<int32_t> chain = Chain(w, a);
 				int32_t adm = -9;
-				Check(chain.size() >= 3 && EmbedRows(w, a, SSLM_GPU_ROWS_SCHEMA_FORCED, {chain[0], chain[1], chain[2]}, 0, &adm) == S::SSLM_OK &&
+				Check(chain.size() >= 3 && EmbedRows(w, a, SSLM_GPU_ROWS_PROMPT, {chain[0], chain[1], chain[2]}, 0, &adm) == S::SSLM_OK &&
 				          CloseChunk(w, m, a) == S::SSLM_OK, tag + ": the 3-row close");
 			}
 			Check(LastCommitted(a) == entry_rows, F("%s: %d before the jump", tag.c_str(), LastCommitted(a)));
@@ -734,10 +740,7 @@ int main(int argc, char** argv) {
 	Fsfd fx, rf;
 	if (!fx.Load("fsfd.sslm")) return 1;
 	const std::vector<std::pair<const char*, std::function<void()>>> cells = {
-	    {"2.3", [&] { Cell23(fx); }},
-	    {"8.10", [&] { Cell810(fx); }},
 	    {"7.9", [&] { if (rf.Load("fsfd_refuse.sslm")) Cell79(rf); else { g_cell = "7.9"; Check(false, "fsfd_refuse.sslm did not load"); } }},
-	    {"s1", [&] { if (rf.ok || rf.Load("fsfd_refuse.sslm")) CellS1(rf); else Check(false, "fsfd_refuse.sslm did not load"); }},
 	    {"4.6j", [&] { CellS3(fx, 0); }},
 	    {"4.6e", [&] { CellS3(fx, 1); }},
 	    {"4.6f", [&] { CellS3(fx, 2); }},

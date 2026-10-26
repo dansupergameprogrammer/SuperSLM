@@ -64,7 +64,7 @@ contract() {
 import re, sys
 src = open(sys.argv[1]).read()
 miss = []
-for sym in ["#define SSLM_GPU_MAX_ROWS 8", "SSLM_GPU_ROWS_FIRST_PREWALKED", "SSLM_GPU_ROWS_PROMPT", "SSLM_GPU_ROWS_SCHEMA_FORCED",
+for sym in ["#define SSLM_GPU_MAX_ROWS 8", "SSLM_GPU_ROWS_PROMPT",
             "SSLM_GPU_ROWS_EXACT_DRAFT", "SslmGpuRowsSpec", "sslm_gpu_seq_embed_rows(", "sslm_gpu_seq_rows_abandon(",
             "sslm_gpu_seq_rows_open(", "sslm_gpu_seq_last_rows_committed("]:
     if sym not in src: miss.append("declares no " + sym)

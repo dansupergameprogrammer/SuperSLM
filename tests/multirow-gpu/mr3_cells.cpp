@@ -13,8 +13,8 @@
 //         return to their start values; the model unmaps SSLM_OK          (--cycles=N, default 1000)
 //   1.3   reset, release and restore with a chunk open (§4.6): reset equals a reset twin; release frees the row set
 //         and the pool pages; a restored handle has no chunk
-//   2.1   every bad spec of §4.1 (kind 2 before MR5, FIRST_PREWALKED with PROMPT; kind 1 is FORCED_TABLE_ABSENT on a
-//         table-less model since MR4, ruling 15), tokens = vocab
+//   2.1   every bad spec of §4.1 (kind 2 before MR5, flag 0x1 with PROMPT; kind 1 with and without 0x1, a bad spec
+//         again since MRX, rulings 20 and 22), tokens = vocab
 //         and -1 at rows 0 and 7, mid-token and chunk-open BUSY, the check order (Submitted + bad spec = BUSY,
 //         mid-token + bad spec = BUSY, bad spec + bad token = the argument status), nothing written (save bytes);
 //         9.3: a larger struct_size with a 0xAB canary tail is accepted, the canary untouched, the chunk equal
@@ -640,25 +640,21 @@ void Cell21(const mr2::Model& m) {
 		refused(&s, ARG, F("unknown kind %d", k));
 	}
 	{
-		// MRX (E-11, ruling 20), marked, not changed yet: kind 1 is a bad spec (ARG) again, with and without
-		// FIRST_PREWALKED, whatever the table (mrx_gpu g.3); s1/s3 re-point to ARG and the literal 1 when MRX lands.
-		SslmGpuRowsSpec s1 = Spec(rows, SSLM_GPU_ROWS_SCHEMA_FORCED), s2 = Spec(rows, SSLM_GPU_ROWS_EXACT_DRAFT);
-		// Ruling 15 (the R-17 flip, ruling 11's order): since MR4 SCHEMA_FORCED is a valid kind, so on this model, mapped
-		// without a forced-next table, it is the table's status, still with nothing written. EXACT_DRAFT stays a bad spec
-		// until MR5.
-		refused(&s1, SslmGpuStatus::SSLM_GPU_FORCED_TABLE_ABSENT, "kind SCHEMA_FORCED on a model with no forced-next table");
+		// MRX (E-11, rulings 20 and 22): kind 1 (the removed SCHEMA_FORCED) is a bad spec (ARG) again, with and without
+		// bit 0x1 (the removed FIRST_PREWALKED), whatever the table (mrx_gpu g.3). EXACT_DRAFT stays a bad spec until MR5.
+		SslmGpuRowsSpec s1 = Spec(rows, 1), s2 = Spec(rows, SSLM_GPU_ROWS_EXACT_DRAFT);
+		refused(&s1, ARG, "kind 1 (SCHEMA_FORCED, removed at MRX)");
 		refused(&s2, ARG, "kind EXACT_DRAFT before MR5");
-		SslmGpuRowsSpec s3 = Spec(rows, SSLM_GPU_ROWS_SCHEMA_FORCED, SSLM_GPU_ROWS_FIRST_PREWALKED);
-		refused(&s3, SslmGpuStatus::SSLM_GPU_FORCED_TABLE_ABSENT,
-		        "SCHEMA_FORCED + FIRST_PREWALKED on a model with no forced-next table");
+		SslmGpuRowsSpec s3 = Spec(rows, 1, 0x1u);
+		refused(&s3, ARG, "kind 1 + flag 0x1 (SCHEMA_FORCED + FIRST_PREWALKED, removed at MRX)");
 	}
-	for (uint32_t f : {0x2u, 0x80000000u, SSLM_GPU_ROWS_FIRST_PREWALKED | 0x4u}) {
+	for (uint32_t f : {0x2u, 0x80000000u, 0x1u | 0x4u}) {
 		SslmGpuRowsSpec s = Spec(rows, SSLM_GPU_ROWS_PROMPT, f);
 		refused(&s, ARG, F("unknown flag 0x%x", f));
 	}
 	{
-		SslmGpuRowsSpec s = Spec(rows, SSLM_GPU_ROWS_PROMPT, SSLM_GPU_ROWS_FIRST_PREWALKED);
-		refused(&s, ARG, "FIRST_PREWALKED with PROMPT");
+		SslmGpuRowsSpec s = Spec(rows, SSLM_GPU_ROWS_PROMPT, 0x1u);
+		refused(&s, ARG, "flag 0x1 (FIRST_PREWALKED, removed at MRX) with PROMPT");
 	}
 	{
 		// A null token array with count 4: §4.1's list does not name it, so only "refused, nothing written" is graded.

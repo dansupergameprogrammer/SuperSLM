@@ -9,7 +9,7 @@
 #
 # Legs (each PASS or FAIL; every leg runs whatever an earlier one did; exit 0 only when every leg run passes):
 #   header     E-11 (a), (c) as ruling 21 amends them: no public header (include/superslm/*.h, *.inc) names
-#              SSLM_JUMP_CANONICAL or SSLM_GPU_ROWS_SCHEMA_FORCED; sslm_jump_mode has SSLM_JUMP_DEFAULT = 0 and an
+#              SSLM_JUMP_CANONICAL, SSLM_GPU_ROWS_SCHEMA_FORCED or (ruling 22) SSLM_GPU_ROWS_FIRST_PREWALKED; sslm_jump_mode has SSLM_JUMP_DEFAULT = 0 and an
 #              SSLM_JUMP_EXACT that is not 0, every enumerator with an explicit value; and the GPU side has its DEFAULT
 #              too: an enum in gpu_1p0.h with a *_JUMP_DEFAULT = 0 enumerator, or, where SslmGpuJumpOptions' mode takes
 #              the CPU enum's values (no GPU enum), gpu_1p0.h names SSLM_JUMP_DEFAULT.
@@ -74,7 +74,7 @@ bad = []
 files = sorted(glob.glob(os.path.join(sys.argv[1], "*.h")) + glob.glob(os.path.join(sys.argv[1], "*.inc")))
 for p in files:
     src = open(p, encoding="utf-8", errors="replace").read()
-    for name in ("SSLM_JUMP_CANONICAL", "SSLM_GPU_ROWS_SCHEMA_FORCED"):
+    for name in ("SSLM_JUMP_CANONICAL", "SSLM_GPU_ROWS_SCHEMA_FORCED", "SSLM_GPU_ROWS_FIRST_PREWALKED"):
         for i, line in enumerate(src.split("\n"), 1):
             if name in line: bad.append("%s:%d names %s" % (os.path.relpath(p), i, name))
 abi = open(os.path.join(sys.argv[1], "sslm_abi.h")).read()
@@ -97,7 +97,7 @@ for b in bad[:20]: print("    header: " + b)
 if len(bad) > 20: print("    header: ... %d more" % (len(bad) - 20))
 sys.exit(1 if bad else 0)
 PY
-	then echo "PASS header (no SSLM_JUMP_CANONICAL or SSLM_GPU_ROWS_SCHEMA_FORCED; SSLM_JUMP_DEFAULT = 0, CPU and GPU)"; else echo "FAIL header"; FAILED+=(header); fi
+	then echo "PASS header (no SSLM_JUMP_CANONICAL, SSLM_GPU_ROWS_SCHEMA_FORCED or SSLM_GPU_ROWS_FIRST_PREWALKED; SSLM_JUMP_DEFAULT = 0, CPU and GPU)"; else echo "FAIL header"; FAILED+=(header); fi
 fi
 
 # ------------------------------------------------------------------------------------------------ changelog

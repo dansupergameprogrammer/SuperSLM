@@ -13,7 +13,7 @@ every product in Python ints, divisions as exact floor and ceiling, never floats
         clock `gpu` (flagged, not used: no GPU logits timing exists before MR5), or if MR0's rule on the port fails:
         C(4) / (4 x C(1)) <= 0.6 at the median (MB2's gate, re-checked here). Prints r(M) per mille from the GPU maxima
         (MR-D15), the values the shipped header takes for this card (MR7 takes the per-M maximum across certified cards).
-  10.5  python3 mr4_box.py canon105 TABLE.csv [--margin=150] [--spans=3,5,6,5,2]
+  10.5  python3 mr4_box.py canon105 TABLE.csv [--margin=150] [--spans=3,5,6,5,2]   RETIRED at MRX (prints RETIRED)
         Canonical over B2's spans, red if not faster: the M-row frames are >= 1.17's one-row Canonical frames at the default
         budget (one row per frame: sum of spans). C18: frames are decided from the configuration alone, so they follow from
         the measured table: per span, chunks of up to M_max rows (the chooser of §5.1: the M in 1..8 maximizing M / D(M),
@@ -185,7 +185,9 @@ def main(argv):
                 margin = int(a.split("=", 1)[1])
             elif a.startswith("--spans="):
                 spans = [int(x) for x in a.split("=", 1)[1].split(",")]
-        return canon105(argv[2], margin, spans)
+        # MRX (E-11, ruling 22): RETIRED. There are no Canonical frames to price; re-points to Exact's with MR6.
+        print("RETIRED 10.5 Canonical (MRX, red-suite-mrx.md): re-points to Exact's frames with MR6")
+        return 0
     sys.exit(__doc__)
 
 

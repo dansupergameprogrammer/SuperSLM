@@ -7,7 +7,7 @@
 #   --out   default <repo>/out/mr4
 #   --base  1.17's revision 8.3 compares against (default MR_BASE_TAG, else the merge base with origin/claude/sfd-gpu-1p17,
 #           else v1.17.0)
-#   --only  census | contract | cells | c83 | table | sfdg | mutants   (default: census,contract,cells,c83,table,sfdg)
+#   --only  census | contract | cells | c83 | table | sfdg | mutants   (default: census,cells,c83,table,sfdg; contract RETIRED)
 #   --fixtures-only  make the fixtures below and exit (mr4_mutants.sh uses it)
 # Fixtures: all three in <out>/fixtures (MR4_FIXTURES overrides), made when absent, so a fresh clone with no out/ needs
 # nothing: F-SFD (tools/gen_schema_fast_decode_fixture.py), fsfd_refuse (mr4_fixtures.py), and pkv_def.sslm (2.3's
@@ -17,7 +17,7 @@
 # Legs (each printed PASS or FAIL; exit 0 only when every leg run passes):
 #   census    tests/ci/check_gpu_status_site_census.py: every status and catch site in src/gpu is in te425's list.
 #   contract  gpu_1p0.h admits SCHEMA_FORCED and FIRST_PREWALKED (neither still marked a reserved bad spec).
-#   cells     mr4_cells.exe: 2.3, 7.9, 8.10 (MR4_CELLS=2.3 runs a subset).
+#   cells     mr4_cells.exe: 7.9, 4.6j, 4.6e, 4.6f, n1 (MR4_CELLS=7.9 runs a subset; 2.3, 8.10, s1 retired at MRX).
 #   c83       8.3: mr4_83_canon.exe built from 1.17's tree (--base) and from the branch; the canonical loop's lines (tokens,
 #             blob, walk, ready flag, context, at chunk budgets 1..8 and 64, dedicated and pooled, four schemas) are equal,
 #             every budget gives the same line within a binary, and potion_shop_order's stream is the CPU's pinned one.
@@ -27,6 +27,7 @@
 #             branch, each run under Wine on F-SFD. Graded: the branch's output equals the base binary's line for line
 #             (Wine noise and the per-run durations removed). Not a pass/fail claim on the cells, which are box-only:
 #             some fail on the base itself under Wine (review N3), and must fail the same way on the branch.
+#             MRX re-baseline: the jump-driving cells' divergence must equal mr4_sfdg_mrx_<base>.diff exactly.
 #   mutants   MX16 (mr4_mutants.sh).
 # MRX (E-11, ruling 20), marked, not deleted (red-suite-mrx.md): the contract leg RETIRES (it requires
 # SSLM_GPU_ROWS_SCHEMA_FORCED, which MRX removes: mrx_cpu.sh's header leg requires the opposite); c83 RE-POINTS to an
@@ -42,7 +43,7 @@ WINE_GPU_SOURCED=1 . "$REPO/tools/cloud_gpu/wine_gpu.sh"
 OUT="$REPO/out/mr4"
 JOBS=2
 RUN=1
-ONLY="census,contract,cells,c83,table,sfdg"
+ONLY="census,cells,c83,table,sfdg"  # MRX (ruling 22): contract RETIRED from the defaults
 BASE="${MR_BASE_TAG:-}"
 for a in "$@"; do
 	case "$a" in
@@ -218,12 +219,22 @@ if want sfdg; then
 		ok=1
 		sfdg_run "$BT" "$OUT/sfdg/base" "" "$OUT/sfdg/base.txt" || ok=0
 		sfdg_run "$REPO" "$OUT/sfdg/branch" wide "$OUT/sfdg/branch.txt" || ok=0
-		if [ $ok = 1 ] && ! diff -q "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" >/dev/null; then
-			ok=0; echo "    sfdg: the branch's output differs from 1.17's ($(diff "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" | grep -c '^>') lines):"
-			{ diff "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" | head -12 | sed 's/^/      /'; } || true
+		# MRX (E-11, ruling 20): re-baselined. NULL options now mean Exact, which the GPU refuses until MR5, so the
+		# cells that drive the jump verb (G2.1, G7.1, G9.1, G11.1, G12.1-G12.3/G12.8, G12.6, G12.7, G12.10) diverge from
+		# 1.17's by exactly the lines in mr4_sfdg_mrx_<base>.diff (`diff base branch`, recorded at MRX against ff55ae99).
+		# The leg grades that the divergence is exactly that file, line for line, and that every other line is equal.
+		SFDG_EXPECT="$HERE/mr4_sfdg_mrx_$(git rev-parse --short=8 "$BASE").diff"
+		if [ $ok = 1 ]; then
+			diff "$OUT/sfdg/base.txt" "$OUT/sfdg/branch.txt" >"$OUT/sfdg/diff.txt" || true
+			if [ -f "$SFDG_EXPECT" ] && cmp -s "$OUT/sfdg/diff.txt" "$SFDG_EXPECT"; then
+				echo "    sfdg: the branch differs from 1.17's by exactly MRX's recorded $(grep -c '^>' "$SFDG_EXPECT") lines ($(basename "$SFDG_EXPECT"))"
+			elif [ -s "$OUT/sfdg/diff.txt" ]; then
+				ok=0; echo "    sfdg: the branch's divergence from 1.17's is not MRX's recorded one ($(grep -c '^>' "$OUT/sfdg/diff.txt") lines; $SFDG_EXPECT):"
+				{ diff "$SFDG_EXPECT" "$OUT/sfdg/diff.txt" 2>&1 | head -12 | sed 's/^/      /'; } || true
+			fi
 		fi
 		awk '/^== /{c=$2} /^exit /{printf "    %-22s exit %s\n", c, $2}' "$OUT/sfdg/branch.txt"  # both binaries: the same
-		if [ $ok = 1 ]; then echo "PASS sfdg (1.17's 15 SFD-GPU cells: the branch's output equals $(git rev-parse --short=8 "$BASE")'s line for line)"
+		if [ $ok = 1 ]; then echo "PASS sfdg (1.17's 15 SFD-GPU cells: the branch's output equals $(git rev-parse --short=8 "$BASE")'s line for line, but for MRX's recorded divergence)"
 		else echo "FAIL sfdg ($OUT/sfdg/*.txt)"; FAILED+=(sfdg); fi
 	fi
 fi
