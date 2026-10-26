@@ -71,7 +71,8 @@ FLAGS="-std=c++20 -O2 -Iinclude -Isrc -Isrc/gpu -Itests -Itests/multirow-gpu -DN
 F4="${MR4_FIXTURES:-$OUT/fixtures}"
 fixtures4() {
 	mkdir -p "$F4"
-	[ -f "$F4/fsfd.sslm" ] || python3 tools/gen_schema_fast_decode_fixture.py "$F4" >/dev/null
+	# --untied also writes fsfd_untied.sslm, which sfdg's G6 reads (ruling 33 S5); fsfd.sslm is the same either way.
+	[ -f "$F4/fsfd.sslm" ] && [ -f "$F4/fsfd_untied.sslm" ] || python3 tools/gen_schema_fast_decode_fixture.py "$F4" --untied >/dev/null
 	[ -f "$F4/fsfd_refuse.sslm" ] && [ "$F4/fsfd_refuse.sslm" -nt "$HERE/mr4_fixtures.py" ] || python3 "$HERE/mr4_fixtures.py" "$F4" >/dev/null
 	# pkv_def (2.3's no-table fixture): mr_lib's fixtures() into F4 itself, named as its argument -- copied from
 	# MR_FIXTURES or the MR1 smoke's directory when there, else generated (tools/gen_paged_kv_fixture.py). It used to
@@ -190,6 +191,8 @@ fi
 # ------------------------------------------------------------------------------------------------ 1.17's SFD-GPU cells
 SFDG_CELLS="sfdg_smoke sfdg_cell_g0_1 sfdg_cell_g2_1 sfdg_cell_g12_4 sfdg_cell_g12_5 sfdg_cell_g5_1 sfdg_cell_g6 sfdg_cell_g8_1
 sfdg_cell_g7_1 sfdg_cell_g9_1 sfdg_cell_g11_1 sfdg_cell_g12_verb sfdg_cell_g12_6 sfdg_cell_g12_7 sfdg_cell_g12_10"
+# A path as a literal sed pattern (between | delimiters): the log carries no absolute path (ruling 33 S5).
+sed_lit() { printf '%s' "$1" | sed 's/[][|.*^$\\]/\\&/g'; }
 # sfdg_run TREE DIR WIDE LOG: build the 15 cells from TREE into DIR (their own mingw script; it supplies its own D3D12
 # stand-in, so not through mingw_cxx.sh), stage the shaders and DLLs, and run each on F-SFD, all output into LOG.
 sfdg_run() {
@@ -208,7 +211,8 @@ sfdg_run() {
 		set +e
 		(cd "$dir" && WINEPREFIX="$WINEPREFIX-sfdg" timeout 2400 "$WINE" "./$c.exe" --fixture-dir="$F4") 2>/dev/null |
 			tr -d '\r' | grep -vE '^(wine|fixme|err:|warn:)' |
-			sed -E 's/[(]?[0-9]+([.][0-9]+)? ?(ms|s)[)]?$/<t>/; s/ [0-9]+([.][0-9]+)? ?ms\b/ <t>/g' >>"$log"
+			sed -E 's/[(]?[0-9]+([.][0-9]+)? ?(ms|s)[)]?$/<t>/; s/ [0-9]+([.][0-9]+)? ?ms\b/ <t>/g' |
+			sed "s|$(sed_lit "$F4")|<fixtures>|g; s|$(sed_lit "$tree")|<tree>|g" >>"$log"
 		rc=${PIPESTATUS[0]}
 		set -e
 		echo "exit $rc" >>"$log"

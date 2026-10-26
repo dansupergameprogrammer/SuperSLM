@@ -9,20 +9,31 @@
 #   MX24  the Exact dead end leaves ready_for_logits clear                                                 -> 7.17
 #   MXK6  the jump no longer restores last_rows_committed (mr4_cells; ruling 25: on a green n1)            -> n1
 #   XG4a  the rejected rows' dedicated mirror rows are not restored (the mirror copy runs over all M rows) -> gx.2
-#   XG4b  the rejected rows' device K/V is not restored: RECORDED, not run (needs S-GDEVROW, or the builder's
-#         equivalence finding on G1-X's first task, SFD plan XG4b)
+#   XG4b  the rejected rows' device K/V is not restored: run as KM1 (ruling 33: gx.16 reads the device K/V whole)
 #   XG5   the GPU reads back the final codes of the wrong row (row M - 1 instead of a - 1)                 -> gx.1
 #   XG6   the GPU keeps the pass's counter totals (MX23's edit, graded on the jump's cell)                 -> gx.2
 #   XG7   the GPU bridge embeds a hostile draft token                                                      -> gx.5
 #   XG12  Exact mode sets or clears the prefill snapshot                                                   -> gx.12
 #   XG13  the check runs after every sub-chunk is recorded (rows past a mismatch computed)                 -> gx.13
 #   XG17  the GPU leaves rejected rows' pages mapped (the close's unmap skipped)                            -> gx.2
-#   XG18  the GPU rollback clears `dirty`                                                                  -> gx.2
+#   XG18  the GPU rollback clears `dirty` (RowsRollbackAndClose's unmap only; ruling 33)                   -> gx.2
+# The code review's mutants (code-review/poirot-mr5.md, KM), graduated by ruling 33 with the cells that kill them:
+#   KM1   the Exact commit does not put the rejected rows' device K/V back (decision (b); XG4b's edit)     -> gx.16
+#   KM2   the rollback does not put the chunk's device K/V back (graded on the jump's pass rollback; the     -> gx.16
+#         abandon's rollback is gx.18, red on the engine: the abandon skips EntrySubmitGuard, red-suite-mr5.md)
+#   KM19  the first slice's device K/V snapshot is not taken                                                -> gx.16
+#   KM3   the widened logits stage: every row finishes on row 0's logits                                    -> gx.14
+#   KM18  the widened logits stage uploads row 0's codes for every row                                      -> gx.14
+#   KM22  RunDeviceLogitsRows always returns DEVICE_LOST                                                    -> gx.14
+#   KM5   a mismatch on a pass's last row does not stop the jump                                            -> gx.13
+#   KM8   the EXACT_DRAFT guard-refusal close leaves the walk before d_j                                    -> gx.17
+#   KM9   the trailing one-row pass sets the walk from the row before                                       -> gx.15
+#   KM12  embed_rows does not invalidate rows_produced                                                      -> 2.2
 #   XG14  RETIRED (ruling 26 Q3: Canonical is removed, so no draft table learns from a canonical generation)
 #   XG21  DEFERRED with the GPU draft table (ruling 26 Q3)
 # The sites: MX19, MX23, XG4a, XG5, XG6 and XG17 are lines of RowsCommitPrefix (src/gpu/gpu_1p0.cpp), the close the plan
 # says Exact's CommitPrefix(a, a - 1) reuses (§3.5, §4.7); one edit here if MR5's Exact close is a function of its own.
-# MX24 (ExactApplyFinish), XG7, XG12, XG13 (JumpExactInternal) and XG18 (RowsUnmapTailTo): the sites the builder named
+# MX24 (ExactApplyFinish), XG7, XG12, XG13 (JumpExactInternal) and XG18 (RowsRollbackAndClose): the sites the builder named
 # in build-mr5.md at 8a0ec5e9 (ruling 28 Q3). The RowsCommitPrefix anchors still match there: the Exact close calls it.
 # A mutant that crashes the cells (no verdict line) counts as red.
 set -euo pipefail
@@ -38,7 +49,7 @@ for a in "$@"; do
 		--out=*) OUT="${a#--out=}" ;;
 		--jobs=*) JOBS="${a#--jobs=}" ;;
 		--only=*) ONLY="${a#--only=}" ;;
-		*) sed -n '2,27p' "$0"; exit 2 ;;
+		*) sed -n '2,38p' "$0"; exit 2 ;;
 	esac
 done
 cd "$REPO"
@@ -48,7 +59,9 @@ F4="${MR4_FIXTURES:-$TOP/mr4/fixtures}"
 bash "$HERE/mr5_wine.sh" --out="$TOP" --only=cells --build-only --jobs="$JOBS" >/dev/null
 bash "$HERE/mr4_wine.sh" --out="$TOP/mr4" --only=cells --build-only --jobs="$JOBS" >/dev/null
 MR4_FIXTURES="$F4" bash "$HERE/mr4_wine.sh" --out="$TOP/mr4" --fixtures-only >/dev/null || { echo "mutants: FAIL (fixtures in $F4)"; exit 1; }
-[ -f "$F5/fsfd.sslm" ] && [ -f "$F5/fsfd_ref.txt" ] || python3 tools/gen_schema_fast_decode_fixture.py "$F5" >/dev/null
+[ -f "$F5/fsfd.sslm" ] && [ -f "$F5/fsfd_ref.txt" ] && [ -f "$F5/fsfd_untied.sslm" ] ||
+	python3 tools/gen_schema_fast_decode_fixture.py "$F5" --untied >/dev/null
+[ -f "$F5/fsfd_refuse.sslm" ] || python3 "$HERE/mr4_fixtures.py" "$F5" >/dev/null
 RETIRED=",XG14,XG21,XG4b,"
 want() {
 	case "$RETIRED" in *",$1,"*) return 1 ;; esac
@@ -165,10 +178,30 @@ if want XG13; then host_mutant XG13 mr5 $G 1 '^\s*if \(seq->exact_pass_stop\) br
 # floor is its entry length), so the site is RowsCommitPrefix's unmap again.
 if want XG17; then host_mutant XG17 mr5 $G 1 '^(\s*)status = RowsUnmapTailTo\(seq, std::max\(cover, c\.entry\.holder_mapped\)\);' \
 	'\1status = SSLM_OK; (void)cover;  // XG17: rejected rows stay mapped' && must_red XG17 mr5 gx.2; fi
-if want XG18; then host_mutant XG18 mr5 $G 1 '^(\s*)(const superslm::kv_pages::PageStatus ps = superslm::kv_pages::HolderUnmapTail\(seq->holder, keep\);)' \
-	'\1for (uint32_t i = keep; i < superslm::kv_pages::HolderMapped(seq->holder); ++i) seq->holder->pool->dirty[seq->holder->table[i]] = 0;  // XG18\n\1\2' &&
+# XG18 (ruling 33): the rollback's unmap only (RowsRollbackAndClose), not every RowsUnmapTailTo; gx.2's rolled-back
+# page crossing grades it.
+if want XG18; then host_mutant XG18 mr5 $G 1 '^(\s*)(const SslmGpuStatus unmap = RowsUnmapTailTo\(seq, e\.holder_mapped\);)' \
+	'\1if (seq->holder != nullptr)\n\1\tfor (uint32_t i = e.holder_mapped; i < superslm::kv_pages::HolderMapped(seq->holder); ++i) seq->holder->pool->dirty[seq->holder->table[i]] = 0;  // XG18\n\1\2' &&
 	must_red XG18 mr5 gx.2; fi
-echo "    mutant XG4b: RECORDED, not run (S-GDEVROW or the builder's equivalence finding); XG14: RETIRED (ruling 26 Q3); XG21: DEFERRED (ruling 26 Q3)"
+# The KM mutants (ruling 33).
+if want KM1; then host_mutant KM1 mr5 $G 1 'if \(!RowsRestoreDeviceKvAbove\(seq, f \+ 1\)\) \{' \
+	'if (false /* KM1 */ && !RowsRestoreDeviceKvAbove(seq, f + 1)) {' && must_red KM1 mr5 gx.16; fi
+if want KM2; then host_mutant KM2 mr5 $G 1 '\(void\)RowsRestoreDeviceKvAbove\(seq, 0\);' '(void)0; /* KM2 */' && must_red KM2 mr5 gx.16; fi
+if want KM19; then host_mutant KM19 mr5 $G 1 'if \(first_slice && \(c\.kind == SSLM_GPU_ROWS_EXACT_DRAFT \|\| c\.kind == kRowsKindExactPass\)\) \{' \
+	'if (false /* KM19 */ && first_slice && (c.kind == SSLM_GPU_ROWS_EXACT_DRAFT || c.kind == kRowsKindExactPass)) {' && must_red KM19 mr5 gx.16; fi
+if want KM3; then host_mutant KM3 mr5 $G 1 'device_stage \? wide\.data\(\) \+ static_cast<size_t>\(r\) \* V : nullptr' \
+	'device_stage ? wide.data() /* KM3 */ : nullptr' && must_red KM3 mr5 gx.14; fi
+if want KM18; then host_mutant KM18 mr5 $G 1 'b\.rows_x_upload\.Get\(\), x_bytes \* r, x_bytes' 'b.rows_x_upload.Get(), 0 /* KM18 */, x_bytes' &&
+	must_red KM18 mr5 gx.14; fi
+if want KM22; then host_mutant KM22 mr5 $G 1 '^(\s*)(DeviceLogitsSeamScope scope\(/\*bundle_creation=\*/false\);\n\s*superslm_gpu::harness::Device& dev = ctx->device;\n\s*\*out_gpu_ms = 0\.0;)' \
+	'\1\2\n\1if (rows > 0) return SSLM_DEVICE_LOST;  // KM22' && must_red KM22 mr5 gx.14; fi
+if want KM5; then host_mutant KM5 mr5 $G 1 'seq->exact_pass_stop = finished \|\| a <' 'seq->exact_pass_stop = /* KM5 */ a <' && must_red KM5 mr5 gx.13; fi
+if want KM8; then host_mutant KM8 mr5 $G 1 'const uint32_t walk_j = c\.walk_after\[full\];' \
+	'const uint32_t walk_j = c.walk_after[full > 0 ? full - 1 : 0];  // KM8' && must_red KM8 mr5 gx.17; fi
+if want KM9; then host_mutant KM9 mr5 $G 1 'seq->dfa_walk_state = walk_after\[static_cast<size_t>\(off\)\];' \
+	'seq->dfa_walk_state = walk_after[static_cast<size_t>(off) - 1];  // KM9' && must_red KM9 mr5 gx.15; fi
+if want KM12; then host_mutant KM12 mr5 $G 1 'seq->rows_produced_valid = false;  // MR5: a new chunk' '(void)0;  // KM12' && must_red KM12 mr5 2.2; fi
+echo "    mutant XG4b: run as KM1 (ruling 33); XG14: RETIRED (ruling 26 Q3); XG21: DEFERRED (ruling 26 Q3)"
 if [ ${#FAILED[@]} -eq 0 ]; then echo "mutants: PASS"; exit 0; fi
 echo "mutants: FAIL (${FAILED[*]})"
 exit 1

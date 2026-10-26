@@ -319,8 +319,8 @@ void Cell_12_3(GRig& rig, const std::vector<int32_t>& prompt) {
 				const JumpOut jw = Jump(rig, b, wrong, 64);
 				Compose(rig, bw, wrong, want);
 				CHECK_MSG(jw.st == GS::SSLM_OK && jw.forced == want && Observe(rig, b.h) == Observe(rig, bw.h),
-				          "[G12.3] a wrong pending token (%d, not %d) is not embedded as given: %s, kept %s; the chain %s, Off's "
-				          "next after it %s, so Exact keeps %s", wrong, t, Name(jw.st), Str(jw.forced).c_str(), Str(q.ids).c_str(),
+				          "[G12.3] a wrong pending token (%d, not %d), embedded as given, did not give Exact's keep: %s, kept %s; "
+				          "the chain %s, Off's next after it %s, so Exact keeps %s", wrong, t, Name(jw.st), Str(jw.forced).c_str(), Str(q.ids).c_str(),
 				          Str(offw).c_str(), Str(want).c_str());
 			}
 			CHECK_MSG(sslm_gpu_seq_embed_token(rig.ctx(), c.h, wrong) == GS::SSLM_OK, "[G12.3] embed_token");

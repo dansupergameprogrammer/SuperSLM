@@ -8,12 +8,12 @@
 #   --base   1.17's revision the c83 leg compares Off against (passed to mr4_wine.sh; its default otherwise)
 #   --only   census | cells | green | box | mutants   (default: census,cells,green,box; mutants is mr5_mutants.sh)
 #   --clean  on exit, remove the build trees and the Wine prefixes (the logs stay)
-# Fixtures: F-SFD and its independent reference fsfd_ref.txt (tools/gen_schema_fast_decode_fixture.py) in <out>/fixtures
-# (MR5_FIXTURES overrides), made when absent.
+# Fixtures: F-SFD, its independent reference fsfd_ref.txt and fsfd_untied.sslm (tools/gen_schema_fast_decode_fixture.py
+# --untied), and fsfd_refuse.sslm (mr4_fixtures.py) in <out>/fixtures (MR5_FIXTURES overrides), made when absent.
 #
 # Legs (each printed PASS or FAIL; exit 0 only when every leg run passes):
 #   census   tests/ci/check_gpu_status_site_census.py: every status and catch site in src/gpu is in te425's list.
-#   cells    mr5_cells.exe: 2.2, 2.3x, 7.10, 7.11e, 7.17, 7.18, 7.19, 8.4, gx.1, gx.2, gx.4-gx.13 (MR5_CELLS=... runs a
+#   cells    mr5_cells.exe: 2.2, 2.3x, 7.10, 7.11e, 7.17, 7.18, 7.19, 8.4, gx.1, gx.2, gx.4-gx.18 (MR5_CELLS=... runs a
 #            subset). Every name mr5_entry.h lists that src/ and include/ do not define yet is linked from
 #            mr5_red_stubs.cpp, so the suite builds and runs red today; the leg passes -DMR5_HAVE_<NAME> for each one
 #            the library defines (grep below), so a stub never sits next to the real definition.
@@ -71,8 +71,14 @@ FLAGS="-std=c++20 -O2 -Iinclude -Isrc -Isrc/gpu -Itests -Itests/multirow-gpu -DN
 F5="${MR5_FIXTURES:-$OUT/fixtures}"
 fixtures5() {
 	mkdir -p "$F5"
-	[ -f "$F5/fsfd.sslm" ] && [ -f "$F5/fsfd_ref.txt" ] || python3 tools/gen_schema_fast_decode_fixture.py "$F5" >/dev/null
-	[ -f "$F5/fsfd.sslm" ] && [ -f "$F5/fsfd_ref.txt" ] || { echo "FAIL fixtures: no fsfd.sslm / fsfd_ref.txt in $F5"; return 1; }
+	# --untied also writes fsfd_untied.sslm (gx.14: the widened logits stage on a bound handle); fsfd.sslm is the same.
+	[ -f "$F5/fsfd.sslm" ] && [ -f "$F5/fsfd_ref.txt" ] && [ -f "$F5/fsfd_untied.sslm" ] ||
+		python3 tools/gen_schema_fast_decode_fixture.py "$F5" --untied >/dev/null
+	# fsfd_refuse.sslm (gx.17: the guard-refusal close), mr4_fixtures.py's patch of fsfd.sslm.
+	[ -f "$F5/fsfd_refuse.sslm" ] || python3 "$HERE/mr4_fixtures.py" "$F5" >/dev/null
+	for f in fsfd.sslm fsfd_ref.txt fsfd_untied.sslm fsfd_refuse.sslm; do
+		[ -f "$F5/$f" ] || { echo "FAIL fixtures: no $f in $F5"; return 1; }
+	done
 }
 
 # The MR5 names src/ already defines: -DMR5_HAVE_<NAME> for each (mr5_entry.h, mr5_red_stubs.cpp).

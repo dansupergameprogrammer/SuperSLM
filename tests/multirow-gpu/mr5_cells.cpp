@@ -16,7 +16,8 @@
 //
 // Cells (red until MR5 builds Exact; mr5_entry.h names the verb and seams the library lacks today):
 //   2.2   sslm_gpu_seq_rows_produced: null arguments, BUSY with a chunk open, the produced token after an Exact
-//         close, SEQUENCE_REJECTED after a PROMPT close, an abandon, a reset, a restore and on a fresh handle.
+//         close, SEQUENCE_REJECTED after a PROMPT close, an abandon, a reset, a restore, on a fresh handle, and after
+//         the next embed_rows (ruling 33 S4; KM12).
 //   2.3x  EXACT_DRAFT with an illegal draft at row k (a special id, never legal under a schema) admits k (k 1..M-1);
 //         a token out of the vocabulary is TOKEN_ID_OUT_OF_RANGE; headroom caps admission; flag 0x1 is a bad spec.
 //   7.10  The Exact commit's counters (S-GSATROW): row 1 saturates and a = 3, counters = entry + the deltas of rows
@@ -36,8 +37,8 @@
 //         every close; M 2, 4, 8; one-layer and full slices; dedicated and pooled; four schemas.
 //   gx.1  The jump verb (NULL options) in a host loop gives GPU Off's stream, and both equal the CPU's Off stream.
 //   gx.2  After every decode step of that loop the blob equals Off's (SLM5, SLM6) and the pooled table's mapped count
-//         equals Off's; a rejected page crossing leaves a dirty page that release poisons (0xCD; XG17, XG18); a
-//         saturating kept row's counters (XG6).
+//         equals Off's; a rejected page crossing leaves a dirty page that release poisons (0xCD; XG17), and so does a
+//         rolled-back one (XG18, the rollback's unmap); a saturating kept row's counters (XG6).
 //   gx.4  The verb keeps no reference to the draft; exact loop, reset, rebind, exact loop equals two fresh Off runs.
 //   gx.5  Malformed options (KV_BUFFER_MISMATCH, nothing changed) and hostile drafts (out of range, -1, a special id
 //         at row k): kept <= k, and the run equals Off (XG7).
@@ -54,6 +55,19 @@
 //   gx.12 The prefill snapshot reads the same after every Exact call (XG12).
 //   gx.13 A mismatch in the first pass: no later pass runs (S-GEXACTPASSES; XG13).
 //         Ruling 28 Q2: XG13 is graded on the legal-wrong-draft case (10..15 drafts, 2 passes; passes == 1).
+//         Ruling 33 S2: the accepted case's bytes equal Off's after a decode; a legal wrong draft on the first pass's
+//         last row (kept 7, 1 pass; KM5) and on the second pass's row 1 (kept 9, 2 passes), each equal to Off after.
+//   gx.14 Ruling 33 M1: an Exact close that takes the device head (unbound on F-SFD; fsfd_untied bound) runs the
+//         widened logits stage once over its M rows (LastLogitsStageTiming); its bytes equal Off's (KM3, KM18, KM22).
+//   gx.15 Ruling 33 S3: the jump at budgets 9, 10 and 17 (the trailing one-row pass), every draft kept, equals Off (KM9).
+//   gx.16 Ruling 33 S1: decision (b): the device K/V, read whole, equals an Off twin world's after an Exact close that
+//         rejects rows and after a jump's second pass is rolled back (S-GREADBACK), on a canary background (KM1, KM2,
+//         KM19).
+//   gx.17 Ruling 33 S4: the EXACT_DRAFT guard-refusal close at row j >= 1 (fsfd_refuse): the refusal's status,
+//         last_rows_committed j, the walk past d_j as the Off twin's after j decodes, and the walk, context, ready word
+//         and bytes of the Off twin after its own refused decode of o_j (KM8).
+//   gx.18 Ruling 33 S1: the abandon's rollback after a slice puts every row's device K/V back. RED on MR5: the
+//         abandon verb skips EntrySubmitGuard, so the restore throws and the rollback swallows it (engine finding).
 //
 // Usage: mr5_cells.exe --fixtures=DIR [--cells=2.2,7.17,...] [--show=N]
 #ifndef WIN32_LEAN_AND_MEAN
@@ -84,6 +98,9 @@
 
 // The engine's claim seam (mr3_entry.h has the contract): the hook runs on the thread that takes a handle's claim.
 void SslmGpuSeqClaimHookForTest(void (*hook)(SslmGpuSequenceHandle* seq, void* user), void* user) noexcept;
+// mr2_entry.h's pool-wide device K/V read-back (gx.16): the whole buffer, rows beyond the committed length included.
+SslmGpuStatus sslm_gpu_test_only_mr2_device_kv(SslmGpuContext* ctx, SslmGpuKvPoolHandle* pool, SslmGpuSequenceHandle* seq,
+                                               std::vector<uint8_t>* out) noexcept;
 
 namespace {
 using S = SslmGpuStatus;
@@ -673,6 +690,13 @@ void Cell22(Fsfd& fx) {
 		StatusIs(e.close, S::SSLM_OK, base + ": the close");
 		StatusIs(e.prod, S::SSLM_OK, base + ": rows_produced after an Exact close");
 		Check(e.tok == ht.toks[4], F("%s: rows_produced %d, Off's next %d", base.c_str(), e.tok, ht.toks[4]));
+		// The next embed invalidates it (ruling 33 S4): a one-row EXACT_DRAFT chunk opened on the produced token, then
+		// abandoned, leaves no close to report.
+		StatusIs(EmbedRows(w, s, kExactDraft, {e.tok}, 0, &adm), S::SSLM_OK, base + ": the next embed_rows");
+		StatusIs(sslm_gpu_seq_rows_abandon(w.ctx, s), S::SSLM_OK, base + ": the next chunk abandoned");
+		tok = -77;
+		StatusIs(sslm_gpu_seq_rows_produced(s, &tok), S::SSLM_SEQUENCE_REJECTED, base + ": after the next embed (and its abandon)");
+		Check(tok == -77, base + ": after the next embed: out_token written");
 		// A restore has no close.
 		const std::vector<uint8_t> b = Blob(w, s, base);
 		SslmGpuSequenceHandle* r = nullptr;
@@ -1276,6 +1300,40 @@ void CellGx2(Fsfd& fx) {
 		const int cs = CountPoisonPages(ps, pages), ct = CountPoisonPages(pt, pages);
 		Check(cs > ct, F("%s: 0xCD pages after release %d, Off's pool %d: the rejected rows' page was not kept dirty (XG18)", tag.c_str(), cs, ct));
 	}
+	// The rollback's page crossing (XG18 as the plan names it, ruling 33): an EXACT_DRAFT chunk whose rows cross into
+	// the next page, one slice (the page is mapped and layer 0 writes it), then abandoned. The rollback unmaps the page
+	// back to the holder's reserve and must keep it dirty: mapped pages equal Off's, and a release poisons one more
+	// page than Off's pool.
+	{
+		const std::string tag = "pooled, a rolled-back page crossing";
+		World w(m);
+		SslmGpuKvPoolHandle *ps = nullptr, *pt = nullptr;
+		SslmGpuSequenceHandle* s = w.Seq(true, 200, nullptr, &ps);
+		SslmGpuSequenceHandle* t = w.Seq(true, 200, nullptr, &pt);
+		SslmGpuKvPoolStats st{};
+		st.struct_size = sizeof st;
+		if (!s || !t || sslm_gpu_kv_pool_stats(ps, &st) != S::SSLM_OK || st.page_positions < 4) { Check(false, tag + ": pools"); return; }
+		const std::vector<int32_t> p = Prompt(static_cast<int>(st.page_positions) - 2, 904);
+		Hist hs, ht;
+		if (!Replay(w, m, s, p, 1, &hs) || !Replay(w, m, t, p, 1, &ht)) { Check(false, tag + ": history"); return; }
+		const uint32_t mapped0 = Mapped(s);
+		const std::vector<int32_t> rows = {hs.pend, 1201, 1202, 1203};
+		int32_t adm = -9;
+		StatusIs(EmbedRows(w, s, kExactDraft, rows, 0, &adm), S::SSLM_OK, tag + ": embed_rows");
+		S rs = sslm_decode_step_gpu(w.ctx, s, nullptr, m.dpl());
+		if (rs == S::SSLM_OK) rs = Ready(w, s);
+		Check(rs == S::SSLM_OK && Mapped(s) == mapped0 + 1, F("%s: the first slice %s, mapped %u, want %u", tag.c_str(), N(rs), Mapped(s), mapped0 + 1));
+		StatusIs(sslm_gpu_seq_rows_abandon(w.ctx, s), S::SSLM_OK, tag + ": abandon");
+		Check(Mapped(s) == Mapped(t), F("%s: mapped %u after the rollback, Off's %u", tag.c_str(), Mapped(s), Mapped(t)));
+		BlobEq(Blob(w, s, tag), Blob(w, t, tag), tag);
+		const uint32_t pages = st.page_count;
+		sslm_gpu_seq_release(w.ctx, s);
+		w.Forget(s);
+		sslm_gpu_seq_release(w.ctx, t);
+		w.Forget(t);
+		const int cs = CountPoisonPages(ps, pages), ct = CountPoisonPages(pt, pages);
+		Check(cs > ct, F("%s: 0xCD pages after release %d, Off's pool %d: the rolled-back page was not kept dirty (XG18)", tag.c_str(), cs, ct));
+	}
 	// A saturating KEPT row (XG6): S-GSATROW at pass row 1 of a jump that keeps it; counters and blob equal Off's.
 	for (int pooled = 0; pooled <= 1; ++pooled) {
 		const std::string tag = F("%s: a kept row saturates", pooled ? "pooled" : "dedicated");
@@ -1756,6 +1814,16 @@ void CellGx12(Fsfd& fx) {
 }
 
 // ------------------------------------------------------------------------------------------------ gx.13
+const Choice& LateChoice(const Model& m) {
+	static Choice ch;
+	static bool done = false;
+	if (!done) {
+		ch = FindChoice(m, 9, 6);
+		done = true;
+		if (ch.c >= 0) std::printf("    gx.13: late choice %s index %d: Off %d, legal wrong %d\n", ch.schema, ch.c, ch.off.toks[static_cast<size_t>(ch.c) + 1], ch.x);
+	}
+	return ch;
+}
 void CellGx13(Fsfd& fx) {
 	const Model& m = fx.m;
 	const std::vector<int32_t> p = Prompt(12, 1013);
@@ -1776,6 +1844,52 @@ void CellGx13(Fsfd& fx) {
 		Check(j.count == (wrong ? 2 : 23), F("%s: kept %d", tag.c_str(), j.count));
 		if (wrong) Check(passes == 1, F("%s: %d Exact passes ran, want 1 (no rows past the mismatch; XG13)", tag.c_str(), passes));
 		else Check(passes >= 3, F("%s: %d Exact passes ran for 24 rows, want 3 or more (passes of at most %d rows)", tag.c_str(), passes, SSLM_GPU_MAX_ROWS));
+		if (!wrong) {
+			// Ruling 33 S2: the accepted case's bytes. One decode finishes the ready row: Off's o_24, and the whole
+			// observation equals the twin's (24 decodes, o_24 in hand).
+			int32_t t = -1;
+			const S st = Dec(w, m, s, d.back(), &t);
+			Check(st == S::SSLM_OK && t == ho.toks[24], F("%s: the next decode %s %d, Off %d", tag.c_str(), N(st), t, ho.toks[24]));
+			const Obs os = Observe(w, s), oo = Observe(w, o);
+			Check(os == oo, F("%s: Exact %s; Off %s", tag.c_str(), os.Str().c_str(), oo.Str().c_str()));
+		}
+	}
+	// Ruling 33 S2: a legal wrong draft at a later row and at a pass boundary. At a choice point c (index 9 or later), the
+	// pending token is o_(c - w) and the draft is o_(c - w + 1) .. o_c, then X (legal, != o_(c + 1)) and X's legal
+	// continuation (6 more). w = 7: the mismatch is the first pass's LAST row (row 7 = o_c, checked against the next
+	// pass's first draft X), so the jump keeps 7 and stops after 1 pass (KM5); w = 9: the second pass's row 1, so it
+	// keeps 9 after 2 passes. Then one decode equals Off's o_(c + 1) and the observation equals the Off twin's.
+	{
+		const Choice& ch = LateChoice(m);
+		Check(ch.c >= 9, "no choice point at index 9 or later with a legal wrong token and a continuation of 6 (fsfd_ref.txt)");
+		if (ch.c < 9) return;
+		for (int wpos : {7, 9}) {
+			const std::string tag = F("a legal wrong draft at draft index %d (%s)", wpos, wpos == 7 ? "the first pass's last row" : "the second pass's row 1");
+			World w(m);
+			SslmGpuSequenceHandle* s = w.Seq(false, 240, ch.schema);
+			SslmGpuSequenceHandle* o = w.Seq(false, 240, ch.schema);
+			Hist hs, ho;
+			const int n = ch.c - wpos + 1;
+			if (!s || !o || !Replay(w, m, s, ch.prompt, n, &hs) || !Replay(w, m, o, ch.prompt, n, &ho)) { Check(false, tag + ": history"); continue; }
+			std::vector<int32_t> d(ch.off.toks.begin() + n, ch.off.toks.begin() + ch.c + 1);
+			d.push_back(ch.x);
+			for (size_t i = 0; i < ch.tail.size() && i < 6; ++i) d.push_back(ch.tail[i]);
+			const int32_t budget = 1 + static_cast<int32_t>(d.size());
+			GpuExactPassLogResetForTest();
+			const Jump j = DoJump(w, s, hs.pend, budget, SSLM_JUMP_EXACT, d.data(), static_cast<int32_t>(d.size()));
+			const int32_t passes = GpuExactPassCountForTest();
+			const int32_t want_passes = wpos == 7 ? 1 : 2;
+			StatusIs(j.st, S::SSLM_OK, tag);
+			Check(j.count == wpos, F("%s: kept %d, want %d", tag.c_str(), j.count, wpos));
+			Check(passes == want_passes, F("%s: %d Exact passes ran for %d rows, want %d (no pass after the mismatch)", tag.c_str(), passes, budget, want_passes));
+			int32_t t = -1;
+			const S st = Dec(w, m, s, j.count > 0 ? j.out[static_cast<size_t>(j.count) - 1] : hs.pend, &t);
+			const int32_t off_tok = TwinDecodes(w, m, o, &ho, wpos + 1);
+			Check(st == S::SSLM_OK && t == off_tok && off_tok == ch.off.toks[static_cast<size_t>(ch.c) + 1],
+			      F("%s: the next decode %s %d, Off %d", tag.c_str(), N(st), t, off_tok));
+			const Obs os = Observe(w, s), oo = Observe(w, o);
+			Check(os == oo, F("%s: Exact %s; Off %s", tag.c_str(), os.Str().c_str(), oo.Str().c_str()));
+		}
 	}
 	// Ruling 28 Q2: a legal, wrong draft that the draft walk admits whole. A special id cuts the draft before the pass
 	// (the case above), so XG13 needs this one: at a choice point, draft a legal token X != Off's next token and X's
@@ -1813,6 +1927,361 @@ void CellGx13(Fsfd& fx) {
 	}
 }
 
+// ------------------------------------------------------------------------------------------------ ruling 33
+// fsfd_untied.sslm (gen_schema_fast_decode_fixture.py --untied) and fsfd_refuse.sslm (mr4_fixtures.py), on first use.
+const Model* Aux(const char* file) {
+	static std::map<std::string, std::unique_ptr<Model>> loaded;
+	std::unique_ptr<Model>& p = loaded[file];
+	if (!p) {
+		p = std::make_unique<Model>();
+		if (!p->Load(g_opt.fixtures + "/" + file)) {
+			Check(false, F("%s/%s did not load", g_opt.fixtures.c_str(), file));
+			p.reset();
+			return nullptr;
+		}
+	}
+	return p.get();
+}
+
+// gx.14 (M1): an Exact close that takes the device head runs the widened logits stage (RunDeviceLogitsRows) once,
+// over its M rows, and the bytes equal Off's. F-SFD is tied, so a bound handle finishes on the host's legal rows; the
+// stage runs on an UNBOUND handle (any draft is admitted) and on fsfd_untied BOUND. Per close: the stage counter
+// advances by exactly 1 with rows == M; last_rows_committed, rows_produced, the whole observation and the next
+// decode equal the Off twin's. M = 2, 4, 8; every draft right, or the first wrong draft at row 1 or row M - 1
+// (unbound), or a legal wrong draft after 0 or 2 right rows (bound, fsfd_ref.txt's legal tokens); dedicated and pooled.
+struct StageCase {
+	std::string tag;
+	std::vector<int32_t> rows;
+	int want_a = 0;
+};
+void StageCheck(World& w, const Model& m, SslmGpuSequenceHandle* a, SslmGpuSequenceHandle* t, Hist* ht, const StageCase& c) {
+	const int M = static_cast<int>(c.rows.size());
+	const uint64_t stages0 = superslm_gpu::LastLogitsStageTiming().stages;
+	const ExOut o = RunExact(w, m, a, c.rows, m.full_budget());
+	const superslm_gpu::GpuLogitsStageTiming tm = superslm_gpu::LastLogitsStageTiming();
+	Check(o.embed == S::SSLM_OK && o.adm == M && o.close == S::SSLM_OK && o.prod == S::SSLM_OK,
+	      F("%s: embed %s admitted %d of %d, close %s, rows_produced %s", c.tag.c_str(), N(o.embed), o.adm, M, N(o.close), N(o.prod)));
+	Check(tm.stages == stages0 + 1 && tm.rows == static_cast<uint32_t>(M),
+	      F("%s: the widened logits stage ran %llu times over %u rows, want once over %d", c.tag.c_str(),
+	        (unsigned long long)(tm.stages - stages0), tm.rows, M));
+	Check(LastCommitted(a) == c.want_a, F("%s: last_rows_committed %d, want %d", c.tag.c_str(), LastCommitted(a), c.want_a));
+	const int32_t off_tok = TwinDecodes(w, m, t, ht, c.want_a);
+	Check(o.tok == off_tok, F("%s: rows_produced %d, Off %d", c.tag.c_str(), o.tok, off_tok));
+	const Obs oa = Observe(w, a), ot = Observe(w, t);
+	Check(oa == ot, F("%s: Exact %s; Off %s", c.tag.c_str(), oa.Str().c_str(), ot.Str().c_str()));
+	int32_t ta = -1, tt = -1;
+	const S sa = Dec(w, m, a, o.tok, &ta), st = Dec(w, m, t, ht->pend, &tt);
+	Check(sa == S::SSLM_OK && sa == st && ta == tt && Observe(w, a) == Observe(w, t),
+	      F("%s: the next decode %s %d, Off %s %d", c.tag.c_str(), N(sa), ta, N(st), tt));
+}
+const Choice& UntiedChoice(const Model& u) {
+	static Choice ch;
+	static bool done = false;
+	if (!done) {
+		ch = FindChoice(u, 2, 6);
+		done = true;
+	}
+	return ch;
+}
+void CellGx14(Fsfd& fx) {
+	// Unbound, F-SFD: the drafts are Off's next tokens (the twin's), one replaced by an ordinary wrong id.
+	const Model& m = fx.m;
+	for (int pooled = 0; pooled < 2; ++pooled)
+		for (int M : {2, 4, 8})
+			for (int wrong : {-1, 1, M - 1}) {
+				if (wrong == 1 && M == 2) continue;  // the same as M - 1
+				StageCase c;
+				c.tag = F("unbound %s M=%d %s", pooled ? "pooled" : "dedicated", M, wrong < 0 ? "every draft right" : F("row %d wrong", wrong).c_str());
+				World w(m);
+				if (!w.ok) { Check(false, c.tag + ": world"); continue; }
+				SslmGpuSequenceHandle* a = w.Seq(pooled != 0, 240, nullptr);
+				SslmGpuSequenceHandle* t = w.Seq(pooled != 0, 240, nullptr);
+				SslmGpuSequenceHandle* n = w.Seq(pooled != 0, 240, nullptr);
+				const std::vector<int32_t> pr = Prompt(9, 1400u + static_cast<uint32_t>(M));
+				Hist ha, ht, hn;
+				if (!a || !t || !n || !Replay(w, m, a, pr, 1, &ha) || !Replay(w, m, t, pr, 1, &ht) || !Replay(w, m, n, pr, 1, &hn)) {
+					Check(false, c.tag + ": history");
+					continue;
+				}
+				TwinDecodes(w, m, n, &hn, M);
+				c.rows = {ha.pend};
+				for (int r = 1; r < M; ++r) c.rows.push_back(hn.toks[static_cast<size_t>(r)]);
+				if (wrong > 0) c.rows[static_cast<size_t>(wrong)] = (c.rows[static_cast<size_t>(wrong)] + 1) % 20000 + 200;
+				c.want_a = wrong > 0 ? wrong : M;
+				StageCheck(w, m, a, t, &ht, c);
+			}
+	// fsfd_untied, bound: Off's own drafts, or a legal wrong token X at a choice point after 0 or 2 right rows.
+	const Model* u = Aux("fsfd_untied.sslm");
+	if (!u) return;
+	const Choice& ch = UntiedChoice(*u);
+	Check(ch.c >= 2, "fsfd_untied: no choice point (index 2 or later) with a legal wrong token and a continuation of 6");
+	if (ch.c < 2) return;
+	std::printf("    gx.14: fsfd_untied choice %s index %d: Off %d, legal wrong %d, tail %zu\n", ch.schema, ch.c,
+	            ch.off.toks[static_cast<size_t>(ch.c) + 1], ch.x, ch.tail.size());
+	for (int pooled = 0; pooled < 2; ++pooled)
+		for (int M : {2, 4, 8})
+			for (int legal_wrong = 0; legal_wrong <= 1; ++legal_wrong) {
+				StageCase c;
+				// The right rows before X: none at M = 2, two otherwise (the pending token is Off's o_(c - k)).
+				const int k = M == 2 ? 0 : 2;
+				const int start = legal_wrong ? ch.c - k : 0;
+				c.tag = F("fsfd_untied bound %s %s M=%d %s", ch.schema, pooled ? "pooled" : "dedicated", M,
+				          legal_wrong ? F("legal wrong token at row %d", k + 1).c_str() : "every draft right");
+				if (!legal_wrong && start + M >= static_cast<int>(ch.off.toks.size())) { Check(false, c.tag + ": Off stream too short"); continue; }
+				World w(*u);
+				if (!w.ok) { Check(false, c.tag + ": world"); continue; }
+				SslmGpuSequenceHandle* a = w.Seq(pooled != 0, 240, ch.schema);
+				SslmGpuSequenceHandle* t = w.Seq(pooled != 0, 240, ch.schema);
+				Hist ha, ht;
+				if (!a || !t || !Replay(w, *u, a, ch.prompt, start + 1, &ha) || !Replay(w, *u, t, ch.prompt, start + 1, &ht)) {
+					Check(false, c.tag + ": history");
+					continue;
+				}
+				if (legal_wrong) {
+					for (int r = 0; r <= k; ++r) c.rows.push_back(ch.off.toks[static_cast<size_t>(start + r)]);
+					c.rows.push_back(ch.x);
+					for (size_t i = 0; static_cast<int>(c.rows.size()) < M && i < ch.tail.size(); ++i) c.rows.push_back(ch.tail[i]);
+					c.rows.resize(static_cast<size_t>(M));
+					c.want_a = k + 1;
+				} else {
+					for (int r = 0; r < M; ++r) c.rows.push_back(ch.off.toks[static_cast<size_t>(start + r)]);
+					c.want_a = M;
+				}
+				StageCheck(w, *u, a, t, &ht, c);
+			}
+}
+
+// gx.15 (S3): the jump with Off's own next tokens as the draft at budgets 9, 10 and 17: h = 9 is a pass of 8 and the
+// trailing one-row pass (the schema-content path, its own walk bookkeeping), 10 is 8 + 2, 17 is 8 + 8 + 1. Every draft
+// kept; the pass count; one decode equals Off's next token and the observation equals the Off twin's. Bound (potion,
+// longkey), dedicated and pooled.
+void CellGx15(Fsfd& fx) {
+	const Model& m = fx.m;
+	for (const char* schema : {kPotion, kLongKey})
+		for (int pooled = 0; pooled < 2; ++pooled)
+			for (int B : {9, 10, 17}) {
+				const std::string tag = F("%s %s budget %d", schema, pooled ? "pooled" : "dedicated", B);
+				World w(m);
+				if (!w.ok) { Check(false, tag + ": world"); continue; }
+				SslmGpuSequenceHandle* a = w.Seq(pooled != 0, 240, schema);
+				SslmGpuSequenceHandle* t = w.Seq(pooled != 0, 240, schema);
+				SslmGpuSequenceHandle* n = w.Seq(pooled != 0, 240, schema);
+				const std::vector<int32_t> pr = Prompt(9, 1503u);
+				Hist ha, ht, hn;
+				if (!a || !t || !n || !Replay(w, m, a, pr, 1, &ha) || !Replay(w, m, t, pr, 1, &ht) || !Replay(w, m, n, pr, 1, &hn)) {
+					Check(false, tag + ": history");
+					continue;
+				}
+				TwinDecodes(w, m, n, &hn, B);
+				if (static_cast<int>(hn.toks.size()) < B + 1) { Check(false, tag + ": Off stream too short"); continue; }
+				const std::vector<int32_t> draft(hn.toks.begin() + 1, hn.toks.begin() + B);  // o_1 .. o_(B-1)
+				GpuExactPassLogResetForTest();
+				const Jump j = DoJump(w, a, ha.pend, B, SSLM_JUMP_EXACT, draft.data(), static_cast<int32_t>(draft.size()));
+				const int32_t passes = GpuExactPassCountForTest();
+				const int32_t want_passes = (B + 7) / 8;
+				Check(j.st == S::SSLM_OK && j.count == B - 1, F("%s: the jump %s kept %d, want %d", tag.c_str(), N(j.st), j.count, B - 1));
+				Check(passes == want_passes, F("%s: %d Exact passes, want %d", tag.c_str(), passes, want_passes));
+				Check(j.count > 0 && std::equal(draft.begin(), draft.end(), j.out.begin()), tag + ": the kept tokens are not the draft");
+				int32_t ta = -1;
+				const S sa = Dec(w, m, a, draft.back(), &ta);
+				const int32_t off_tok = TwinDecodes(w, m, t, &ht, B);
+				Check(sa == S::SSLM_OK && ta == off_tok, F("%s: the next decode %s %d, Off %d", tag.c_str(), N(sa), ta, off_tok));
+				const Obs oa = Observe(w, a), ot = Observe(w, t);
+				Check(oa == ot, F("%s: Exact %s; Off %s", tag.c_str(), oa.Str().c_str(), ot.Str().c_str()));
+			}
+}
+
+// gx.16 (S1, decision (b)): the rejected rows' DEVICE K/V is put back as the chunk's first slice found it. The device
+// buffer is read whole (sslm_gpu_test_only_mr2_device_kv, rows beyond the kept length included) and compared byte for
+// byte with an Off twin's in a second world with the same history. Each world's handle first carries a canary stream
+// (prefilled, then reset), so the rows above the prompt hold non-zero bytes the restore must put back. (1) An Exact
+// close keeping a rows of M (the commit's restore above a - 1); (2) an EXACT_DRAFT chunk abandoned after its first
+// slice (the rollback's restore of every row). Unbound (any draft admitted), dedicated and pooled.
+SslmGpuSequenceHandle* CanaryHandle(World& w, const Model& m, bool pooled, SslmGpuKvPoolHandle** pool, const char* schema = nullptr) {
+	SslmGpuSequenceHandle* s = w.Seq(pooled, 240, schema, pool);
+	if (!s) return nullptr;
+	const std::vector<int32_t> canary = Prompt(48, 1677u);
+	if (SslmGpuSeqPrefillPromptForG5Bridge(w.ctx, s, canary.data(), static_cast<int32_t>(canary.size()), m.full_budget()) != S::SSLM_OK ||
+	    sslm_gpu_seq_reset(w.ctx, s) != S::SSLM_OK)
+		return nullptr;
+	return s;
+}
+std::vector<uint8_t> DeviceKv(World& w, SslmGpuKvPoolHandle* pool, SslmGpuSequenceHandle* s, const std::string& tag) {
+	std::vector<uint8_t> kv;
+	const S st = pool ? sslm_gpu_test_only_mr2_device_kv(w.ctx, pool, nullptr, &kv) : sslm_gpu_test_only_mr2_device_kv(w.ctx, nullptr, s, &kv);
+	Check(st == S::SSLM_OK && !kv.empty(), F("%s: device K/V read-back %s (%zu bytes)", tag.c_str(), N(st), kv.size()));
+	return kv;
+}
+void DeviceKvEq(World& wa, SslmGpuKvPoolHandle* pa, SslmGpuSequenceHandle* a, World& wb, SslmGpuKvPoolHandle* pb, SslmGpuSequenceHandle* b,
+                const std::string& tag) {
+	const std::vector<uint8_t> ka = DeviceKv(wa, pa, a, tag), kb = DeviceKv(wb, pb, b, tag);
+	const long d = mr2::FirstDiff(ka, kb);
+	size_t n = 0, last = 0;
+	for (size_t i = 0; i < std::min(ka.size(), kb.size()); ++i)
+		if (ka[i] != kb[i]) { ++n; last = i; }
+	Check(!ka.empty() && d < 0, F("%s: the device K/V differs from the Off twin world's at byte %ld of %zu (%zu bytes differ, the last at %zu; "
+	                              "decision (b): the rejected rows not put back)", tag.c_str(), d, ka.size(), n, last));
+}
+void CellGx16(Fsfd& fx) {
+	const Model& m = fx.m;
+	const std::vector<int32_t> pr = Prompt(9, 1616u);
+	const OffRef off = RunOff(m, nullptr, pr, 12);
+	Check(off.ok && off.toks.size() >= 9, "the Off reference");
+	if (!off.ok || off.toks.size() < 9) return;
+	const OffRef bound = RunOff(m, kLongKey, pr, 24);
+	Check(bound.ok && bound.toks.size() >= 16, "the bound Off reference");
+	for (int pooled = 0; pooled < 2; ++pooled) {
+		const char* pk = pooled ? "pooled" : "dedicated";
+		// (1) the close: rows o_0, o_1 .. o_(M-1) with row `wrong` replaced; a = wrong rows kept.
+		for (const auto& mw : std::vector<std::pair<int, int>>{{4, 1}, {8, 2}, {8, 7}}) {
+			const int M = mw.first, wrong = mw.second;
+			const std::string tag = F("%s close M=%d row %d wrong", pk, M, wrong);
+			World wa(m), wb(m);
+			if (!wa.ok || !wb.ok) { Check(false, tag + ": worlds"); continue; }
+			SslmGpuKvPoolHandle *pa = nullptr, *pb = nullptr;
+			SslmGpuSequenceHandle* a = CanaryHandle(wa, m, pooled != 0, &pa);
+			SslmGpuSequenceHandle* b = CanaryHandle(wb, m, pooled != 0, &pb);
+			Hist ha, hb;
+			if (!a || !b || !Replay(wa, m, a, pr, 1, &ha) || !Replay(wb, m, b, pr, 1, &hb)) { Check(false, tag + ": history"); continue; }
+			std::vector<int32_t> rows(off.toks.begin(), off.toks.begin() + M);
+			rows[static_cast<size_t>(wrong)] = (rows[static_cast<size_t>(wrong)] + 1) % 20000 + 200;
+			const ExOut o = RunExact(wa, m, a, rows);
+			Check(o.close == S::SSLM_OK && o.adm == M && LastCommitted(a) == wrong,
+			      F("%s: close %s admitted %d kept %d, want %d", tag.c_str(), N(o.close), o.adm, LastCommitted(a), wrong));
+			const int32_t off_tok = TwinDecodes(wb, m, b, &hb, wrong);
+			Check(o.tok == off_tok, F("%s: rows_produced %d, Off %d", tag.c_str(), o.tok, off_tok));
+			BlobEq(Blob(wa, a, tag), Blob(wb, b, tag), tag);
+			DeviceKvEq(wa, pa, a, wb, pb, b, tag);
+		}
+		// (2) the jump's rollback: the second pass faults (S-GREADBACK at pass 1, after every layer wrote its rows) and
+		// is rolled back whole, the first pass's 8 rows kept (OK, 7 drafts), so the device K/V is the Off twin's after 8
+		// decodes, the second pass's rows put back. Bound (longkey: the jump keeps nothing on an unbound handle).
+		{
+			const std::string tag = F("%s a jump's second pass rolled back (read-back fault)", pk);
+			World wa(m), wb(m);
+			if (!wa.ok || !wb.ok) { Check(false, tag + ": worlds"); continue; }
+			SslmGpuKvPoolHandle *pa = nullptr, *pb = nullptr;
+			SslmGpuSequenceHandle* a = CanaryHandle(wa, m, pooled != 0, &pa, kLongKey);
+			SslmGpuSequenceHandle* b = CanaryHandle(wb, m, pooled != 0, &pb, kLongKey);
+			Hist ha, hb;
+			if (!a || !b || !Replay(wa, m, a, pr, 1, &ha) || !Replay(wb, m, b, pr, 1, &hb) || bound.toks.size() < 16) {
+				Check(false, tag + ": history");
+				continue;
+			}
+			const std::vector<int32_t> d(bound.toks.begin() + 1, bound.toks.begin() + 16);
+			ArmGpuExactReadbackFaultForTest(1, 0);
+			const Jump j = DoJump(wa, a, ha.pend, 16, SSLM_JUMP_EXACT, d.data(), static_cast<int32_t>(d.size()));
+			ArmGpuExactReadbackFaultForTest(-1, 0);
+			Check(j.st == S::SSLM_OK && j.count == 7, F("%s: the jump %s kept %d, want 7 (the first pass only)", tag.c_str(), N(j.st), j.count));
+			TwinDecodes(wb, m, b, &hb, 8);
+			Check(CtxLen(a) == CtxLen(b), F("%s: context %lld, Off's %lld", tag.c_str(), (long long)CtxLen(a), (long long)CtxLen(b)));
+			DeviceKvEq(wa, pa, a, wb, pb, b, tag);
+		}
+	}
+}
+
+// gx.18 (S1, decision (b), the abandon): an EXACT_DRAFT chunk of 6 rows, one slice (layer 0 writes every row's K/V),
+// then sslm_gpu_seq_rows_abandon. The rollback must put every row's device K/V back (RowsRollbackAndClose's
+// RowsRestoreDeviceKvAbove(seq, 0)): the device buffer equals the Off twin world's, on gx.16's canary background.
+// RED on the MR5 engine (red-suite-mr5.md, ruling 33): the abandon verb does not pass EntrySubmitGuard, so the
+// restore's submission throws PoolSubmitContractError, which the rollback swallows; the rows keep the chunk's layer-0
+// K/V. KM2 is graded here once it is green.
+void CellGx18(Fsfd& fx) {
+	const Model& m = fx.m;
+	const std::vector<int32_t> pr = Prompt(9, 1616u);
+	const OffRef off = RunOff(m, nullptr, pr, 12);
+	Check(off.ok && off.toks.size() >= 6, "the Off reference");
+	if (!off.ok || off.toks.size() < 6) return;
+	for (int pooled = 0; pooled < 2; ++pooled) {
+		const char* pk = pooled ? "pooled" : "dedicated";
+		{
+			const std::string tag = F("%s rollback after the first slice", pk);
+			World wa(m), wb(m);
+			if (!wa.ok || !wb.ok) { Check(false, tag + ": worlds"); continue; }
+			SslmGpuKvPoolHandle *pa = nullptr, *pb = nullptr;
+			SslmGpuSequenceHandle* a = CanaryHandle(wa, m, pooled != 0, &pa);
+			SslmGpuSequenceHandle* b = CanaryHandle(wb, m, pooled != 0, &pb);
+			Hist ha, hb;
+			if (!a || !b || !Replay(wa, m, a, pr, 1, &ha) || !Replay(wb, m, b, pr, 1, &hb)) { Check(false, tag + ": history"); continue; }
+			const std::vector<int32_t> rows(off.toks.begin(), off.toks.begin() + 6);
+			int32_t adm = -9;
+			StatusIs(EmbedRows(wa, a, kExactDraft, rows, 0, &adm), S::SSLM_OK, tag + ": embed_rows");
+			S st = sslm_decode_step_gpu(wa.ctx, a, nullptr, m.dpl());
+			if (st == S::SSLM_OK) st = Ready(wa, a);
+			Check(st == S::SSLM_OK && RowsOpen(a) == 6, F("%s: the first slice %s, rows open %d", tag.c_str(), N(st), RowsOpen(a)));
+			StatusIs(sslm_gpu_seq_rows_abandon(wa.ctx, a), S::SSLM_OK, tag + ": abandon");
+			BlobEq(Blob(wa, a, tag), Blob(wb, b, tag), tag);
+			DeviceKvEq(wa, pa, a, wb, pb, b, tag);
+		}
+	}
+}
+
+// gx.17 (S4): the EXACT_DRAFT guard-refusal close. On fsfd_refuse (mr4_fixtures.py: the last layer's attn_residual
+// patched so its guard refuses some rows) a bound handle's Off decodes are searched for a run whose decode j + 1 is
+// refused (the embed of o_j), j in 1..7. The chunk [o_0, o_1 .. o_j] (every draft Off's) then refuses at row j with rows
+// 0..j-1 agreeing: the close is the PROMPT-like CommitPrefix(j, j) with the walk past d_j = o_j. Graded against Off:
+// the close's and rows_produced's status are the refusal's, last_rows_committed is j, and the walk, context length,
+// ready word equal the Off twin's after j decodes (o_j produced and walked, not embedded), and the save blob equals the
+// twin's after its own next decode, which refuses o_j.
+void CellGx17(Fsfd&) {
+	const Model* rf = Aux("fsfd_refuse.sslm");
+	if (!rf) return;
+	std::set<int> seen;
+	for (const char* schema : {kPotion, kLongKey})
+		for (uint32_t stream = 1; stream < 200 && seen.size() < 3; ++stream) {
+			const std::vector<int32_t> pr = Prompt(6, 1700u + stream);
+			int j = -1;
+			std::vector<int32_t> toks;
+			{
+				World w(*rf);
+				if (!w.ok) { Check(false, "fsfd_refuse world"); return; }
+				SslmGpuSequenceHandle* s = w.Seq(false, 200, schema);
+				Hist h;
+				if (!s || !Replay(w, *rf, s, pr, 1, &h)) continue;
+				toks = h.toks;
+				for (int k = 1; k <= 8 && j < 0; ++k) {
+					int32_t t = -1;
+					const S st = Dec(w, *rf, s, toks.back(), &t);
+					if (st == S::SSLM_SEQUENCE_REJECTED) j = k - 1;
+					else if (st != S::SSLM_OK || t < 0) break;
+					else toks.push_back(t);
+				}
+			}
+			if (j < 1 || seen.count(j)) continue;
+			seen.insert(j);
+			const std::vector<int32_t> rows(toks.begin(), toks.begin() + j + 1);
+			for (int pooled = 0; pooled < 2; ++pooled) {
+				const std::string tag = F("%s stream %u %s: refusal at row %d of %d", schema, stream, pooled ? "pooled" : "dedicated", j, j + 1);
+				World w(*rf);
+				SslmGpuSequenceHandle* a = w.Seq(pooled != 0, 200, schema);
+				SslmGpuSequenceHandle* t = w.Seq(pooled != 0, 200, schema);
+				Hist ha, ht;
+				if (!a || !t || !Replay(w, *rf, a, pr, 1, &ha) || !Replay(w, *rf, t, pr, 1, &ht)) { Check(false, tag + ": history"); continue; }
+				const ExOut o = RunExact(w, *rf, a, rows);
+				Check(o.embed == S::SSLM_OK && o.adm == j + 1, F("%s: embed %s admitted %d", tag.c_str(), N(o.embed), o.adm));
+				StatusIs(o.close, S::SSLM_SEQUENCE_REJECTED, tag + ": the close");
+				StatusIs(o.prod, S::SSLM_SEQUENCE_REJECTED, tag + ": rows_produced");
+				Check(LastCommitted(a) == j, F("%s: last_rows_committed %d, want %d", tag.c_str(), LastCommitted(a), j));
+				const int32_t last = TwinDecodes(w, *rf, t, &ht, j);
+				Check(last == rows[static_cast<size_t>(j)], F("%s: the Off twin's o_%d is %d, the search's %d", tag.c_str(), j, last, rows[static_cast<size_t>(j)]));
+				Check(Walk(a) == Walk(t), F("%s: walk %u, Off's after %d decodes %u (the walk past d_j)", tag.c_str(), Walk(a), j, Walk(t)));
+				Check(CtxLen(a) == CtxLen(t) && ReadyFlag(w, a) == ReadyFlag(w, t),
+				      F("%s: context %lld ready %d, Off's %lld %d", tag.c_str(), (long long)CtxLen(a), ReadyFlag(w, a), (long long)CtxLen(t), ReadyFlag(w, t)));
+				// Off's own refusal: the twin's next decode embeds o_j and is refused. Then the whole blob is Off's.
+				int32_t r = -1;
+				StatusIs(Dec(w, *rf, t, last, &r), S::SSLM_SEQUENCE_REJECTED, tag + ": the Off twin's refused decode");
+				Check(Walk(a) == Walk(t) && CtxLen(a) == CtxLen(t) && ReadyFlag(w, a) == ReadyFlag(w, t),
+				      F("%s: walk %u context %lld ready %d; Off after its refusal %u %lld %d", tag.c_str(), Walk(a), (long long)CtxLen(a),
+				        ReadyFlag(w, a), Walk(t), (long long)CtxLen(t), ReadyFlag(w, t)));
+				BlobEq(Blob(w, a, tag), Blob(w, t, tag), tag + " vs the Off twin after its refusal");
+			}
+		}
+	std::printf("    gx.17: refusing rows j found:");
+	for (int j : seen) std::printf(" %d", j);
+	std::printf("\n");
+	Check(!seen.empty(), "fsfd_refuse: no Off run refuses at a row j in 1..7");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1839,6 +2308,8 @@ int main(int argc, char** argv) {
 	    {"gx.1", [&] { CellGx1(fx); }},   {"gx.2", [&] { CellGx2(fx); }},   {"gx.4", [&] { CellGx4(fx); }},   {"gx.5", [&] { CellGx5(fx); }},
 	    {"gx.6", [&] { CellGx6(fx); }},   {"gx.7", [&] { CellGx7(fx); }},   {"gx.8", [&] { CellGx8(fx); }},   {"gx.9", [&] { CellGx9(fx); }},
 	    {"gx.10", [&] { CellGx10(fx); }}, {"gx.11", [&] { CellGx11(fx); }}, {"gx.12", [&] { CellGx12(fx); }}, {"gx.13", [&] { CellGx13(fx); }},
+	    {"gx.14", [&] { CellGx14(fx); }}, {"gx.15", [&] { CellGx15(fx); }}, {"gx.16", [&] { CellGx16(fx); }}, {"gx.17", [&] { CellGx17(fx); }},
+	    {"gx.18", [&] { CellGx18(fx); }},
 	};
 	bool all = true;
 	for (auto& c : cells) {

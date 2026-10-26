@@ -30,6 +30,8 @@
 #               p41_wine_branch_<base>.txt exists (ruling 23, MRX), exactly its FAIL lines with the base still
 #               failing exactly its own pin. Ruling 29 (N3): the count delta is pinned per suite too (its SUITE lines;
 #               test_main.cpp is compiled from an instrumented copy that prints each top-level call's checks).
+#               Ruling 33 (S6): RunPoolTeardownOrderCells (T-3262) counts once per heap-landing retry, so its count
+#               is reported only, and left out of the total and per-suite pins; every other suite stays strict.
 #   pkvg        (opt-in) the paged-KV GPU suite's step-G5 runner (tests/paged-kv-gpu, pkvg_g5) over
 #               tools/gen_paged_kv_fixture.py's fixtures (pkv_def, pkv_qk, ...), real-artifact cells skipped; exit 0.
 #
@@ -60,7 +62,7 @@ for a in "$@"; do
 		--skip-run) RUN=0 ;;
 		--only=*) ONLY="${a#--only=}" ;;
 		--with-pkvg) WITH_PKVG=1 ;;
-		*) sed -n '2,25p' "$0"; exit 2 ;;
+		*) sed -n '2,43p' "$0"; exit 2 ;;
 	esac
 done
 cd "$REPO"
@@ -211,6 +213,8 @@ run_tests() {
 	tail -3 "$dir/superslm_tests.log" | sed 's/^/    /'
 	return $rc
 }
+# Ruling 33 S6: suites whose check count is not a function of the binary (reported each run, never pinned).
+REPORT_ONLY="RunPoolTeardownOrderCells"
 total_checks() { sed -n 's/^superslm tests: \([0-9]*\) checks.*/\1/p' "$1" | tail -1; }
 
 if want tests; then
@@ -278,17 +282,27 @@ if want tests; then
 			if [ -f "$BRANCH_PIN" ] && ! diff -u "$BASELINE" <(grep "^FAIL" "$BLOG" || true) >"$OUT/superslm_tests.base.diff"; then
 				echo "FAIL tests: the $BASE run's failures differ from its own pin ($OUT/superslm_tests.base.diff)"; ok=0
 			fi
-			# A silent drop (a suite skipped, a cell gone) is red: the branch runs every check the tag runs here,
-			# give or take the pinned delta.
-			if [ "$((N - BN))" != "$DELTA" ]; then
-				echo "FAIL tests: the branch ran $N checks, $BASE ran $BN under the same build and host (pinned delta $DELTA)"; ok=0
-			fi
 			# Ruling 29 (MRX review N3): the delta per suite, so a gain in one suite cannot hide a loss in another.
 			# Every top-level call's count on the branch minus the base's must equal the pin's "SUITE <name> <n>" line
 			# (0 when the name has none), "(unattributed)" included; a name on one side only counts as 0 on the other.
+			# Ruling 33 S6: REPORT_ONLY suites are reported, not pinned, and their counts leave the total too.
+			# RunPoolTeardownOrderCells (T-3262) adds checks once per heap-landing retry (up to 64 per verb), so its
+			# count differs run to run on the same binary (poirot-mr5.md S6: 83 then 75).
 			python3 -I "$HERE/p41_count_suites.py" tally "$LOG" >"$OUT/suites.branch.txt" || ok=0
 			python3 -I "$HERE/p41_count_suites.py" tally "$BLOG" >"$OUT/suites.base.txt" || ok=0
-			if ! python3 -I - "$OUT/suites.branch.txt" "$OUT/suites.base.txt" "${BRANCH_PIN}" "$OUT/suites.delta.txt" <<'PY'
+			RN=0; RB=0
+			for r in $REPORT_ONLY; do
+				rn="$(sed -n "s/^$r \(-\{0,1\}[0-9]\{1,\}\)$/\1/p" "$OUT/suites.branch.txt")"
+				rb="$(sed -n "s/^$r \(-\{0,1\}[0-9]\{1,\}\)$/\1/p" "$OUT/suites.base.txt")"
+				echo "    tests: $r (report only, ruling 33 S6): branch ${rn:-absent}, $BASE ${rb:-absent}"
+				RN=$((RN + ${rn:-0})); RB=$((RB + ${rb:-0}))
+			done
+			# A silent drop (a suite skipped, a cell gone) is red: the branch runs every check the tag runs here,
+			# give or take the pinned delta (the report-only suites' counts excluded on both sides).
+			if [ "$(((N - RN) - (BN - RB)))" != "$DELTA" ]; then
+				echo "FAIL tests: the branch ran $N checks ($RN report-only), $BASE ran $BN ($RB report-only) under the same build and host (pinned delta $DELTA)"; ok=0
+			fi
+			if ! REPORT_ONLY="$REPORT_ONLY" python3 -I - "$OUT/suites.branch.txt" "$OUT/suites.base.txt" "${BRANCH_PIN}" "$OUT/suites.delta.txt" <<'PY'
 import os, sys
 def load(p):
     d = {}
@@ -303,12 +317,13 @@ if os.path.exists(sys.argv[3]):
         f = line.split()
         if len(f) == 3 and f[0] == "SUITE":
             pin[f[1]] = int(f[2])
-delta = {k: br.get(k, 0) - ba.get(k, 0) for k in set(br) | set(ba)}
+report_only = set(os.environ.get("REPORT_ONLY", "").split())
+delta = {k: br.get(k, 0) - ba.get(k, 0) for k in (set(br) | set(ba)) - report_only}
 with open(sys.argv[4], "w") as out:
     for k in sorted(delta):
         if delta[k]:
             out.write("SUITE %s %d\n" % (k, delta[k]))
-bad = [(k, delta.get(k, 0), pin.get(k, 0)) for k in sorted(set(delta) | set(pin)) if delta.get(k, 0) != pin.get(k, 0)]
+bad = [(k, delta.get(k, 0), pin.get(k, 0)) for k in sorted((set(delta) | set(pin)) - report_only) if delta.get(k, 0) != pin.get(k, 0)]
 for k, got, want in bad[:30]:
     print("    tests: suite %s: branch - base = %d, pinned %d" % (k, got, want))
 print("    tests: %d suites compared, %d with a nonzero delta (%s)" % (len(delta), sum(1 for v in delta.values() if v), ", ".join("%s %+d" % (k, v) for k, v in sorted(delta.items()) if v) or "none"))
@@ -319,7 +334,7 @@ PY
 			fi
 		fi
 		if [ $ok = 1 ]; then
-			echo "PASS tests (exit $rc; $N checks = $BASE's $BN + ($DELTA) on this host; failures are exactly the $(wc -l <"$EXPECT") pinned lines of $(basename "$EXPECT"))"
+			echo "PASS tests (exit $rc; $N checks = $BASE's $BN + ($DELTA) + the report-only suites' $((RN - RB)) on this host; failures are exactly the $(wc -l <"$EXPECT") pinned lines of $(basename "$EXPECT"))"
 		else
 			FAILED+=(tests)
 		fi
