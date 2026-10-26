@@ -17,13 +17,23 @@ thread's 1.18.0 section when that lands.
     `SSLM_SEQUENCE_KV_BUFFER_MISMATCH` on the GPU).
   - On the CPU, `sslm_seq_jump_forward` with NULL options, or with mode 0, now runs exact mode with the forced chain
     as its draft. A caller's draft still takes `SSLM_JUMP_EXACT`; a draft with mode 0 is refused, as it was.
-  - On the GPU, `sslm_gpu_seq_jump_forward` gets Exact with multi-row dispatch. A call that passes the argument
-    checks returns `SSLM_SEQUENCE_REJECTED` (1.17.0's Exact refusal) until then.
+  - On the GPU, `sslm_gpu_seq_jump_forward` runs Exact on multi-row dispatch (below).
   - Saves made by 1.15.0-1.17.0 after a canonical jump still restore. The restored sequence continues under
     whatever mode the caller asks for.
   - The multi-row branch's provisional `SSLM_GPU_ROWS_SCHEMA_FORCED` kind and `SSLM_GPU_ROWS_FIRST_PREWALKED` flag
     of `sslm_gpu_seq_embed_rows` were never released and are removed. Kind 1 is reserved, and a spec with kind 1 or
     flag bit 0x1 is refused as a bad spec.
+
+### Added
+
+- **Exact on the GPU.** `sslm_gpu_seq_jump_forward` runs Exact: p and the draft (the caller's, or the forced chain)
+  go through the layers in passes of up to 8 rows, each row is finished with the decode bridge's own finish, and the
+  rows up to the first mismatch are kept. The stream and every saved byte equal the plain GPU decode loop's.
+- **`SSLM_GPU_ROWS_EXACT_DRAFT`** for `sslm_gpu_seq_embed_rows` (kind 2): `[p, draft...]`, closed by the same check,
+  and **`sslm_gpu_seq_rows_produced`**, which reads the token the close produced. A model mapped without the device
+  logits head refuses the kind with `SSLM_SEQUENCE_REJECTED`.
+- **The widened logits stage** has its own GPU timestamp bracket: `superslm_gpu::LastLogitsStageTiming()`
+  (`gpu_port.h`).
 
 ## [1.17.0] - 2026-10-26
 
