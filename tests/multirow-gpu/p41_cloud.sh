@@ -32,6 +32,7 @@
 #               test_main.cpp is compiled from an instrumented copy that prints each top-level call's checks).
 #               Ruling 33 (S6): RunPoolTeardownOrderCells (T-3262) counts once per heap-landing retry, so its count
 #               is reported only, and left out of the total and per-suite pins; every other suite stays strict.
+#               Ruling 38: a report-only suite still keeps a floor of 1 check on each side, so a drop to zero is red.
 #   pkvg        (opt-in) the paged-KV GPU suite's step-G5 runner (tests/paged-kv-gpu, pkvg_g5) over
 #               tools/gen_paged_kv_fixture.py's fixtures (pkv_def, pkv_qk, ...), real-artifact cells skipped; exit 0.
 #
@@ -295,6 +296,11 @@ if want tests; then
 				rn="$(sed -n "s/^$r \(-\{0,1\}[0-9]\{1,\}\)$/\1/p" "$OUT/suites.branch.txt")"
 				rb="$(sed -n "s/^$r \(-\{0,1\}[0-9]\{1,\}\)$/\1/p" "$OUT/suites.base.txt")"
 				echo "    tests: $r (report only, ruling 33 S6): branch ${rn:-absent}, $BASE ${rb:-absent}"
+				# Ruling 38: a report-only suite keeps a floor of 1 check on each side, so a drop to zero (or a suite
+				# gone) is red even though its count is not pinned.
+				if [ "${rn:-0}" -lt 1 ] || [ "${rb:-0}" -lt 1 ]; then
+					echo "FAIL tests: $r ran ${rn:-0} checks on the branch and ${rb:-0} on $BASE; a report-only suite keeps a floor of 1 (ruling 38)"; ok=0
+				fi
 				RN=$((RN + ${rn:-0})); RB=$((RB + ${rb:-0}))
 			done
 			# A silent drop (a suite skipped, a cell gone) is red: the branch runs every check the tag runs here,
