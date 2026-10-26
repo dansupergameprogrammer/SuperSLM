@@ -10,6 +10,7 @@
 //        through the malformed-options status (SSLM_INVALID_ARGUMENT) with nothing changed: the count unwritten,
 //        out_forced untouched, the save blob equal, and a fresh bound sequence still bindable. Ruling 22 (21b): so is
 //        mode 0 with a draft, with draft_count 2 and no draft, and with both.
+//        Ruling 29 (S1): the literal mode 1 equals explicit Exact (the symbol) byte for byte too.
 //   x.3  NULL options equal explicit Exact byte for byte, the same comparison as x.1's.
 //   x.5  Saves made by 1.15, 1.16 and 1.17 under Canonical restore: SSLM_OK, and the resumed sequence continues under
 //        the mode the caller asks for. Decode-only, it gives the recorder's own next 8 tokens. One decode then an Exact
@@ -242,6 +243,10 @@ void CellX1(Engine& e) {
 		}
 	const sslm_jump_options zero = Opts(kModeDefault);
 	EqualsExact(e, &zero, "mode 0 (SSLM_JUMP_DEFAULT)");
+	// Ruling 29 (MRX review S1; ruling 21a): the literal 1, what a 1.15-1.17 binary passes for Exact, is still Exact.
+	// Compared against the symbol, so a renumbered SSLM_JUMP_EXACT (refusing 1, or giving it another meaning) is red.
+	const sslm_jump_options one = Opts(1);
+	EqualsExact(e, &one, "the literal mode 1 (a 1.17 caller's Exact)");
 }
 
 // ------------------------------------------------------------------------------------------------ record / x.5
