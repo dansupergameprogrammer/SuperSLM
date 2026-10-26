@@ -1,6 +1,7 @@
 // array_s2_gpu.cpp -- the GPU side of the S2 array harness, on the shipped GPU surface
 // (superslm/gpu_1p0.h and its G5 schema bridge). See array_s2_shared.h for the interface.
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 
 #include <dxgi1_4.h>
@@ -15,7 +16,17 @@ using enum SslmGpuStatus;
 
 namespace {
 
-constexpr uint32_t kDispatchBudget = superslm_gpu::kDispatchesPerLayer;
+// The decode drive submits and waits once per `dispatch_budget` dispatches, so the budget sets
+// the slices per token: ARRAY_S2_GPU_LAYERS_PER_SLICE layers per submission (default 1, so a
+// 24-layer model decodes in 24 slices; 24 gives one slice per token).
+uint32_t DispatchBudget() {
+	static const uint32_t budget = [] {
+		const char* env = std::getenv("ARRAY_S2_GPU_LAYERS_PER_SLICE");
+		const int layers = env ? std::atoi(env) : 1;
+		return static_cast<uint32_t>(layers > 0 ? layers : 1) * superslm_gpu::kDispatchesPerLayer;
+	}();
+	return budget;
+}
 
 double MsSince(std::chrono::steady_clock::time_point t0) {
 	return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -116,7 +127,7 @@ void DecodeToEnd(GpuSession* s, SslmGpuSequenceHandle* seq, int32_t last, int32_
                  std::vector<int32_t>* ids, std::string* end) {
 	while (static_cast<int32_t>(ids->size()) < max_tokens) {
 		int32_t t = -1;
-		const SslmGpuStatus st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, kDispatchBudget, &t);
+		const SslmGpuStatus st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, DispatchBudget(), &t);
 		if (st != SSLM_OK) {
 			*end = Err("SslmGpuSeqDecodeStepForG5Bridge", st);
 			return;
@@ -143,7 +154,7 @@ WalkResult GpuWalk(GpuSession* s, const std::vector<int32_t>& ids) {
 	}
 	for (size_t i = 0; i < ids.size(); ++i) {
 		int32_t consumed = 0;
-		st = SslmGpuSeqPrefillSchemaContentForG5Bridge(s->ctx, seq, &ids[i], 1, kDispatchBudget, &consumed);
+		st = SslmGpuSeqPrefillSchemaContentForG5Bridge(s->ctx, seq, &ids[i], 1, DispatchBudget(), &consumed);
 		if (st != SSLM_OK || consumed != 1) {
 			r.refused_at = static_cast<int32_t>(i);
 			r.refusal = st == SSLM_SEQUENCE_REJECTED ? "unreachable" : "status " + std::to_string(static_cast<int>(st));
@@ -166,7 +177,7 @@ GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_
 		return r;
 	}
 	st = SslmGpuSeqPrefillPromptForG5Bridge(s->ctx, seq, prompt.data(), static_cast<int32_t>(prompt.size()),
-	                                        kDispatchBudget);
+	                                        DispatchBudget());
 	if (st != SSLM_OK) {
 		r.end = Err("SslmGpuSeqPrefillPromptForG5Bridge", st);
 		sslm_gpu_seq_release(s->ctx, seq);
@@ -192,7 +203,7 @@ std::vector<RestoreResult> GpuRestores(GpuSession* s, const std::vector<int32_t>
 		return out;
 	}
 	st = SslmGpuSeqPrefillPromptForG5Bridge(s->ctx, seq, prompt.data(), static_cast<int32_t>(prompt.size()),
-	                                        kDispatchBudget);
+	                                        DispatchBudget());
 	if (st != SSLM_OK) {
 		*error = Err("SslmGpuSeqPrefillPromptForG5Bridge", st);
 		sslm_gpu_seq_release(s->ctx, seq);
@@ -202,7 +213,7 @@ std::vector<RestoreResult> GpuRestores(GpuSession* s, const std::vector<int32_t>
 	size_t next = 0;
 	for (size_t i = 0; i < ref.size() && next < after.size(); ++i) {
 		int32_t t = -1;
-		st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, kDispatchBudget, &t);
+		st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, DispatchBudget(), &t);
 		if (st != SSLM_OK || t != ref[i]) {
 			*error = "unbroken run left the reference at " + std::to_string(i) + ": " + std::to_string(t) +
 			         " != " + std::to_string(ref[i]);

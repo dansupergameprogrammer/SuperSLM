@@ -1,0 +1,4 @@
+layers_per_slice=1 slices_per_token=24 tokens=767 ms_per_token=148.7 tokens_vs_reference=identical
+layers_per_slice=2 slices_per_token=12 tokens=767 ms_per_token=84.7 tokens_vs_reference=identical
+layers_per_slice=6 slices_per_token=4 tokens=767 ms_per_token=39.6 tokens_vs_reference=identical
+layers_per_slice=24 slices_per_token=1 tokens=767 ms_per_token=27.1 tokens_vs_reference=identical
