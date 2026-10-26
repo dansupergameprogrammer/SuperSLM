@@ -217,6 +217,14 @@ struct GpuRowsChunk {
 	// SCHEMA_FORCED (MR4): the walk state after row r is committed (row 0 under FIRST_PREWALKED leaves the entry's);
 	// the close sets the walk to walk_after[k - 1] for k committed rows. Empty for PROMPT.
 	std::vector<uint32_t> walk_after;
+	// Exact (MR5, plan §4.7): an internal jump pass's check tokens, row r against verify_next[r] (-1: the jump's
+	// last row, not checked), and whether its read-back is to fail (S-GREADBACK). Empty / false otherwise.
+	std::vector<int32_t> verify_next;
+	bool readback_fault = false;
+	// Exact (MR5): the chunk's real rows' device K/V rows at the first slice (offsets in the mirror's layout, row
+	// major as RowsMirrorOffsetsAt orders one row's), so the close puts the rejected rows back.
+	std::vector<size_t> device_kv_offsets;
+	Microsoft::WRL::ComPtr<ID3D12Resource> device_kv_snap;
 	GpuRowsEntrySnapshot entry;
 	const SslmGpuAdapterHandle* adapter = nullptr;
 	bool adapter_fixed = false;
