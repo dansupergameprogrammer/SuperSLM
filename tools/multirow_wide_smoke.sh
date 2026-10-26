@@ -138,9 +138,13 @@ case "$SUITE" in
 				echo "    FAIL $h table header"; FAILED+=(bench-table-$h)
 			fi
 		done
-		[ "$(head -1 "$OUT/multirow_cost_bench.csv")" = "model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us" ] &&
-			[ "$(grep -c ',0,[0-9]*,[0-9]*,[0-9]*,[0-9]*,[0-9]*,gpu,' "$OUT/multirow_cost_bench.csv")" = 8 ] &&
-			[ "$(wc -l <"$OUT/multirow_cost_bench.csv")" = 17 ] && echo "    PASS CSV: mr4_box.py's columns plus clock and wall, 16 rows, logits 0 on the GPU clock" ||
-			{ echo "    FAIL CSV"; FAILED+=(bench-csv); } ;;
+		[ "$(head -1 "$OUT/multirow_cost_bench.csv")" = "model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us,logits_stage_gpu_us,host_finish_us" ] &&
+			[ "$(grep -c ',0,[0-9]*,[0-9]*,[0-9]*,[0-9]*,[0-9]*,gpu,[0-9]*,[0-9]*,[0-9]*,,$' "$OUT/multirow_cost_bench.csv")" = 8 ] &&
+			[ "$(grep -c ',1,[0-9]*,[0-9]*,[0-9]*,[0-9]*,[0-9]*,gpu,[0-9]*,[0-9]*,[0-9]*,[1-9][0-9]*,[1-9][0-9]*$' "$OUT/multirow_cost_bench.csv")" = 8 ] &&
+			[ "$(wc -l <"$OUT/multirow_cost_bench.csv")" = 17 ] && echo "    PASS CSV: mr4_box.py's columns plus clock and wall, 16 rows on the GPU clock, logits 1 with positive logits_stage_gpu_us and host_finish_us" ||
+			{ echo "    FAIL CSV"; FAILED+=(bench-csv); }
+		# MB5's grader on this table (ruling 33 S7): g(M) from logits_stage_gpu_us, host_finish_us reported.
+		if python3 tests/multirow-gpu/mr4_box.py report-exact "$OUT/multirow_cost_bench.csv" pkv_def; then echo "    PASS mr4_box report-exact"
+		else echo "    FAIL mr4_box report-exact"; FAILED+=(bench-box); fi ;;
 esac
 if [ ${#FAILED[@]} = 0 ]; then echo "Multi-row Wine smoke ($SUITE): PASS"; else echo "Multi-row Wine smoke ($SUITE): FAIL (${FAILED[*]})"; exit 1; fi

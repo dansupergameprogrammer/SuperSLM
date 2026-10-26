@@ -13,22 +13,35 @@
 //          span (host embed, recording, submission, fence wait, read-back, commit) is filed beside it as information.
 //   F      SslmGpuSeqFinishTokenForG5Bridge on the closed chunk: the last row's finish, wall time.
 //
-// The logits column is INFORMATION ONLY until MR5 (ruling 18a): this build has no per-row logits stage for a chunk and
-// no GPU timing for the finish's logits, so the with-logits figure is the wall stand-in C_wall + M x F. g(M) is never
-// derived from it: the written header carries g's estimates unchanged (kGpuRowsLogitsRatioMeasured = false). MR5's
-// widened logits stage brings its own GPU timing bracket.
+// The logits = 1 rows (MR5, rulings 18a, 27, 33 S7): an EXACT_DRAFT chunk of M rows [p, d1 .. d(M-1)] whose drafts are
+// the model's own greedy continuation (read once through the Off bridge), so every row agrees and the close finishes
+// all M rows. Per run:
+//   X      sslm_gpu_seq_embed_rows(EXACT_DRAFT, M) + one sslm_decode_step_gpu of L x DispatchesPerLayer + sslm_gpu_ready
+//          (block): the chunk from opening to its Exact close. Its GPU time is the layers' submission
+//          (LastCallTiming().gpu_busy_ms) plus the widened logits stage's own bracket (LastLogitsStageTiming().gpu_ms);
+//          its wall time is filed beside it.
+//   S      the widened logits stage alone (LastLogitsStageTiming().gpu_ms): the CSV's logits_stage_gpu_us, at its
+//          maximum over the timed runs, whole us rounded up. mr4_box.py prices g(M) = ceil(S(M) x 1000 / C(1)).
+//   HF     the close's host finishes (LastLogitsStageTiming().host_finish_ms: final_norm and each row's logits path,
+//          narrowing, mask and argmax; the stage excluded): the CSV's host_finish_us, its maximum, report only (the GPU
+//          frame budget stays GPU-only; the host finish runs on the worker thread).
+// The Exact rows need the head on the device (EXACT_DRAFT's admission), so without --device-head they run on a second
+// mapping of the model that has it. They run unbound, where the close's finish takes the device head and the stage
+// runs. --schema=NAME also runs them bound to that schema (the certified models' shape: on a tied model the bound close
+// finishes on the host's legal rows and runs no stage); host_finish_us is then the bound close's, and the unbound
+// one is printed beside it. The written header still carries g's estimates (MR7 takes the measured per-M maxima).
 //
 // The table: C(M) at its MAXIMUM over the timed runs (MR-D15); r(M) = ceil(1000 x maxC_gpu(M) / maxC_gpu(1)), integer
 // per-mille, rounded up (costs round up, §5.1).
 //
-// The CSV (--csv): `model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us`,
-// one row per M and logits 0 and 1, whole us rounded up. logits 0: the timing columns are C's GPU time (clock `gpu`),
-// the wall_* columns its wall time. logits 1: the wall stand-in in both (clock `wall`, information only, never a
-// source for g). --model-name names the model column (mr4_box.py: 0.5B, 1.5B); a second run appends with
-// --csv-append. A box run is 30 runs and 1 warm-up, the defaults.
+// The CSV (--csv): `model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us,
+// logits_stage_gpu_us,host_finish_us`, one row per M and logits 0 and 1, whole us rounded up. logits 0: the timing
+// columns are C's GPU time (clock `gpu`), the wall_* columns its wall time, the last two empty. logits 1: X's GPU time
+// (clock `gpu`), its wall time, S's maximum and HF's maximum. --model-name names the model column (mr4_box.py: 0.5B,
+// 1.5B); a second run appends with --csv-append. A box run is 30 runs and 1 warm-up, the defaults.
 //
-// Usage: multirow_cost_bench --model=PATH [--shaders=DIR] [--adapter=PATH] [--device-head] [--runs=30] [--warmup=1]
-//                            [--p0=16] [--out=PATH] [--json=PATH] [--csv=PATH [--csv-append]] [--model-name=NAME]
+// Usage: multirow_cost_bench --model=PATH [--shaders=DIR] [--adapter=PATH] [--device-head] [--schema=NAME] [--runs=30]
+//                            [--warmup=1] [--p0=16] [--out=PATH] [--json=PATH] [--csv=PATH [--csv-append]] [--model-name=NAME]
 //   --out   where the header is written (default: not written; the table is printed either way)
 //   --json  the per-run samples and summaries
 //   --quick 3 timed runs at p0 = 3 (tools/multirow_wide_smoke.sh --quick; never a box run)
@@ -42,6 +55,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -81,6 +95,9 @@ struct Env {
 	SslmGpuModelHandle* model = nullptr;
 	SslmGpuAdapterHandle* adapter = nullptr;
 	SslmGpuSequenceHandle* seq = nullptr;
+	SslmGpuModelHandle* model_x = nullptr;    // the Exact rows' mapping: the head on the device
+	SslmGpuAdapterHandle* adapter_x = nullptr;
+	SslmGpuSequenceHandle* seq_x = nullptr;
 	uint32_t L = 0, dpl = 0;
 	int32_t vocab = 0;
 };
@@ -103,6 +120,100 @@ SslmGpuStatus PromptRow(const Env& e, int32_t tok) {
 struct Sample {
 	double c_us = 0, c_gpu_us = 0, f_us = 0;  // C's wall and GPU time, the finish's wall time
 };
+
+// The Exact rows (logits = 1): X's wall and GPU time (layers + stage), S, HF.
+struct XSample {
+	double x_us = 0, x_gpu_us = 0, stage_us = 0, host_us = 0;
+};
+
+// The Exact sequence at its start: reset, bound to schema_index (-1: unbound), the prefix rows, and the Off finish that leaves
+// the pending token p in hand.
+SslmGpuStatus ExactStart(const Env& e, int32_t schema_index, int p0, int32_t* p) {
+	SslmGpuStatus st = sslm_gpu_seq_reset(e.ctx, e.seq_x);
+	if (st == SSLM_OK) st = SslmGpuSeqSetSchemaForG5Bridge(e.ctx, e.seq_x, schema_index);  // -1 unbinds (a reset keeps it)
+	if (st == SSLM_OK && e.adapter_x) st = sslm_gpu_seq_bind_adapter(e.ctx, e.seq_x, e.adapter_x);
+	for (int i = 0; st == SSLM_OK && i < p0; ++i) {
+		st = sslm_gpu_seq_embed_token(e.ctx, e.seq_x, TokenAt(i, e.vocab));
+		if (st != SSLM_OK) break;
+		if ((st = sslm_decode_step_gpu(e.ctx, e.seq_x, e.adapter_x, e.L * e.dpl)) != SSLM_OK) break;
+		int32_t ready = 0;
+		SslmGpuStatus out = SSLM_OK;
+		if ((st = sslm_gpu_ready(e.ctx, e.seq_x, 1, &ready, &out)) == SSLM_OK) st = ready ? out : SSLM_DEVICE_LOST;
+	}
+	if (st == SSLM_OK) st = SslmGpuSeqFinishTokenForG5Bridge(e.ctx, e.seq_x, p);
+	return st;
+}
+
+// The drafts: the model's own greedy continuation of p through the Off bridge, one token at a time, up to `want`
+// rows in all (fewer at a dead end or a failed finish).
+bool ExactChain(const Env& e, int32_t schema_index, int p0, uint32_t want, std::vector<int32_t>* chain, std::string* why) {
+	int32_t tok = -1;
+	SslmGpuStatus st = ExactStart(e, schema_index, p0, &tok);
+	if (st != SSLM_OK || tok < 0) return *why = "the prefix's finish -> " + std::to_string(static_cast<int>(st)), false;
+	chain->assign(1, tok);
+	while (chain->size() < want) {
+		st = sslm_gpu_seq_embed_token(e.ctx, e.seq_x, tok);
+		if (st == SSLM_OK) st = sslm_decode_step_gpu(e.ctx, e.seq_x, e.adapter_x, e.L * e.dpl);
+		int32_t ready = 0;
+		SslmGpuStatus out = SSLM_OK;
+		if (st == SSLM_OK && (st = sslm_gpu_ready(e.ctx, e.seq_x, 1, &ready, &out)) == SSLM_OK) st = ready ? out : SSLM_DEVICE_LOST;
+		if (st == SSLM_OK) st = SslmGpuSeqFinishTokenForG5Bridge(e.ctx, e.seq_x, &tok);
+		if (st != SSLM_OK || tok < 0) break;
+		chain->push_back(tok);
+	}
+	return true;
+}
+
+// One Exact run at M rows: the timed EXACT_DRAFT chunk [chain[0] .. chain[M-1]] to its close, all M rows agreeing.
+bool RunExact(const Env& e, int32_t schema_index, uint32_t m, int p0, const std::vector<int32_t>& chain, XSample* s,
+              std::string* why) {
+	char buf[200];
+	int32_t p = -1;
+	SslmGpuStatus st = ExactStart(e, schema_index, p0, &p);
+	if (st != SSLM_OK || p != chain[0]) {
+		std::snprintf(buf, sizeof buf, "exact start -> %d, p %d (the chain's %d)", static_cast<int>(st), p, chain[0]);
+		return *why = buf, false;
+	}
+	SslmGpuRowsSpec spec{};
+	spec.struct_size = sizeof spec;
+	spec.kind = SSLM_GPU_ROWS_EXACT_DRAFT;
+	spec.tokens = chain.data();
+	spec.count = static_cast<int32_t>(m);
+	const superslm_gpu::GpuLogitsStageTiming before = superslm_gpu::LastLogitsStageTiming();
+	int32_t admitted = 0, committed = 0, open = 1, produced = -1;
+	const auto t0 = Clock::now();
+	st = sslm_gpu_seq_embed_rows(e.ctx, e.seq_x, &spec, &admitted);
+	if (st == SSLM_OK) st = sslm_decode_step_gpu(e.ctx, e.seq_x, e.adapter_x, e.L * e.dpl);
+	int32_t ready = 0;
+	SslmGpuStatus out = SSLM_OK;
+	if (st == SSLM_OK && (st = sslm_gpu_ready(e.ctx, e.seq_x, 1, &ready, &out)) == SSLM_OK) st = ready ? out : SSLM_DEVICE_LOST;
+	s->x_us = UsSince(t0);
+	const double layers_gpu_us = superslm_gpu::LastCallTiming().gpu_busy_ms * 1000.0;
+	const superslm_gpu::GpuLogitsStageTiming after = superslm_gpu::LastLogitsStageTiming();
+	sslm_gpu_seq_last_rows_committed(e.seq_x, &committed);
+	sslm_gpu_seq_rows_open(e.seq_x, &open);
+	const SslmGpuStatus pst = sslm_gpu_seq_rows_produced(e.seq_x, &produced);
+	if (st != SSLM_OK || admitted != static_cast<int32_t>(m) || committed != static_cast<int32_t>(m) || open != 0 ||
+	    pst != SSLM_OK) {
+		std::snprintf(buf, sizeof buf, "exact chunk -> %d, admitted %d, committed %d, open %d, rows_produced %d",
+		              static_cast<int>(st), admitted, committed, open, static_cast<int>(pst));
+		return *why = buf, false;
+	}
+	if (after.closes != before.closes + 1 || after.host_rows != m) {
+		std::snprintf(buf, sizeof buf, "the close published %llu host timings for %u rows (want 1 for %u)",
+		              static_cast<unsigned long long>(after.closes - before.closes), after.host_rows, m);
+		return *why = buf, false;
+	}
+	s->host_us = after.host_finish_ms * 1000.0;
+	s->stage_us = after.stages == before.stages + 1 ? after.gpu_ms * 1000.0 : 0.0;  // no stage: a host finish path
+	if (schema_index < 0 && !(after.stages == before.stages + 1 && after.rows == m && s->stage_us > 0)) {
+		std::snprintf(buf, sizeof buf, "unbound: %llu logits stages of %u rows, %.1f us (want 1 of %u, timed)",
+		              static_cast<unsigned long long>(after.stages - before.stages), after.rows, s->stage_us, m);
+		return *why = buf, false;
+	}
+	s->x_gpu_us = layers_gpu_us + s->stage_us;
+	return true;
+}
 
 // One run at M rows: the timed chunk and the timed finish after it.
 bool Run(const Env& e, uint32_t m, int p0, Sample* s, std::string* why) {
@@ -175,6 +286,7 @@ int64_t CeilPerMille(double num, double den) {
 
 int main(int argc, char** argv) {
 	std::string model_path, adapter_path, shaders, out_path, json_path, csv_path, model_name = "model";
+	std::string schema_name;
 	bool device_head = false, csv_append = false;
 	int runs = 30, warmup = 1, p0 = 16;
 	for (int i = 1; i < argc; ++i) {
@@ -191,10 +303,12 @@ int main(int argc, char** argv) {
 		else if (a.rfind("--warmup=", 0) == 0) warmup = std::atoi(a.c_str() + 9);
 		else if (a.rfind("--p0=", 0) == 0) p0 = std::atoi(a.c_str() + 5);
 		else if (a == "--device-head") device_head = true;
+		else if (a.rfind("--schema=", 0) == 0) schema_name = a.substr(9);
 		else if (a == "--quick") runs = 3, p0 = 3;  // the Wine smoke's reduced form
 		else {
 			std::printf("usage: multirow_cost_bench --model=PATH [--shaders=DIR] [--adapter=PATH] [--device-head] "
-			            "[--runs=30] [--warmup=1] [--p0=16] [--out=PATH] [--json=PATH] [--csv=PATH [--csv-append]] [--model-name=NAME]\n");
+			            "[--schema=NAME] [--runs=30] [--warmup=1] [--p0=16] [--out=PATH] [--json=PATH] [--csv=PATH [--csv-append]] "
+			            "[--model-name=NAME]\n");
 			return 2;
 		}
 	}
@@ -241,43 +355,112 @@ int main(int argc, char** argv) {
 		std::printf("FAIL sequence\n");
 		return 1;
 	}
-	std::printf("multirow_cost_bench: L = %u, %u dispatches per layer, p0 = %d, %d warm-up + %d timed runs per M%s%s\n",
+	// The Exact rows' mapping: the head on the device (EXACT_DRAFT's admission requires it).
+	if (device_head) {
+		e.model_x = e.model;
+		e.adapter_x = e.adapter;
+	} else {
+		GpuResidencyConfig res_x{};
+		res_x.flags = SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE;
+		if (sslm_gpu_model_map(e.ctx, &view, res_x, &e.model_x) != SSLM_OK ||
+		    (!adapter_path.empty() && sslm_gpu_adapter_map(e.ctx, e.model_x, &adapter_view, &e.adapter_x) != SSLM_OK)) {
+			std::printf("FAIL the device-head mapping for the Exact rows\n");
+			return 1;
+		}
+	}
+	if (sslm_gpu_seq_create(e.ctx, e.model_x, p0 + 3 * SSLM_GPU_MAX_ROWS, &e.seq_x) != SSLM_OK) {
+		std::printf("FAIL the Exact sequence\n");
+		return 1;
+	}
+	int32_t schema_index = -1;
+	if (!schema_name.empty()) {
+		schema_index = SslmGpuSchemaLookupForG5Bridge(e.model_x, schema_name.c_str());
+		if (schema_index < 0) {
+			std::printf("FAIL --schema=%s: the model has no such schema\n", schema_name.c_str());
+			return 1;
+		}
+	}
+	std::printf("multirow_cost_bench: L = %u, %u dispatches per layer, p0 = %d, %d warm-up + %d timed runs per M%s%s%s%s\n",
 	            e.L, e.dpl, p0, warmup, runs, device_head ? ", device head" : ", host head",
-	            e.adapter ? ", adapter bound" : "");
+	            e.adapter ? ", adapter bound" : "", schema_name.empty() ? "" : ", Exact rows also bound to ",
+	            schema_name.c_str());
+	// The drafts, unbound and (with --schema) bound: the model's own continuation, so every row of a run agrees.
+	std::vector<int32_t> chain_u, chain_b;
+	{
+		std::string why;
+		if (!ExactChain(e, -1, p0, SSLM_GPU_MAX_ROWS, &chain_u, &why) ||
+		    (schema_index >= 0 && !ExactChain(e, schema_index, p0, SSLM_GPU_MAX_ROWS, &chain_b, &why))) {
+			std::printf("FAIL the drafts: %s\n", why.c_str());
+			return 1;
+		}
+		if (chain_u.size() < SSLM_GPU_MAX_ROWS || (schema_index >= 0 && chain_b.size() < SSLM_GPU_MAX_ROWS)) {
+			std::printf("FAIL the drafts: %zu unbound, %zu bound tokens before a dead end (want %d each; pick a longer "
+			            "schema)\n", chain_u.size(), chain_b.size(), SSLM_GPU_MAX_ROWS);
+			return 1;
+		}
+	}
 
 	constexpr uint32_t kMaxM = SSLM_GPU_MAX_ROWS;
 	std::vector<Sample> samples[kMaxM + 1];
-	Stats c_stats[kMaxM + 1], cw_stats[kMaxM + 1], cl_stats[kMaxM + 1];  // C gpu, C wall, the wall stand-in
+	std::vector<XSample> xsamples[kMaxM + 1], bsamples[kMaxM + 1];  // the Exact rows, unbound and bound
+	Stats c_stats[kMaxM + 1], cw_stats[kMaxM + 1];                   // C gpu, C wall
+	Stats x_stats[kMaxM + 1], xw_stats[kMaxM + 1], s_stats[kMaxM + 1], hf_stats[kMaxM + 1], hfb_stats[kMaxM + 1];
 	for (uint32_t m = 1; m <= kMaxM; ++m) {
 		for (int i = 0; i < warmup + runs; ++i) {
 			Sample s;
+			XSample x, b;
 			std::string why;
 			if (!Run(e, m, p0, &s, &why)) {
 				std::printf("FAIL M = %u run %d: %s\n", m, i, why.c_str());
 				return 1;
 			}
-			if (i >= warmup) samples[m].push_back(s);
+			if (!RunExact(e, -1, m, p0, chain_u, &x, &why) ||
+			    (schema_index >= 0 && !RunExact(e, schema_index, m, p0, chain_b, &b, &why))) {
+				std::printf("FAIL M = %u run %d (Exact): %s\n", m, i, why.c_str());
+				return 1;
+			}
+			if (i >= warmup) {
+				samples[m].push_back(s);
+				xsamples[m].push_back(x);
+				if (schema_index >= 0) bsamples[m].push_back(b);
+			}
 		}
-		std::vector<double> c, cw, cl;
+		std::vector<double> c, cw, xg, xw, st, hf, hfb;
 		for (const Sample& s : samples[m]) {
 			c.push_back(s.c_gpu_us);
 			cw.push_back(s.c_us);
-			cl.push_back(s.c_us + m * s.f_us);
 		}
+		for (const XSample& x : xsamples[m]) {
+			xg.push_back(x.x_gpu_us);
+			xw.push_back(x.x_us);
+			st.push_back(x.stage_us);
+			hf.push_back(x.host_us);
+		}
+		for (const XSample& b : bsamples[m]) hfb.push_back(b.host_us);
 		c_stats[m] = Summarize(c);
 		cw_stats[m] = Summarize(cw);
-		cl_stats[m] = Summarize(cl);
+		x_stats[m] = Summarize(xg);
+		xw_stats[m] = Summarize(xw);
+		s_stats[m] = Summarize(st);
+		hf_stats[m] = Summarize(hf);
+		hfb_stats[m] = Summarize(hfb);
 	}
 
 	int64_t r[kMaxM + 1] = {0};
-	std::printf("\n  M | C(M) GPU us median    p95      max | wall median    p95      max | with logits, wall, info only: max | r(M)\n");
+	int64_t g[kMaxM + 1] = {0};
+	std::printf("\n  M | C(M) GPU us median    p95      max | wall median    p95      max | r(M) | Exact X GPU max | S max | g(M) |"
+	            " host finish max%s\n", schema_index >= 0 ? " (unbound / bound)" : "");
 	for (uint32_t m = 1; m <= kMaxM; ++m) {
 		r[m] = m == 1 ? 1000 : CeilPerMille(c_stats[m].max, c_stats[1].max);
-		std::printf("  %u | %17.0f %8.0f %8.0f | %11.0f %8.0f %8.0f | %33.0f | %4lld\n", m, c_stats[m].median,
-		            c_stats[m].p95, c_stats[m].max, cw_stats[m].median, cw_stats[m].p95, cw_stats[m].max, cl_stats[m].max,
-		            static_cast<long long>(r[m]));
+		g[m] = CeilPerMille(std::ceil(s_stats[m].max), std::ceil(c_stats[1].max));
+		std::printf("  %u | %17.0f %8.0f %8.0f | %11.0f %8.0f %8.0f | %4lld | %15.0f | %5.0f | %4lld | %8.0f", m,
+		            c_stats[m].median, c_stats[m].p95, c_stats[m].max, cw_stats[m].median, cw_stats[m].p95, cw_stats[m].max,
+		            static_cast<long long>(r[m]), x_stats[m].max, s_stats[m].max, static_cast<long long>(g[m]), hf_stats[m].max);
+		if (schema_index >= 0) std::printf(" / %.0f", hfb_stats[m].max);
+		std::printf("\n");
 	}
-	std::printf("  port rule C(4) / (4 x C(1)) on GPU time at the median: %.3f (MR0: <= 0.6); g(M) stays at its estimate\n",
+	std::printf("  port rule C(4) / (4 x C(1)) on GPU time at the median: %.3f (MR0: <= 0.6); g(M) = ceil(S(M) x 1000 / C(1)),"
+	            " printed, not written into the header (MR7 takes the per-M maxima)\n",
 	            c_stats[4].median / (4.0 * c_stats[1].median));
 
 	if (!json_path.empty()) {
@@ -300,8 +483,17 @@ int main(int argc, char** argv) {
 			             c_stats[m].max);
 			std::fprintf(f, ", \"c_wall\": {\"median\": %.1f, \"p95\": %.1f, \"max\": %.1f}", cw_stats[m].median, cw_stats[m].p95,
 			             cw_stats[m].max);
-			std::fprintf(f, ", \"with_logits_wall_info_only\": {\"median\": %.1f, \"p95\": %.1f, \"max\": %.1f}}", cl_stats[m].median,
-			             cl_stats[m].p95, cl_stats[m].max);
+			std::fprintf(f, ", \"exact_gpu_us\": [");
+			for (size_t i = 0; i < xsamples[m].size(); ++i) std::fprintf(f, "%s%.1f", i ? ", " : "", xsamples[m][i].x_gpu_us);
+			std::fprintf(f, "], \"exact_wall_us\": [");
+			for (size_t i = 0; i < xsamples[m].size(); ++i) std::fprintf(f, "%s%.1f", i ? ", " : "", xsamples[m][i].x_us);
+			std::fprintf(f, "], \"logits_stage_gpu_us\": [");
+			for (size_t i = 0; i < xsamples[m].size(); ++i) std::fprintf(f, "%s%.1f", i ? ", " : "", xsamples[m][i].stage_us);
+			std::fprintf(f, "], \"host_finish_us\": [");
+			for (size_t i = 0; i < xsamples[m].size(); ++i) std::fprintf(f, "%s%.1f", i ? ", " : "", xsamples[m][i].host_us);
+			std::fprintf(f, "], \"host_finish_bound_us\": [");
+			for (size_t i = 0; i < bsamples[m].size(); ++i) std::fprintf(f, "%s%.1f", i ? ", " : "", bsamples[m][i].host_us);
+			std::fprintf(f, "], \"g_permille\": %lld}", static_cast<long long>(g[m]));
 		}
 		std::fprintf(f, "\n]}\n");
 		std::fclose(f);
@@ -314,15 +506,21 @@ int main(int argc, char** argv) {
 			return 1;
 		}
 		if (!csv_append)
-			std::fprintf(f, "model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us\n");
+			std::fprintf(f, "model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us,"
+			                "logits_stage_gpu_us,host_finish_us\n");
 		auto up = [](double v) { return static_cast<long long>(CeilPerMille(v, 1000.0)); };  // whole us, rounded up
 		for (uint32_t m = 1; m <= kMaxM; ++m) {
 			for (int lg = 0; lg < 2; ++lg) {
-				const Stats& st = lg ? cl_stats[m] : c_stats[m];  // logits 1: the wall stand-in, information only
-				const Stats& wall = lg ? cl_stats[m] : cw_stats[m];
-				std::fprintf(f, "%s,%u,%d,%d,%d,%lld,%lld,%lld,%s,%lld,%lld,%lld\n", model_name.c_str(), m, lg, runs, warmup,
-				             up(st.median), up(st.p95), up(st.max), lg ? "wall" : "gpu", up(wall.median), up(wall.p95),
-				             up(wall.max));
+				const Stats& st = lg ? x_stats[m] : c_stats[m];  // logits 1: the Exact chunk's GPU time, layers + stage
+				const Stats& wall = lg ? xw_stats[m] : cw_stats[m];
+				std::fprintf(f, "%s,%u,%d,%d,%d,%lld,%lld,%lld,gpu,%lld,%lld,%lld,", model_name.c_str(), m, lg, runs, warmup,
+				             up(st.median), up(st.p95), up(st.max), up(wall.median), up(wall.p95), up(wall.max));
+				if (lg) {
+					const Stats& hf = schema_index >= 0 ? hfb_stats[m] : hf_stats[m];  // the certified (bound) shape when named
+					std::fprintf(f, "%lld,%lld\n", up(s_stats[m].max), up(hf.max));
+				} else {
+					std::fprintf(f, ",\n");
+				}
 			}
 		}
 		std::fclose(f);
@@ -363,6 +561,7 @@ int main(int argc, char** argv) {
 		std::printf("wrote %s\n", out_path.c_str());
 	}
 	sslm_gpu_seq_release(e.ctx, e.seq);
+	sslm_gpu_seq_release(e.ctx, e.seq_x);
 	std::printf("PASS multirow_cost_bench: %u M values x %d runs\n", kMaxM, runs);
 	return 0;
 }
