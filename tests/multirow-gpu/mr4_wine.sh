@@ -18,9 +18,10 @@
 #   census    tests/ci/check_gpu_status_site_census.py: every status and catch site in src/gpu is in te425's list.
 #   contract  gpu_1p0.h admits SCHEMA_FORCED and FIRST_PREWALKED (neither still marked a reserved bad spec).
 #   cells     mr4_cells.exe: 7.9, 4.6j, 4.6e, 4.6f, n1 (MR4_CELLS=7.9 runs a subset; 2.3, 8.10, s1 retired at MRX).
-#   c83       8.3: mr4_83_canon.exe built from 1.17's tree (--base) and from the branch; the canonical loop's lines (tokens,
-#             blob, walk, ready flag, context, at chunk budgets 1..8 and 64, dedicated and pooled, four schemas) are equal,
-#             every budget gives the same line within a binary, and potion_shop_order's stream is the CPU's pinned one.
+#   c83       8.3: mr4_83_canon.exe built from 1.17's tree (--base) and from the branch. MR5 re-point: the Off loop's lines
+#             (tokens, blob, walk, ready flag, context; dedicated and pooled, four schemas) equal 1.17's, the branch's
+#             Exact loop at chunk budgets 1..8 and 64 equals its Off lines (the CPU's canonical POTION pin retires: Off
+#             is not the canonical stream; the CPU-Off parity is mr5_cells' gx.1).
 #   table     C18's table as data (rulings item 12): mr4_table.cpp compiled against the header the record names.
 #   sfdg      MR4 review S4, ruling 18: 1.17's 15 SFD-GPU cells (tests/schema-fast-decode-gpu: G0.1 ... G12.10, the
 #             jump verb's G12.x among them), built with build_sfd_gpu_mingw.sh from 1.17's tree (--base) and from the
@@ -153,21 +154,25 @@ if want c83; then
 		fixtures4
 		wine_up
 		ok=1
-		(cd "$BT/out/c83" && WINEPREFIX="$WINEPREFIX-c83" "$WINE" ./mr4_83_canon.exe --fixtures="$F4") | tr -d '\r' >"$OUT/c83-base.txt" || ok=0
-		(cd "$OUT/c83" && WINEPREFIX="$WINEPREFIX-c83" "$WINE" ./mr4_83_canon.exe --fixtures="$F4") | tr -d '\r' >"$OUT/c83-branch.txt" || ok=0
-		n="$(grep -c '^canon ' "$OUT/c83-base.txt" || true)"
-		[ "$n" = 56 ] || { ok=0; echo "    c83: 1.17's binary printed $n of 56 lines"; }
-		if ! diff -q "$OUT/c83-base.txt" "$OUT/c83-branch.txt" >/dev/null; then
-			ok=0; echo "    c83: the branch's canonical loop differs from 1.17's ($(diff "$OUT/c83-base.txt" "$OUT/c83-branch.txt" | grep -c '^>') lines):"
-			{ diff "$OUT/c83-base.txt" "$OUT/c83-branch.txt" | head -8 | sed 's/^/      /'; } || true
+		# MR5 re-point (red-suite-mr5.md): 1.17's binary prints the Off loop only; the branch prints Off and the Exact loop
+		# at seven budgets (mr4_83_canon.cpp).
+		(cd "$BT/out/c83" && WINEPREFIX="$WINEPREFIX-c83" "$WINE" ./mr4_83_canon.exe --fixtures="$F4" --loop=off) | tr -d '\r' >"$OUT/c83-base.txt" || ok=0
+		(cd "$OUT/c83" && WINEPREFIX="$WINEPREFIX-c83" "$WINE" ./mr4_83_canon.exe --fixtures="$F4" --loop=both) | tr -d '\r' >"$OUT/c83-branch.txt" || ok=0
+		n="$(grep -c '^off ' "$OUT/c83-base.txt" || true)"
+		[ "$n" = 8 ] || { ok=0; echo "    c83: 1.17's binary printed $n of 8 Off lines"; }
+		if ! diff -q "$OUT/c83-base.txt" <(grep '^off ' "$OUT/c83-branch.txt") >/dev/null; then
+			ok=0; echo "    c83: the branch's Off loop differs from 1.17's:"
+			{ diff "$OUT/c83-base.txt" <(grep '^off ' "$OUT/c83-branch.txt") | head -8 | sed 's/^/      /'; } || true
 		fi
-		# Chunk invariance within the branch (SFD §5.6): every budget gives the same line per schema and kind.
-		inv="$(sed -E 's/ budget [0-9]+ / /' "$OUT/c83-branch.txt" | sort -u | grep -c '^canon ' || true)"
-		[ "$inv" = 8 ] || { ok=0; echo "    c83: the branch's lines vary with the chunk budget ($inv distinct of 8 schema x kind)"; }
-		# The CPU's pinned POTION stream (1.17's G7.1 digest, tests/schema-fast-decode-gpu/sfdg_helpers.h).
-		grep '^canon potion_shop_order ' "$OUT/c83-branch.txt" | grep -qv 'tokens 24 5498cef23900bfbfad790d7174b6badc04bddc58afdca629daf8e2d0b48488bd ' &&
-			{ ok=0; echo "    c83: potion_shop_order's stream is not the CPU's pinned one"; }
-		if [ $ok = 1 ]; then echo "PASS c83 (8.3: 56 canonical-loop lines equal 1.17's ($(git rev-parse --short=8 "$BASE")), chunk-invariant, POTION = the CPU's pin)"
+		# Exact is a run that never calls the verb: every Exact line equals its schema and kind's Off line but for the budget.
+		ne="$(grep -c '^exact ' "$OUT/c83-branch.txt" || true)"
+		[ "$ne" = 56 ] || { ok=0; echo "    c83: the branch printed $ne of 56 Exact lines"; }
+		bad="$(sed -E 's/ budget [0-9]+ / /; s/^(off|exact) //' "$OUT/c83-branch.txt" | grep -v '^FAIL' | sort -u | wc -l)"
+		[ "$bad" = 8 ] || { ok=0; echo "    c83: Exact lines differ from Off's ($bad distinct of 8 schema x kind)"; }
+		# MR5: the CPU's pinned POTION stream (1.17's G7.1 digest) is RETIRED here. It pins the canonical loop's stream (24
+		# tokens, the forced chains admitted as the canonical tokenization); Off spells the same bytes its own way (42
+		# tokens on F-SFD), so no Exact or Off loop can equal it. The CPU-Off parity is mr5_cells' gx.1.
+		if [ $ok = 1 ]; then echo "PASS c83 (8.3 at MR5: 8 Off lines equal 1.17's ($(git rev-parse --short=8 "$BASE")), 56 Exact lines equal Off's)"
 		else echo "FAIL c83 ($OUT/c83-*.txt)"; FAILED+=(c83); fi
 	fi
 fi

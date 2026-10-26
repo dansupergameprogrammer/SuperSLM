@@ -44,6 +44,10 @@
 //   n1 (last_rows_committed across a jump)                          RE-POINT: a PROMPT chunk's close, then an Exact jump.
 // Applied at MRX (ruling 22): 2.3, 8.10 and s1 are compiled out (#if 0) and out of the table; 4.6j/e/f and n1 open
 // their chunk with PROMPT; 7.9 and n1 are red until MR5 (the GPU refuses Exact).
+// Applied at MR5 (red-suite-mr5.md): 7.9 and n1 map the model with the device-resident logits head and put a token in
+// hand before the jump (Exact's entry). 7.9's ready leg becomes the ready shape's no-op, and its row-j coverage comes
+// from the produced-token search over longkey and potion (at least 4 distinct j); n1 takes the finish's token and
+// drafts Off's own tokens.
 // Usage: mr4_cells.exe --fixtures=DIR [--cells=7.9,4.6j,4.6e,4.6f,n1] [--show=N]
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -62,6 +66,7 @@
 #include <vector>
 
 #include "mr2_common.h"
+#include "superslm/sslm_abi.h"  // SSLM_JUMP_EXACT (MR5: n1's explicit draft)
 
 namespace {
 using S = SslmGpuStatus;
@@ -461,10 +466,11 @@ void Cell810(Fsfd& fx) {
 // the produced token itself refuses, j > 0 when a chain row does).
 std::vector<int32_t> ChainOf(World& w, SslmGpuSequenceHandle* s) { return Chain(w, s); }
 // The first row of `rows` (after the prompt; the first row unwalked when `first_plain`) whose layers refuse, or -1.
-int FirstRefusalRun(Fsfd& fx, uint32_t stream, bool produced, std::vector<int32_t>* rows_out, int32_t* tok_out) {
+int FirstRefusalRun(Fsfd& fx, uint32_t stream, bool produced, std::vector<int32_t>* rows_out, int32_t* tok_out, const char* schema = nullptr) {
+	if (!schema) schema = produced ? kPotion : kLongKey;
 	World w(fx.m);
 	if (!w.ok) return -2;
-	SslmGpuSequenceHandle* s = NewSeq(w, false, 200, produced ? kPotion : kLongKey);
+	SslmGpuSequenceHandle* s = NewSeq(w, false, 200, schema);
 	const std::vector<int32_t> p = Prompt(6, stream);
 	if (PromptBridge(w, fx.m, s, p) != S::SSLM_OK) return -2;
 	std::vector<int32_t> rows;
@@ -479,7 +485,7 @@ int FirstRefusalRun(Fsfd& fx, uint32_t stream, bool produced, std::vector<int32_
 	*rows_out = rows;
 	// The one-row run on a fresh handle with the same history.
 	World w2(fx.m);
-	SslmGpuSequenceHandle* t = NewSeq(w2, false, 200, produced ? kPotion : kLongKey);
+	SslmGpuSequenceHandle* t = NewSeq(w2, false, 200, schema);
 	if (PromptBridge(w2, fx.m, t, p) != S::SSLM_OK) return -2;
 	if (produced) {
 		S st = S::SSLM_OK;
@@ -492,65 +498,73 @@ int FirstRefusalRun(Fsfd& fx, uint32_t stream, bool produced, std::vector<int32_
 	}
 	return -1;
 }
-void JumpRestsAtEntry(Fsfd& rf, uint32_t stream, bool produced, int32_t tok, int o, int len, int j, const std::string& tag0) {
+// MR5 re-point (MRX table; ruling 25's turn-green list): NULL options mean Exact, which needs a token in hand and the
+// device-resident logits head. The pass is the token in hand p (the prompt finish's produced token), then the forced
+// chain after it clipped to len - 1: a pass of len rows, computed whole before the check, so a guard refusal at its row
+// j faults the first (here the only) pass whether or not Off would produce the chain. Such a fault keeps nothing:
+// 1.17's status (SSLM_DEVICE_LOST) and the entry state, as before. (The ready shape's sweep, a first jump over rows
+// 0..o-1 then a pass refusing at row j, has no Exact form: Exact runs only with a token in hand, and Off does not
+// reproduce the forced chain on F-SFD, so its rows cannot be put in hand by decoding. Its j coverage moves to the
+// produced-token search below, over longkey and potion.)
+void JumpRestsAtEntry(Fsfd& rf, uint32_t stream, const char* schema, int32_t tok, int len, int j, const std::string& tag0) {
 	const Model& m = rf.m;
 	for (int pooled = 0; pooled <= 1; ++pooled) {
 		const std::string tag = F("%s %s", tag0.c_str(), pooled ? "pooled" : "dedicated");
-		World w(m);
+		World w(m, nullptr, SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE);
 		if (!w.ok) { Check(false, tag); continue; }
-		SslmGpuSequenceHandle* s = NewSeq(w, pooled != 0, 200, produced ? kPotion : kLongKey);
+		SslmGpuSequenceHandle* s = NewSeq(w, pooled != 0, 200, schema);
 		const std::vector<int32_t> p = Prompt(6, stream);
 		Check(PromptBridge(w, m, s, p) == S::SSLM_OK, tag + ": prompt");
-		int32_t pend = -1;
-		if (produced) {
-			S st = S::SSLM_OK;
-			pend = Produce(w, m, s, p.back(), &st);
-			Check(st == S::SSLM_OK && pend == tok, tag + ": the produced token");
-		}
+		S st = S::SSLM_OK;
+		const int32_t pend = Produce(w, m, s, p.back(), &st);
+		Check(st == S::SSLM_OK && pend == tok, F("%s: the produced token %d, want %d", tag.c_str(), pend, tok));
 		std::vector<int32_t> out(64);
 		int32_t n = -9;
-		if (o > 0) {
-			StatusIs(sslm_gpu_seq_jump_forward(w.ctx, s, -1, o, nullptr, out.data(), 64, &n), S::SSLM_OK, tag + F(": the verb over rows 0..%d", o - 1));
-			Check(n == o, F("%s: %d rows before the window, want %d", tag.c_str(), n, o));
-		}
 		const Obs entry = Observe(w, s);
-		n = -9;
-		const S st = sslm_gpu_seq_jump_forward(w.ctx, s, pend, len, nullptr, out.data(), 64, &n);
+		st = sslm_gpu_seq_jump_forward(w.ctx, s, pend, len, nullptr, out.data(), 64, &n);
 		// 1.17's contract (gpu_1p0.h; the verb keeps it, plan §4.3, §4.7): a fault in the pass other than an allocation
 		// failure, the guard's refusal included, restores the entry state and returns SSLM_DEVICE_LOST.
 		StatusIs(st, S::SSLM_DEVICE_LOST, tag + F(": a pass of %d rows refusing at its row %d", len, j));
 		Unchanged(w, s, entry, tag + ": rests at entry");
 	}
 }
+// The ready shape (MR5): no token in hand, so Exact is a no-op: SSLM_OK, count 0, nothing changed.
+void JumpReadyNoOp(Fsfd& rf, uint32_t stream) {
+	for (int pooled = 0; pooled <= 1; ++pooled) {
+		const std::string tag = F("ready shape, no token in hand, %s", pooled ? "pooled" : "dedicated");
+		World w(rf.m, nullptr, SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE);
+		if (!w.ok) { Check(false, tag); continue; }
+		SslmGpuSequenceHandle* s = NewSeq(w, pooled != 0, 200, kLongKey);
+		Check(PromptBridge(w, rf.m, s, Prompt(6, stream)) == S::SSLM_OK, tag + ": prompt");
+		std::vector<int32_t> out(64);
+		int32_t n = -9;
+		const Obs entry = Observe(w, s);
+		StatusIs(sslm_gpu_seq_jump_forward(w.ctx, s, -1, 8, nullptr, out.data(), 64, &n), S::SSLM_OK, tag);
+		Check(n == 0, F("%s: count %d, want 0 (a no-op)", tag.c_str(), n));
+		Unchanged(w, s, entry, tag + ": a no-op");
+	}
+}
 void Cell79(Fsfd& rf) {
 	g_cell = "7.9";
-	// The ready shape: one prompt whose start chain first refuses at row r >= 7.
-	int r = -1;
-	uint32_t stream = 0;
-	std::vector<int32_t> rows;
-	int32_t tok = -1;
-	for (uint32_t st = 1; st < 300 && r < 7; ++st) {
-		const int got = FirstRefusalRun(rf, st, false, &rows, &tok);
-		if (got >= 7) { r = got; stream = st; }
-	}
-	Check(r >= 7, "no prompt refuses first at row 7 or later of longkey's start chain (fsfd_refuse)");
-	if (r >= 7) {
-		std::printf("7.9: stream %u refuses first at chain row %d\n", stream, r);
-		for (int j = 0; j < 8; ++j) {
-			const int o = r - j, len = std::min<int>(8, static_cast<int>(rows.size()) - o);
-			JumpRestsAtEntry(rf, stream, false, -1, o, len, j, F("ready, row %d of %d", j, len));
-		}
-	}
-	// The produced-token shape: whatever first-refusal rows the search meets, at least one.
+	// The produced-token shape on longkey and potion: every first-refusal row j in 0..7 the search meets, at least 4.
 	std::set<int> seen;
-	for (uint32_t st = 1; st < 120 && seen.size() < 4; ++st) {
-		const int got = FirstRefusalRun(rf, st, true, &rows, &tok);
-		if (got < 0 || got >= 8 || seen.count(got)) continue;
-		seen.insert(got);
-		const int len = std::min<int>(8, static_cast<int>(rows.size()));
-		JumpRestsAtEntry(rf, st, true, tok, 0, len, got, F("after produced token %d, row %d of %d", tok, got, len));
-	}
-	Check(!seen.empty(), "no produced-token pass with a refusing row was found");
+	uint32_t ready_stream = 1;
+	for (const char* schema : {kLongKey, kPotion})
+		for (uint32_t st = 1; st < 300 && seen.size() < 8; ++st) {
+			std::vector<int32_t> rows;
+			int32_t tok = -1;
+			const int got = FirstRefusalRun(rf, st, true, &rows, &tok, schema);
+			if (got < 0 || got >= 8 || seen.count(got)) continue;
+			const int len = std::min<int>(8, static_cast<int>(rows.size()));
+			if (len < 2 || got >= len) continue;  // a pass needs a draft row (budget 1 clips the draft to nothing: a no-op)
+			if (seen.empty()) ready_stream = st;
+			seen.insert(got);
+			std::printf("7.9: %s stream %u: produced token %d, the pass refuses first at its row %d of %d\n", schema, st, tok, got, len);
+			JumpRestsAtEntry(rf, st, schema, tok, len, got, F("%s after produced token %d, row %d of %d", schema, tok, got, len));
+		}
+	Check(seen.size() >= 4, F("only %zu distinct refusing rows j in 0..7 were found (want 4 or more)", seen.size()));
+	// The ready shape: no token in hand, a no-op (on a prompt fsfd_refuse admits: the search's first stream's).
+	JumpReadyNoOp(rf, ready_stream);
 }
 
 // ------------------------------------------------------------------------------------------------ ruling 18 (MR4 review)
@@ -695,13 +709,17 @@ void CellS3(Fsfd& fx, int verb) {
 
 // N1: last_rows_committed keeps its entry value across a jump (the verb's passes are internal; LastRowsKeep): after a
 // prompt (0) and after a 3-row PROMPT close (3), an Exact jump (opts NULL) of 8 rows leaves it there (green at MR5).
-// MXK6 goes red.
+// MXK6 goes red (ruling 25: graded once n1 is green). MR5 re-point: Exact needs a token in hand, so the entry takes
+// the finish's token (after the prompt the decode bridge's; after the PROMPT close SslmGpuSeqFinishTokenForG5Bridge's,
+// the finish alone, no row embedded), and the jump is explicit
+// Exact with Off's own next 7 tokens as the draft (a twin's): 7 kept rows at budget 8. The model maps with the
+// device-resident logits head.
 void CellN1(Fsfd& fx) {
 	const Model& m = fx.m;
 	for (int pooled = 0; pooled <= 1; ++pooled)
 		for (int entry_rows = 0; entry_rows <= 3; entry_rows += 3) {
 			const std::string tag = F("%s, last_rows_committed %d at entry", pooled ? "pooled" : "dedicated", entry_rows);
-			World w(m);
+			World w(m, nullptr, SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE);
 			if (!w.ok) { Check(false, tag); continue; }
 			SslmGpuSequenceHandle* a = NewSeq(w, pooled != 0, 200, kLongKey);
 			Check(PromptBridge(w, m, a, Prompt(12, 6)) == S::SSLM_OK, tag + ": prompt");
@@ -711,11 +729,46 @@ void CellN1(Fsfd& fx) {
 				Check(chain.size() >= 3 && EmbedRows(w, a, SSLM_GPU_ROWS_PROMPT, {chain[0], chain[1], chain[2]}, 0, &adm) == S::SSLM_OK &&
 				          CloseChunk(w, m, a) == S::SSLM_OK, tag + ": the 3-row close");
 			}
+			int32_t pend = -1;
+			// After the prompt, the decode bridge's finish (as Off's first token); after the PROMPT close, the finish bridge.
+			S fst = S::SSLM_OK;
+			if (entry_rows) fst = SslmGpuSeqFinishTokenForG5Bridge(w.ctx, a, &pend);
+			else pend = Produce(w, m, a, Prompt(12, 6).back(), &fst);
+			StatusIs(fst, S::SSLM_OK, tag + ": the finish's token");
+			Check(pend >= 0, F("%s: the finish gave %d", tag.c_str(), pend));
 			Check(LastCommitted(a) == entry_rows, F("%s: %d before the jump", tag.c_str(), LastCommitted(a)));
+			// The draft: Off's own next 7 tokens (a twin with the same history), so all 7 are kept. The forced chain is
+			// not used: Off need not produce it (F-SFD's model spells forced bytes its own way).
+			SslmGpuSequenceHandle* t = NewSeq(w, pooled != 0, 200, kLongKey);
+			Check(PromptBridge(w, m, t, Prompt(12, 6)) == S::SSLM_OK, tag + ": the twin's prompt");
+			if (entry_rows) {
+				const std::vector<int32_t> chain = Chain(w, t);
+				int32_t adm = -9;
+				Check(chain.size() >= 3 && EmbedRows(w, t, SSLM_GPU_ROWS_PROMPT, {chain[0], chain[1], chain[2]}, 0, &adm) == S::SSLM_OK &&
+				          CloseChunk(w, m, t) == S::SSLM_OK, tag + ": the twin's 3-row close");
+			}
+			int32_t tp = -1;
+			S tst = S::SSLM_OK;
+			if (entry_rows) tst = SslmGpuSeqFinishTokenForG5Bridge(w.ctx, t, &tp);
+			else tp = Produce(w, m, t, Prompt(12, 6).back(), &tst);
+			Check(tst == S::SSLM_OK && tp == pend, F("%s: the twin's finish %s token %d (want %d)", tag.c_str(), N(tst), tp, pend));
+			std::vector<int32_t> draft;
+			S dst = S::SSLM_OK;
+			for (int d = 0; d < 7; ++d) {
+				tp = Produce(w, m, t, tp, &dst);
+				if (dst != S::SSLM_OK || tp < 0) break;
+				draft.push_back(tp);
+			}
+			Check(draft.size() == 7, F("%s: Off gave %zu next tokens, want 7 (last %s, %d)", tag.c_str(), draft.size(), N(dst), tp));
+			SslmGpuJumpOptions o{};
+			o.struct_size = sizeof o;
+			o.mode = SSLM_JUMP_EXACT;
+			o.draft = draft.data();
+			o.draft_count = static_cast<int32_t>(draft.size());
 			std::vector<int32_t> out(64);
 			int32_t n = -9;
-			StatusIs(sslm_gpu_seq_jump_forward(w.ctx, a, -1, 8, nullptr, out.data(), 64, &n), S::SSLM_OK, tag + ": the jump");
-			Check(n >= 5, F("%s: the jump admitted %d rows (want a multi-pass jump of 5 or more)", tag.c_str(), n));
+			StatusIs(sslm_gpu_seq_jump_forward(w.ctx, a, pend, 8, &o, out.data(), 64, &n), S::SSLM_OK, tag + ": the jump");
+			Check(n == static_cast<int32_t>(draft.size()), F("%s: the jump kept %d rows, want %zu (Off's own tokens)", tag.c_str(), n, draft.size()));
 			Check(LastCommitted(a) == entry_rows, F("%s: last_rows_committed %d after a jump of %d rows, want %d (its entry value)", tag.c_str(), LastCommitted(a), n, entry_rows));
 		}
 }

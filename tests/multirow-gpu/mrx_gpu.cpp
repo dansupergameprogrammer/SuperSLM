@@ -14,16 +14,22 @@
 //        (21b): so is mode 0 with a draft, with draft_count 2 and no draft, and with both.
 //   g.2  NULL options equal explicit Exact byte for byte: status, count, out_forced, the save blob, then four
 //        decode-bridge tokens and the blob after them. Budgets 1, 4 and 8, after 0 and 2 decodes. Red until MR5
-//        (GPU Exact).
+//        (GPU Exact). MR5 (ruling 25's list): non-vacuous. Both must return SSLM_OK, keep exactly the forced chain's
+//        leading tokens that Off produces (up to budget - 1, a token in hand), and the stream and blob after equal
+//        the Off twin's. On F-SFD Off rarely spells a forced chain canonically, so each case also jumps explicit Exact
+//        with Off's own next budget - 1 tokens as the draft: all kept, then a decode equal to the Off twin's (bytes). The engine maps the model
+//        with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE (without it Exact is a no-op, ruling 26 Q2).
 //   g.3  sslm_gpu_seq_embed_rows refuses kind 1 (the removed SCHEMA_FORCED) as a bad spec
 //        (SSLM_SEQUENCE_KV_BUFFER_MISMATCH), with flags 0 and with 0x1 (FIRST_PREWALKED), the rows being the chain
 //        the schema forces (so the kind is the only thing wrong): out_admitted unwritten, no chunk open, the save blob
-//        equal. Control: kind 2 (EXACT_DRAFT) stays a bad spec; kind 0 (PROMPT) on the same tokens is admitted. Ruling
-//        22: flag 0x1 (FIRST_PREWALKED, removed) with kind 0 is a bad spec too.
+//        equal. Control: kind 0 (PROMPT) on the same tokens is admitted. Ruling 22: flag 0x1 (FIRST_PREWALKED, removed)
+//        with kind 0 is a bad spec too. MR5 re-point: kind 2 (EXACT_DRAFT) was a bad-spec control until MR5; it is
+//        now admitted (the pending token, then the chain), so g.3 is red until MR5 on that case alone.
 //   g.4a 1.17's Canonical saves restore: SSLM_OK, the restored handle saves the same bytes, and decode-only it gives
 //        the recorder's own next 8 tokens.
 //   g.4b ...and continue under the mode asked for (E-11 (d)): an explicit Exact jump, then decodes, gives the same 8
 //        tokens, and NULL options and mode 0 give what explicit Exact gives (tokens and blob). Red until MR5.
+//        MR5: and the blob after equals the decode-only run's (the Off twin on this build).
 //
 // Mode 0 and kind 1 are literals, never SSLM_JUMP_CANONICAL, SSLM_JUMP_DEFAULT or SSLM_GPU_ROWS_SCHEMA_FORCED: the
 // removed names leave the headers at MRX and SSLM_JUMP_DEFAULT does not exist in 1.17's tree, and this file compiles
@@ -38,6 +44,7 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -103,6 +110,16 @@ struct Engine {
 	SslmGpuModelHandle* model = nullptr;
 	uint32_t full = 0;
 	bool ok = false;
+	// MR5 (ruling 26 Q2): GPU Exact needs the device-resident logits head; without it the jump verb is a no-op
+	// (docs/api.md: "the model lacks the exact legal-row finish"), which would make g.1/g.2/g.4b vacuous. The
+	// recorder (MRX_V117) keeps the default mapping it recorded 1.17's blobs with.
+	static GpuResidencyConfig Residency() {
+		GpuResidencyConfig rc{};
+#ifndef MRX_V117
+		rc.flags = SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE;
+#endif
+		return rc;
+	}
 	Engine() {
 		std::string err;
 		if (!ReadAll(g_fixtures + "/fsfd.sslm", &bytes) ||
@@ -112,7 +129,7 @@ struct Engine {
 		}
 		full = superslm_gpu::DispatchesPerLayer(false) * view.config.num_hidden_layers;  // F-SFD has no QK norm
 		if (sslm_gpu_context_create(GpuContextConfig{}, &ctx) != S::SSLM_OK ||
-		    sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) != S::SSLM_OK) {
+		    sslm_gpu_model_map(ctx, &view, Residency(), &model) != S::SSLM_OK) {
 			std::printf("FAIL context\n");
 			return;
 		}
@@ -275,40 +292,112 @@ void CellG1(Engine& e) {
 }
 
 // ------------------------------------------------------------------------------------------------ g.2 (and g.1's mode 0)
-// `mode` (kNull, or 0) against explicit Exact, byte for byte.
+// `mode` (kNull, or 0) against explicit Exact, byte for byte, and both against the Off twin (MR5, ruling 25's
+// turn-green list: non-vacuous). Under MRX both sides were refused with status 11, which compared equal; now the
+// jump must succeed, keep the forced chain where there is one (pending token in hand, budget > 1), and the stream
+// and the save blob after it must equal a run that never calls the verb: the Off twin's first count + 4 tokens and
+// its blob after them.
 void EqualsExact(Engine& e, int32_t mode, const char* what) {
-	int compared = 0;
+	int compared = 0, kept = 0;
 	for (const char* schema : kSchemas)
 		for (int32_t budget : {1, 4, 8})
 			for (int decodes : {0, 2}) {
 				const std::string tag = Tag(schema, budget, decodes);
-				int32_t pa = -1, la = -1, pb = -1, lb = -1;
+				int32_t pa = -1, la = -1, pb = -1, lb = -1, pc = -1, lc = -1;
 				SslmGpuSequenceHandle* a = e.Pending(schema, 23u, decodes, &pa, &la);
 				SslmGpuSequenceHandle* b = e.Pending(schema, 23u, decodes, &pb, &lb);
-				if (!a || !b) {
+				SslmGpuSequenceHandle* c = e.Pending(schema, 23u, decodes, &pc, &lc);  // the Off twin
+				if (!a || !b || !c) {
 					Check(false, tag + ": setup");
 					if (a) sslm_gpu_seq_release(e.ctx, a);
 					if (b) sslm_gpu_seq_release(e.ctx, b);
+					if (c) sslm_gpu_seq_release(e.ctx, c);
 					continue;
 				}
-				if (e.Chain(a) > 0) ++compared;
+				std::vector<int32_t> chain_ids;
+				const int32_t chain = e.Chain(a, &chain_ids);
+				const bool in_hand = pa >= 0;
+				// The draft is the forced chain, checked against Off: Exact keeps its leading tokens that Off produces
+				// too (the chain is the canonical tokenization; the model may spell the same bytes otherwise). Off's
+				// next tokens from a fourth handle with the same history.
+				int32_t want_kept = 0;
+				std::vector<int32_t> offn;  // Off's next budget - 1 tokens
+				if (in_hand && budget > 1) {
+					int32_t pd = -1, ld = -1;
+					SslmGpuSequenceHandle* d = e.Pending(schema, 23u, decodes, &pd, &ld);
+					for (int32_t k = 0; d && k < budget - 1; ++k) {
+						int32_t z = -1;
+						if (e.Decode(d, &pd, &ld, &z) != S::SSLM_OK || z < 0) break;
+						offn.push_back(z);
+					}
+					if (d) sslm_gpu_seq_release(e.ctx, d);
+					const size_t lim = std::min(chain_ids.size(), offn.size());
+					while (static_cast<size_t>(want_kept) < lim && chain_ids[static_cast<size_t>(want_kept)] == offn[static_cast<size_t>(want_kept)]) ++want_kept;
+				}
+				// Non-vacuous at MR5 whatever the chain: explicit Exact with Off's own next tokens as the draft keeps all of
+				// them, and one decode after it gives the Off twin's next token and bytes (a fifth and sixth handle).
+				if (!offn.empty()) {
+					int32_t px = -1, lx = -1, py = -1, ly = -1;
+					SslmGpuSequenceHandle* x = e.Pending(schema, 23u, decodes, &px, &lx);
+					SslmGpuSequenceHandle* y = e.Pending(schema, 23u, decodes, &py, &ly);
+					if (x && y) {
+						const Jump jx = DoJump(e, x, px, budget, kModeExact, offn.data(), static_cast<int32_t>(offn.size()));
+						Check(jx.st == S::SSLM_OK && jx.count == static_cast<int32_t>(offn.size()),
+						      F("%s: explicit Exact with Off's own %zu tokens: %u, kept %d", tag.c_str(), offn.size(), (unsigned)jx.st, jx.count));
+						if (jx.st == S::SSLM_OK) {
+							AfterJump(e, x, jx, &px, &lx);
+							int32_t tx = -1, ty = -1;
+							(void)e.Decode(x, &px, &lx, &tx);
+							for (size_t k = 0; k <= offn.size(); ++k) (void)e.Decode(y, &py, &ly, &ty);
+							Check(tx == ty && e.Save(x) == e.Save(y), F("%s: after Off's own draft and a decode: token %d, Off's %d, or the blob differs", tag.c_str(), tx, ty));
+						}
+					} else {
+						Check(false, tag + ": the own-draft handles");
+					}
+					if (x) sslm_gpu_seq_release(e.ctx, x);
+					if (y) sslm_gpu_seq_release(e.ctx, y);
+				}
+				if (chain > 0) ++compared;
 				const Jump ja = DoJump(e, a, pa, budget, mode), jb = DoJump(e, b, pb, budget, kModeExact);
+				Check(ja.st == S::SSLM_OK && jb.st == S::SSLM_OK,
+				      F("%s: %s returned %u, explicit Exact %u (want SSLM_OK: Exact on the GPU)", tag.c_str(), what, (unsigned)ja.st, (unsigned)jb.st));
 				Check(ja == jb, F("%s: %s returned %u count %d, explicit Exact %u count %d", tag.c_str(), what, (unsigned)ja.st, ja.count,
 				                  (unsigned)jb.st, jb.count));
 				Check(e.Save(a) == e.Save(b), tag + ": the save blob after " + what + " differs from explicit Exact's");
+				if (ja.st != S::SSLM_OK) {
+					sslm_gpu_seq_release(e.ctx, a);
+					sslm_gpu_seq_release(e.ctx, b);
+					sslm_gpu_seq_release(e.ctx, c);
+					continue;
+				}
+				// No token in hand (the prompt's ready shape) is a no-op.
+				Check(ja.count == want_kept, F("%s: %s kept %d, want %d (chain %d, %s)", tag.c_str(), what, ja.count, want_kept, chain,
+				                               in_hand ? "token in hand" : "no token in hand"));
+				if (want_kept > 0) ++kept;
+				std::vector<int32_t> sa(ja.out.begin(), ja.out.begin() + std::max<int32_t>(ja.count, 0));
 				AfterJump(e, a, ja, &pa, &la);
 				AfterJump(e, b, jb, &pb, &lb);
-				std::vector<int32_t> ta, tb;
+				std::vector<int32_t> ta, tb, tc;
 				for (int k = 0; k < 4; ++k) {
 					int32_t x = -1, y = -1;
 					if (e.Decode(a, &pa, &la, &x) == S::SSLM_OK) ta.push_back(x);
 					if (e.Decode(b, &pb, &lb, &y) == S::SSLM_OK) tb.push_back(y);
 				}
 				Check(ta == tb && e.Save(a) == e.Save(b), tag + ": the continuation after " + what + " differs from explicit Exact's");
+				sa.insert(sa.end(), ta.begin(), ta.end());
+				for (size_t k = 0; k < sa.size(); ++k) {
+					int32_t z = -1;
+					if (e.Decode(c, &pc, &lc, &z) != S::SSLM_OK) break;
+					tc.push_back(z);
+				}
+				Check(sa == tc, F("%s: %s's stream (%zu tokens) differs from the Off twin's", tag.c_str(), what, sa.size()));
+				Check(e.Save(a) == e.Save(c), tag + ": the save blob after " + what + " and 4 decodes differs from the Off twin's");
 				sslm_gpu_seq_release(e.ctx, a);
 				sslm_gpu_seq_release(e.ctx, b);
+				sslm_gpu_seq_release(e.ctx, c);
 			}
 	Check(compared >= 6, F("only %d cases had a forced chain at the jump (want 6)", compared));
+	std::printf("    %s: %d of 18 cases kept a chain token\n", what, kept);
 }
 void CellG2(Engine& e) { EqualsExact(e, kNull, "NULL options"); }
 
@@ -328,13 +417,17 @@ void CellG3(Engine& e) {
 			struct Case { int32_t kind; uint32_t flags; bool admitted_ok; const char* what; };
 			const Case cases[] = {{kRowsSchemaForcedOld, 0, false, "kind 1 (SCHEMA_FORCED)"},
 			                      {kRowsSchemaForcedOld, kRowsFirstPrewalked, false, "kind 1 + FIRST_PREWALKED"},
-			                      {2, 0, false, "kind 2 (EXACT_DRAFT, control)"},
+			                      {2, 0, true, "kind 2 (EXACT_DRAFT, admitted from MR5)"},
 			                      {0, kRowsFirstPrewalked, false, "kind 0 + 0x1 (FIRST_PREWALKED, removed: ruling 22)"},
 			                      {0, 0, true, "kind 0 (PROMPT, control)"}};
 			for (const Case& c : cases) {
 				const std::string tag = F("%s/%d %s", schema, decodes, c.what);
+				// MR5 (ruling 26 Q1): EXACT_DRAFT is admitted, its row 0 the pending token. Only with one in hand; the
+				// ready shape's EXACT_DRAFT is mr5_cells' 2.3x.
+				if (c.kind == 2 && pending < 0) continue;
 				std::vector<int32_t> rows;
 				if (c.flags & kRowsFirstPrewalked) rows.push_back(last);
+				if (c.kind == 2) rows.push_back(pending);
 				for (int32_t x : chain) if (rows.size() < 4) rows.push_back(x);
 				const std::vector<uint8_t> before = e.Save(s);
 				SslmGpuRowsSpec spec{};
@@ -478,6 +571,21 @@ void CellG4(Engine& e, bool continue_part) {
 			sslm_gpu_seq_release(e.ctx, s);
 		}
 		Check(by_mode[0] == r.next, F("%s: explicit Exact jump + decodes differs from 1.17's decode-only stream", tag.c_str()));
+		// MR5 (non-vacuous): the bytes after it equal the decode-only run's on this build (the Off twin).
+		{
+			SslmGpuSequenceHandle* s = nullptr;
+			if (sslm_gpu_seq_restore(e.ctx, e.model, r.blob.data(), r.blob.size(), &s) == S::SSLM_OK && s) {
+				int32_t pending = r.pending, last = r.last;
+				for (int k = 0; k < kNext; ++k) {
+					int32_t t = -1;
+					if (e.Decode(s, &pending, &last, &t) != S::SSLM_OK) break;
+				}
+				Check(!blob_mode[0].empty() && blob_mode[0] == e.Save(s), tag + ": the blob after the Exact jump + decodes differs from the Off twin's");
+				sslm_gpu_seq_release(e.ctx, s);
+			} else {
+				Check(false, tag + ": the Off twin's restore");
+			}
+		}
 		Check(by_mode[1] == by_mode[0] && blob_mode[1] == blob_mode[0], tag + ": NULL options after the restore differ from explicit Exact");
 		Check(by_mode[2] == by_mode[0] && blob_mode[2] == blob_mode[0], tag + ": mode 0 after the restore differs from explicit Exact");
 	}

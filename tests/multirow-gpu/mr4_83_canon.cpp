@@ -14,6 +14,17 @@
 // the GPU refuses Exact until MR5, so after MRX this file's branch binary stops at its first jump. It stays as 1.17's
 // reference (mrx_gpu.cpp's recorder is its successor for saves); an Exact loop against the same 1.17 lines replaces it
 // at MR5. Marked, not deleted (red-suite-mrx.md).
+// MR5 RE-POINT (applied; red-suite-mr5.md). Two loops, each line "<loop> <schema> <kind> budget <b> tokens ...":
+//   off    decode-bridge tokens only (Off), until a dead end (-2) or kCap tokens. Both binaries print it (budget 0);
+//          1.17's lines are the reference and the branch's must equal them. (The CPU's canonical POTION pin retires: Off
+//          spells forced bytes its own way, 42 tokens on F-SFD against the canonical 24.)
+//   exact  the branch only (--loop=exact or both): Exact jumps (opts NULL: the forced chain after the token in hand as
+//          the draft) at chunk budgets 1, 2, 3, 4, 5, 8 and 64, and a decode-bridge token after each, until the same
+//          end. A jump's budget is capped at the tokens left to kCap, so no loop overshoots it. Each line must equal
+//          its schema and kind's off line but for the budget: tokens, end, the save blob, walk, ready and context
+//          (Exact is a run that never calls the verb).
+// The model maps with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE in both binaries (GPU Exact needs it; Off is unchanged by it).
+// Usage at MR5: mr4_83_canon.exe --fixtures=DIR [--loop=off|exact|both]   (default both)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -83,10 +94,11 @@ bool Save(SslmGpuContext* ctx, SslmGpuSequenceHandle* s, std::vector<uint8_t>* b
 }  // namespace
 
 int main(int argc, char** argv) {
-	std::string dir;
+	std::string dir, loop = "both";
 	for (int i = 1; i < argc; ++i) {
 		const std::string a = argv[i];
 		if (a.rfind("--fixtures=", 0) == 0) dir = a.substr(11);
+		else if (a.rfind("--loop=", 0) == 0) loop = a.substr(7);
 	}
 	std::vector<uint8_t> bytes;
 	superslm::SslmModelView view{};
@@ -99,7 +111,9 @@ int main(int argc, char** argv) {
 	const uint32_t full = superslm_gpu::DispatchesPerLayer(false) * L;  // F-SFD has no QK norm
 	SslmGpuContext* ctx = nullptr;
 	SslmGpuModelHandle* model = nullptr;
-	if (sslm_gpu_context_create(GpuContextConfig{}, &ctx) != S::SSLM_OK || sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) != S::SSLM_OK) {
+	GpuResidencyConfig rc{};
+	rc.flags = SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE;
+	if (sslm_gpu_context_create(GpuContextConfig{}, &ctx) != S::SSLM_OK || sslm_gpu_model_map(ctx, &view, rc, &model) != S::SSLM_OK) {
 		std::printf("FAIL context\n");
 		return 1;
 	}
@@ -109,10 +123,15 @@ int main(int argc, char** argv) {
 		for (int i = 0; i < n; ++i) v.push_back(static_cast<int32_t>((1103515245u * static_cast<uint32_t>(i + 7) + 12345u + 7919u * stream) % 20000u + 200u));
 		return v;
 	};
+	constexpr int kCap = 200;
 	int fails = 0;
+	std::vector<int> budgets;
+	if (loop == "off" || loop == "both") budgets.push_back(0);
+	if (loop == "exact" || loop == "both")
+		for (int b : {1, 2, 3, 4, 5, 8, 64}) budgets.push_back(b);
 	for (const char* schema : {"potion_shop_order", "prompt_result", "longkey", "utf8enum"})
 		for (int pooled = 0; pooled <= 1; ++pooled)
-			for (int budget : {1, 2, 3, 4, 5, 8, 64}) {
+			for (int budget : budgets) {
 				SslmGpuKvPoolHandle* pool = nullptr;
 				SslmGpuSequenceHandle* s = nullptr;
 				S c = pooled ? sslm_gpu_kv_pool_create(ctx, model, 64, &pool) : S::SSLM_OK;
@@ -131,21 +150,21 @@ int main(int argc, char** argv) {
 				std::vector<int32_t> stream;
 				int32_t pending = -1, last = p.back();
 				S end = S::SSLM_OK;
-				for (int d = 0; d < 200 && end == S::SSLM_OK; ++d) {
-					for (int g = 0; g < 400; ++g) {
-						std::vector<int32_t> out(static_cast<size_t>(budget > 64 ? budget : 64), -7);
+				while (end == S::SSLM_OK && static_cast<int>(stream.size()) < kCap) {
+					const int left = kCap - static_cast<int>(stream.size());
+					if (budget > 0 && pending >= 0 && left >= 2) {
+						// Exact: keeps at most b - 1 drafts, and the decode below adds one: never past kCap.
+						const int b = budget < left ? budget : left;
+						std::vector<int32_t> out(static_cast<size_t>(b > 64 ? b : 64), -7);
 						int32_t n = 0;
-						end = sslm_gpu_seq_jump_forward(ctx, s, pending, budget, nullptr, out.data(), static_cast<int32_t>(out.size()), &n);
+						end = sslm_gpu_seq_jump_forward(ctx, s, pending, b, nullptr, out.data(), static_cast<int32_t>(out.size()), &n);
 						if (end != S::SSLM_OK) break;
 						stream.insert(stream.end(), out.begin(), out.begin() + n);
 						int32_t ready = 0;
 						sslm_gpu_seq_ready_for_logits(ctx, s, &ready);
 						if (ready) pending = -1;
-						int32_t count = 0, acc = 0;
-						end = sslm_gpu_seq_forced_tokens(ctx, s, nullptr, 0, &count, &acc);
-						if (end != S::SSLM_OK || count == 0) break;
+						if (n > 0) last = out[static_cast<size_t>(n) - 1];
 					}
-					if (end != S::SSLM_OK) break;
 					int32_t t = -1;
 					end = SslmGpuSeqDecodeStepForG5Bridge(ctx, s, pending >= 0 ? pending : last, full, &t);
 					if (end != S::SSLM_OK || t < 0) break;  // -2: a dead end, the stream's end
@@ -156,9 +175,9 @@ int main(int argc, char** argv) {
 				if (!Save(ctx, s, &blob)) { std::printf("FAIL save %s\n", schema); ++fails; }
 				int32_t ready = -1;
 				sslm_gpu_seq_ready_for_logits(ctx, s, &ready);
-				std::printf("canon %s %s budget %d tokens %zu %s end %u blob %016llx walk %u ready %d ctx %lld\n", schema, pooled ? "pooled" : "dedicated",
-				            budget, stream.size(), Digest(stream).c_str(), (unsigned)end, (unsigned long long)Fnv(blob), SslmGpuSeqWalkStateForG5Bridge(s), ready,
-				            (long long)*SslmGpuSeqHandleContextLengthForBench(s));
+				std::printf("%s %s %s budget %d tokens %zu %s end %u blob %016llx walk %u ready %d ctx %lld\n", budget ? "exact" : "off", schema,
+				            pooled ? "pooled" : "dedicated", budget, stream.size(), Digest(stream).c_str(), (unsigned)end, (unsigned long long)Fnv(blob),
+				            SslmGpuSeqWalkStateForG5Bridge(s), ready, (long long)*SslmGpuSeqHandleContextLengthForBench(s));
 				(void)Drain;
 				sslm_gpu_seq_release(ctx, s);
 				if (pool) sslm_gpu_kv_pool_destroy(ctx, pool);

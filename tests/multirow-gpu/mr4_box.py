@@ -3,7 +3,7 @@
 Run on the box's output (MB4.1, MB4.2); the cloud runs only `--self-test`. Exact integer arithmetic, plan §5.1 (C18):
 every product in Python ints, divisions as exact floor and ceiling, never floats.
 
-  10.2  python3 mr4_box.py check102 TABLE.csv
+  10.2  python3 mr4_box.py check102 TABLE.csv [--pre-mr5]
         The cost table the 10.2 bench files (rulings item 12: the builder's bench writes it). One row per
         (model, M, logits): `model,M,logits,runs,warmup,median_us,p95_us,max_us,clock[,wall_*]`, M = 1..8, logits 0 (C(M),
         the recorder's GPU time: clock `gpu`) and 1 (the wall stand-in for the logits stage: clock `wall`, information
@@ -13,6 +13,11 @@ every product in Python ints, divisions as exact floor and ceiling, never floats
         clock `gpu` (flagged, not used: no GPU logits timing exists before MR5), or if MR0's rule on the port fails:
         C(4) / (4 x C(1)) <= 0.6 at the median (MB2's gate, re-checked here). Prints r(M) per mille from the GPU maxima
         (MR-D15), the values the shipped header takes for this card (MR7 takes the per-M maximum across certified cards).
+        MR5 (ruling 18a; 18b's flag flipped, GPU_LOGITS_BRACKET): MR5's widened logits stage brings its own GPU timestamp
+        bracket, so the logits = 1 rows are clock `gpu` (a `wall` row is now red) and g(M) is derived from them:
+        g(M) per mille = ceil((W(M) - C(M)) x 1000 / C(1)) at the maxima, W(M) being the logits = 1 row (the with-logits
+        figure, C + the logits stage, as tools/multirow_cost_bench.cpp defines it) and C(M) the logits = 0 row. Red if
+        W(M) < C(M). `check102 TABLE.csv --pre-mr5` grades a table under 18b's old rule (MB4's tables).
   10.5  python3 mr4_box.py canon105 TABLE.csv [--margin=150] [--spans=3,5,6,5,2]   RETIRED at MRX (prints RETIRED)
         Canonical over B2's spans, red if not faster: the M-row frames are >= 1.17's one-row Canonical frames at the default
         budget (one row per frame: sum of spans). C18: frames are decided from the configuration alone, so they follow from
@@ -26,6 +31,8 @@ import csv
 import sys
 
 B_EFF_US = 6200
+# Ruling 18b's flag, flipped for MR5 (ruling 18a): the logits = 1 rows carry MR5's GPU bracket, and g(M) is derived.
+GPU_LOGITS_BRACKET = True
 LAYERS = {"0.5B": 24, "1.5B": 28}
 
 
@@ -78,22 +85,44 @@ def load(path):
     return rows
 
 
-def clock_problems(rows):
-    """Ruling 18b: logits = 0 rows are the GPU clock (they price r); logits = 1 rows are the wall stand-in (info only)."""
+def clock_problems(rows, bracket=None):
+    """Ruling 18b (bracket False): logits = 0 rows are the GPU clock (they price r); logits = 1 rows are the wall stand-in
+    (info only). Ruling 18a at MR5 (bracket True, the default): logits = 1 rows are the GPU clock too (they price g)."""
+    if bracket is None:
+        bracket = GPU_LOGITS_BRACKET
     bad = []
     for (model, M, logits), r in sorted(rows.items()):
         if logits == 0 and r["clock"] != "gpu":
             bad.append("%s M=%d logits=0: clock %r, want 'gpu' (r(M) is priced from the recorder's GPU time only)" % (model, M, r["clock"]))
-        if logits == 1 and r["clock"] == "gpu":
+        if logits == 1 and bracket and r["clock"] != "gpu":
+            bad.append("%s M=%d logits=1: clock %r, want 'gpu' (MR5's logits bracket; g(M) is priced from it, ruling 18a)" % (model, M, r["clock"]))
+        elif logits == 1 and not bracket and r["clock"] == "gpu":
             bad.append("%s M=%d logits=1: clock 'gpu' before MR5 (flagged, not used: g is never derived from these rows)" % (model, M))
-        elif logits == 1 and r["clock"] != "wall":
+        elif logits == 1 and not bracket and r["clock"] != "wall":
             bad.append("%s M=%d logits=1: clock %r, want 'wall'" % (model, M, r["clock"]))
     return bad
 
 
-def check102(path):
+def g_per_mille(rows, model):
+    """Ruling 18a (MR5): g(M) = G(M) / C(1) per mille, G(M) = W(M) - C(M) at the maxima; (values, problems)."""
+    g, bad = [], []
+    c1 = rows.get((model, 1, 0))
+    for M in range(1, 9):
+        c, w = rows.get((model, M, 0)), rows.get((model, M, 1))
+        if not (c1 and c and w):
+            continue
+        if w["max_us"] < c["max_us"]:
+            bad.append("%s M=%d: the with-logits maximum %d < C(M)'s %d (no logits stage to price)" % (model, M, w["max_us"], c["max_us"]))
+            continue
+        g.append(ceil_div((w["max_us"] - c["max_us"]) * 1000, c1["max_us"]))
+    return g, bad
+
+
+def check102(path, bracket=None):
+    if bracket is None:
+        bracket = GPU_LOGITS_BRACKET
     rows = load(path)
-    bad = clock_problems(rows)
+    bad = clock_problems(rows, bracket)
     for model in LAYERS:
         for logits in (0, 1):
             for M in range(1, 9):
@@ -110,8 +139,14 @@ def check102(path):
             bad.append("%s: port gate C(4) / (4 C(1)) = %d / %d > 0.6" % (model, c4["median_us"], 4 * c1["median_us"]))
         if c1:
             r = [ceil_div(rows[(model, M, 0)]["max_us"] * 1000, rows[(model, 1, 0)]["max_us"]) for M in range(1, 9) if (model, M, 0) in rows]
-            print("10.2 %s: r(M) per mille %s (logits = 0, clock gpu); g(M) not derived (ruling 18b: the logits = 1 rows are"
-                  " the wall stand-in, information only)" % (model, r))
+            if bracket:
+                g, gbad = g_per_mille(rows, model)
+                bad.extend(gbad)
+                print("10.2 %s: r(M) per mille %s (logits = 0, clock gpu); g(M) per mille %s (logits = 1 minus logits = 0, clock gpu;"
+                      " ruling 18a)" % (model, r, g))
+            else:
+                print("10.2 %s: r(M) per mille %s (logits = 0, clock gpu); g(M) not derived (ruling 18b: the logits = 1 rows are"
+                      " the wall stand-in, information only)" % (model, r))
     for b in bad:
         print("RED 10.2: " + b)
     print("%s 10.2" % ("RED" if bad else "PASS"))
@@ -161,12 +196,34 @@ def self_test():
     def table(clock0, clock1):
         return {("0.5B", M, lg): {"runs": 30, "warmup": 1, "median_us": 1, "p95_us": 1, "max_us": 1, "clock": clock0 if lg == 0 else clock1}
                 for M in range(1, 9) for lg in (0, 1)}
-    if clock_problems(table("gpu", "wall")):
+    if clock_problems(table("gpu", "wall"), False):
         bad.append("clock rules: a well-formed table is flagged")
-    if len(clock_problems(table("gpu", "gpu"))) != 8:
+    if len(clock_problems(table("gpu", "gpu"), False)) != 8:
         bad.append("clock rules: logits = 1 rows with clock 'gpu' are not flagged")
-    if len(clock_problems(table("wall", "wall"))) != 8:
+    if len(clock_problems(table("wall", "wall"), False)) != 8:
         bad.append("clock rules: logits = 0 rows on the wall clock are not red")
+    # Ruling 18a at MR5: the flag flipped. logits = 1 rows on the GPU clock are well formed; on the wall clock, red.
+    if not GPU_LOGITS_BRACKET:
+        bad.append("GPU_LOGITS_BRACKET is off: MR5 flips ruling 18b's flag (ruling 18a)")
+    if clock_problems(table("gpu", "gpu")):
+        bad.append("MR5 clock rules: a well-formed table (logits = 1 on the GPU clock) is flagged")
+    if len(clock_problems(table("gpu", "wall"))) != 8:
+        bad.append("MR5 clock rules: logits = 1 rows on the wall clock are not red")
+    if len(clock_problems(table("wall", "gpu"))) != 8:
+        bad.append("MR5 clock rules: logits = 0 rows on the wall clock are not red")
+    # g(M) from the brackets: C = {1: 6,200; 2: 7,900; 4: 11,500; 8: 18,600} with W = C + 310 x M gives
+    # g(M) = ceil(310 M x 1000 / 6,200) = 50 M per mille; W(2) < C(2) is red.
+    gt = {}
+    for M in range(1, 9):
+        c = cost.get(M, 6200 + (M - 1) * 1700)
+        gt[("0.5B", M, 0)] = {"max_us": c}
+        gt[("0.5B", M, 1)] = {"max_us": c + 310 * M}
+    g, gbad = g_per_mille(gt, "0.5B")
+    if gbad or g != [50 * M for M in range(1, 9)]:
+        bad.append("g(M): %s %s, want %s" % (g, gbad, [50 * M for M in range(1, 9)]))
+    gt[("0.5B", 2, 1)] = {"max_us": 7899}
+    if len(g_per_mille(gt, "0.5B")[1]) != 1:
+        bad.append("g(M): a with-logits maximum below C(M) is not red")
     for b in bad:
         print("RED self-test: " + b)
     print("%s mr4_box self-test" % ("RED" if bad else "PASS"))
@@ -177,7 +234,7 @@ def main(argv):
     if len(argv) >= 2 and argv[1] == "--self-test":
         return self_test()
     if len(argv) >= 3 and argv[1] == "check102":
-        return check102(argv[2])
+        return check102(argv[2], False if "--pre-mr5" in argv[3:] else None)
     if len(argv) >= 3 and argv[1] == "canon105":
         margin, spans = 150, [3, 5, 6, 5, 2]
         for a in argv[3:]:

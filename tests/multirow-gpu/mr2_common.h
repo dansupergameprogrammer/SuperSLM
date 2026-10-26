@@ -92,12 +92,15 @@ struct World {
 	std::vector<SslmGpuSequenceHandle*> seqs;
 	std::vector<SslmGpuAdapterHandle*> adapters;
 	bool ok = false;
-	explicit World(const Model& m, const char* shader_dir = nullptr) {
+	// `residency_flags`: GpuResidencyConfig::flags (MR5: SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE, which GPU Exact needs).
+	explicit World(const Model& m, const char* shader_dir = nullptr, uint32_t residency_flags = 0) {
 		GpuContextConfig cfg{};
 		cfg.shader_dir = shader_dir;
 		S st = sslm_gpu_context_create(cfg, &ctx);
 		if (st != S::SSLM_OK) { std::printf("FAIL context create %s\n", Name(st)); return; }
-		if ((st = sslm_gpu_model_map(ctx, &m.view, GpuResidencyConfig{}, &model)) != S::SSLM_OK) {
+		GpuResidencyConfig rc{};
+		rc.flags = residency_flags;
+		if ((st = sslm_gpu_model_map(ctx, &m.view, rc, &model)) != S::SSLM_OK) {
 			std::printf("FAIL model map %s\n", Name(st));
 			return;
 		}

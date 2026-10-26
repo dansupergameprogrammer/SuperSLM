@@ -19,6 +19,8 @@
 #   legacy   the recorder (mrx_gpu.cpp built from the v1.17.0 tree with -DMRX_V117) saves after 1.17's GPU Canonical
 #            jump; the branch's mrx_gpu.exe g.4a (restore, same bytes, decode-only continuation) and g.4b (continues
 #            under explicit Exact and NULL; red until MR5).
+# MR5 (red-suite-mr5.md): g.1, g.2 and g.4b are non-vacuous (SSLM_OK, the chain kept, bytes equal the Off twin; the
+# model maps with the device logits head), and g.3's kind 2 is admitted. mr5_wine.sh's green leg runs gpu and legacy.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
