@@ -1,6 +1,7 @@
 // array_s2_gpu.cpp -- the GPU side of the S2 array harness, on the shipped GPU surface
 // (superslm/gpu_1p0.h and its G5 schema bridge). See array_s2_shared.h for the interface.
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 
 #include <dxgi1_4.h>
@@ -15,7 +16,17 @@ using enum SslmGpuStatus;
 
 namespace {
 
-constexpr uint32_t kDispatchBudget = superslm_gpu::kDispatchesPerLayer;
+// The decode drive submits and waits once per `dispatch_budget` dispatches, so the budget sets
+// the slices per token: ARRAY_S2_GPU_LAYERS_PER_SLICE layers per submission (default 1, so a
+// 24-layer model decodes in 24 slices; 24 gives one slice per token).
+uint32_t DispatchBudget() {
+	static const uint32_t budget = [] {
+		const char* env = std::getenv("ARRAY_S2_GPU_LAYERS_PER_SLICE");
+		const int layers = env ? std::atoi(env) : 1;
+		return static_cast<uint32_t>(layers > 0 ? layers : 1) * superslm_gpu::kDispatchesPerLayer;
+	}();
+	return budget;
+}
 
 double MsSince(std::chrono::steady_clock::time_point t0) {
 	return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -46,9 +57,11 @@ struct GpuSession {
 	SslmGpuModelHandle* model = nullptr;
 	int32_t schema_index = -1;
 	int64_t context_cap = 0;
+	uint32_t budget = DispatchBudget();  // dispatches per decode-step call
 };
 
-GpuSession* GpuOpen(const uint8_t* bytes, size_t n, const std::string& schema, MapResult* map) {
+GpuSession* GpuOpen(const uint8_t* bytes, size_t n, const std::string& schema, MapResult* map,
+                    const GpuOptions& opt) {
 	auto s = std::make_unique<GpuSession>();
 	std::string load_err;
 	if (superslm::SslmModel::Load(bytes, n, s->view, &load_err) != superslm::SslmModelStatus::Ok) {
@@ -57,6 +70,7 @@ GpuSession* GpuOpen(const uint8_t* bytes, size_t n, const std::string& schema, M
 	}
 	GpuContextConfig gcfg{};
 	GpuResidencyConfig rcfg{};
+	if (opt.head_on_device) rcfg.flags |= SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE;
 	SslmGpuStatus st = sslm_gpu_context_create(gcfg, &s->ctx);
 	if (st != SSLM_OK) {
 		map->error = Err("sslm_gpu_context_create", st);
@@ -111,24 +125,62 @@ int32_t Accepting(GpuSession* s, SslmGpuSequenceHandle* seq) {
 	return SslmGpuSeqSchemaAcceptingForG5Bridge(s->ctx, seq, &a) == SSLM_OK ? a : -1;
 }
 
-// Decodes until the dead end (-2) or until ids holds max_tokens; `last` is the token to embed.
-void DecodeToEnd(GpuSession* s, SslmGpuSequenceHandle* seq, int32_t last, int32_t max_tokens,
-                 std::vector<int32_t>* ids, std::string* end) {
-	while (static_cast<int32_t>(ids->size()) < max_tokens) {
+// Decodes until the dead end (-2) or until `out` holds max_tokens, recording the accepting flag
+// and the walk state after each token; `last` is the token to embed (ignored while the sequence's
+// ready-for-logits flag is set, as after a prefill or a restore of a post-prefill save).
+void DecodeTrace(GpuSession* s, SslmGpuSequenceHandle* seq, int32_t last, int32_t max_tokens, Trace* out) {
+	while (static_cast<int32_t>(out->ids.size()) < max_tokens) {
 		int32_t t = -1;
-		const SslmGpuStatus st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, kDispatchBudget, &t);
+		const SslmGpuStatus st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, s->budget, &t);
 		if (st != SSLM_OK) {
-			*end = Err("SslmGpuSeqDecodeStepForG5Bridge", st);
+			out->end = Err("SslmGpuSeqDecodeStepForG5Bridge", st);
 			return;
 		}
 		if (t == -2) {
-			*end = "dead_end";
+			out->end = "dead_end";
 			return;
 		}
-		ids->push_back(t);
+		out->ids.push_back(t);
+		out->accepting.push_back(Accepting(s, seq));
+		out->states.push_back(SslmGpuSeqWalkStateForG5Bridge(seq));
 		last = t;
 	}
-	*end = "max_tokens";
+	out->end = "max_tokens";
+}
+
+// Teacher-forces `ids` one token per schema-content prefill call, recording each admitted token.
+void ForceTrace(GpuSession* s, SslmGpuSequenceHandle* seq, const int32_t* ids, size_t n, Trace* out) {
+	for (size_t i = 0; i < n; ++i) {
+		int32_t consumed = 0;
+		const SslmGpuStatus st =
+		    SslmGpuSeqPrefillSchemaContentForG5Bridge(s->ctx, seq, &ids[i], 1, DispatchBudget(), &consumed);
+		if (st != SSLM_OK || consumed != 1) {
+			out->end = st == SSLM_SEQUENCE_REJECTED ? "refused" : Err("SslmGpuSeqPrefillSchemaContentForG5Bridge", st);
+			return;
+		}
+		out->ids.push_back(ids[i]);
+		out->accepting.push_back(Accepting(s, seq));
+		out->states.push_back(SslmGpuSeqWalkStateForG5Bridge(seq));
+	}
+	out->end = "forced";
+}
+
+SslmGpuStatus PrefillPrompt(GpuSession* s, SslmGpuSequenceHandle* seq, const std::vector<int32_t>& prompt) {
+	return SslmGpuSeqPrefillPromptForG5Bridge(s->ctx, seq, prompt.data(), static_cast<int32_t>(prompt.size()),
+	                                          DispatchBudget());
+}
+
+bool SaveBlob(GpuSession* s, SslmGpuSequenceHandle* seq, std::vector<uint8_t>* blob, std::string* error) {
+	size_t n = 0;
+	sslm_gpu_seq_save(s->ctx, seq, nullptr, &n);
+	blob->assign(n, 0);
+	const SslmGpuStatus st = sslm_gpu_seq_save(s->ctx, seq, blob->data(), &n);
+	if (st != SSLM_OK || n == 0) {
+		*error = Err("sslm_gpu_seq_save", st);
+		return false;
+	}
+	blob->resize(n);
+	return true;
 }
 
 }  // namespace
@@ -143,13 +195,14 @@ WalkResult GpuWalk(GpuSession* s, const std::vector<int32_t>& ids) {
 	}
 	for (size_t i = 0; i < ids.size(); ++i) {
 		int32_t consumed = 0;
-		st = SslmGpuSeqPrefillSchemaContentForG5Bridge(s->ctx, seq, &ids[i], 1, kDispatchBudget, &consumed);
+		st = SslmGpuSeqPrefillSchemaContentForG5Bridge(s->ctx, seq, &ids[i], 1, DispatchBudget(), &consumed);
 		if (st != SSLM_OK || consumed != 1) {
 			r.refused_at = static_cast<int32_t>(i);
 			r.refusal = st == SSLM_SEQUENCE_REJECTED ? "unreachable" : "status " + std::to_string(static_cast<int>(st));
 			break;
 		}
 		++r.admitted;
+		r.accepting.push_back(Accepting(s, seq));
 		r.states.push_back(SslmGpuSeqWalkStateForG5Bridge(seq));
 	}
 	r.accepting_end = Accepting(s, seq);
@@ -166,14 +219,30 @@ GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_
 		return r;
 	}
 	st = SslmGpuSeqPrefillPromptForG5Bridge(s->ctx, seq, prompt.data(), static_cast<int32_t>(prompt.size()),
-	                                        kDispatchBudget);
+	                                        DispatchBudget());
 	if (st != SSLM_OK) {
 		r.end = Err("SslmGpuSeqPrefillPromptForG5Bridge", st);
 		sslm_gpu_seq_release(s->ctx, seq);
 		return r;
 	}
+	// No per-token queries here: `gputime` times this loop.
 	const auto t0 = std::chrono::steady_clock::now();
-	DecodeToEnd(s, seq, prompt.back(), max_tokens, &r.ids, &r.end);
+	int32_t last = prompt.back();
+	r.end = "max_tokens";
+	while (static_cast<int32_t>(r.ids.size()) < max_tokens) {
+		int32_t t = -1;
+		st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, s->budget, &t);
+		if (st != SSLM_OK) {
+			r.end = Err("SslmGpuSeqDecodeStepForG5Bridge", st);
+			break;
+		}
+		if (t == -2) {
+			r.end = "dead_end";
+			break;
+		}
+		r.ids.push_back(t);
+		last = t;
+	}
 	r.ms = MsSince(t0);
 	r.accepting = Accepting(s, seq);
 	sslm_gpu_seq_release(s->ctx, seq);
@@ -182,7 +251,7 @@ GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_
 
 std::vector<RestoreResult> GpuRestores(GpuSession* s, const std::vector<int32_t>& prompt,
                                        const std::vector<int32_t>& ref, const std::vector<int32_t>& after,
-                                       int32_t max_tokens, std::string* error) {
+                                       const RestoreOptions& opt, Trace* unbroken, std::string* error) {
 	std::vector<RestoreResult> out;
 	std::vector<std::vector<uint8_t>> blobs;
 	SslmGpuSequenceHandle* seq = nullptr;
@@ -191,55 +260,136 @@ std::vector<RestoreResult> GpuRestores(GpuSession* s, const std::vector<int32_t>
 		*error = Err("bind", st);
 		return out;
 	}
-	st = SslmGpuSeqPrefillPromptForG5Bridge(s->ctx, seq, prompt.data(), static_cast<int32_t>(prompt.size()),
-	                                        kDispatchBudget);
+	st = PrefillPrompt(s, seq, prompt);
 	if (st != SSLM_OK) {
 		*error = Err("SslmGpuSeqPrefillPromptForG5Bridge", st);
 		sslm_gpu_seq_release(s->ctx, seq);
 		return out;
 	}
+	// The unbroken run, through the whole reference and its dead end, saving at each point.
 	int32_t last = prompt.back();
 	size_t next = 0;
-	for (size_t i = 0; i < ref.size() && next < after.size(); ++i) {
+	for (size_t i = 0; i <= ref.size(); ++i) {
 		int32_t t = -1;
-		st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, kDispatchBudget, &t);
-		if (st != SSLM_OK || t != ref[i]) {
+		st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, s->budget, &t);
+		if (st != SSLM_OK || (i < ref.size() && t != ref[i]) || (i == ref.size() && t != -2)) {
 			*error = "unbroken run left the reference at " + std::to_string(i) + ": " + std::to_string(t) +
-			         " != " + std::to_string(ref[i]);
+			         " != " + std::to_string(i < ref.size() ? ref[i] : -2) + " (status " +
+			         std::to_string(static_cast<int>(st)) + ")";
 			sslm_gpu_seq_release(s->ctx, seq);
 			return out;
 		}
+		if (i == ref.size()) break;
 		last = t;
-		if (static_cast<int32_t>(i) == after[next]) {
-			size_t n = 0;
-			sslm_gpu_seq_save(s->ctx, seq, nullptr, &n);
-			std::vector<uint8_t> blob(n);
-			st = sslm_gpu_seq_save(s->ctx, seq, blob.data(), &n);
-			if (st != SSLM_OK || n == 0) {
-				*error = Err("sslm_gpu_seq_save", st);
+		unbroken->ids.push_back(t);
+		unbroken->accepting.push_back(Accepting(s, seq));
+		unbroken->states.push_back(SslmGpuSeqWalkStateForG5Bridge(seq));
+		if (next < after.size() && static_cast<int32_t>(i) == after[next]) {
+			std::vector<uint8_t> blob;
+			if (!SaveBlob(s, seq, &blob, error)) {
 				sslm_gpu_seq_release(s->ctx, seq);
 				return out;
 			}
-			blob.resize(n);
 			blobs.push_back(std::move(blob));
 			++next;
 		}
 	}
+	unbroken->end = "dead_end";
 	sslm_gpu_seq_release(s->ctx, seq);
 	for (size_t k = 0; k < blobs.size(); ++k) {
 		RestoreResult rr;
 		rr.after = after[k];
 		rr.blob_bytes = blobs[k].size();
+		rr.saved_accepting = unbroken->accepting[static_cast<size_t>(rr.after)];
+		rr.saved_state = unbroken->states[static_cast<size_t>(rr.after)];
+		if (opt.state_zero && !ZeroBlobWalkState(&blobs[k], true)) rr.error = "state_zero: unexpected blob magic";
 		SslmGpuSequenceHandle* restored = nullptr;
-		st = sslm_gpu_seq_restore(s->ctx, s->model, blobs[k].data(), blobs[k].size(), &restored);
-		if (st != SSLM_OK) {
-			rr.end = Err("sslm_gpu_seq_restore", st);
-		} else {
-			DecodeToEnd(s, restored, ref[static_cast<size_t>(rr.after)], max_tokens - rr.after - 1,
-			            &rr.continuation, &rr.end);
+		if (rr.error.empty()) {
+			st = sslm_gpu_seq_restore(s->ctx, s->model, blobs[k].data(), blobs[k].size(), &restored);
+			if (st != SSLM_OK) rr.error = Err("sslm_gpu_seq_restore", st);
+		}
+		if (rr.error.empty()) {
+			rr.restored_accepting = Accepting(s, restored);
+			rr.restored_state = SslmGpuSeqWalkStateForG5Bridge(restored);
+			DecodeTrace(s, restored, ref[static_cast<size_t>(rr.after)], opt.max_tokens - rr.after - 1,
+			            &rr.continuation);
 			sslm_gpu_seq_release(s->ctx, restored);
 		}
+		std::vector<uint8_t>().swap(blobs[k]);
 		out.push_back(std::move(rr));
+	}
+	return out;
+}
+
+std::vector<RestoreResult> GpuTfRestores(GpuSession* s, const std::vector<int32_t>& prompt,
+                                         const std::vector<int32_t>& doc, const std::vector<int32_t>& after,
+                                         const RestoreOptions& opt, Trace* walk, std::string* error) {
+	std::vector<RestoreResult> out;
+	SslmGpuSequenceHandle* seq = nullptr;
+	SslmGpuStatus st = NewBoundSeq(s, &seq);
+	if (st == SSLM_OK) st = PrefillPrompt(s, seq, prompt);
+	if (st != SSLM_OK) {
+		*error = Err("walk setup", st);
+		if (seq) sslm_gpu_seq_release(s->ctx, seq);
+		return out;
+	}
+	ForceTrace(s, seq, doc.data(), doc.size(), walk);
+	sslm_gpu_seq_release(s->ctx, seq);
+	for (const int32_t a : after) {
+		RestoreResult rr;
+		rr.after = a;
+		out.push_back(rr);
+		RestoreResult& r = out.back();
+		if (a < 0 || static_cast<size_t>(a) + 1 >= doc.size()) {
+			r.error = "save index outside the document";
+			continue;
+		}
+		seq = nullptr;
+		st = NewBoundSeq(s, &seq);
+		if (st == SSLM_OK) st = PrefillPrompt(s, seq, prompt);
+		int32_t consumed = 0;
+		if (st == SSLM_OK) {
+			st = SslmGpuSeqPrefillSchemaContentForG5Bridge(s->ctx, seq, doc.data(), a + 1, DispatchBudget(), &consumed);
+			if (st == SSLM_OK && consumed != a + 1) st = SSLM_SEQUENCE_REJECTED;
+		}
+		if (st != SSLM_OK) {
+			r.error = Err("teacher-forced prefix", st);
+			if (seq) sslm_gpu_seq_release(s->ctx, seq);
+			continue;
+		}
+		r.saved_accepting = Accepting(s, seq);
+		r.saved_state = SslmGpuSeqWalkStateForG5Bridge(seq);
+		std::vector<uint8_t> blob;
+		if (!SaveBlob(s, seq, &blob, &r.error)) {
+			sslm_gpu_seq_release(s->ctx, seq);
+			continue;
+		}
+		r.blob_bytes = blob.size();
+		const int32_t last = doc[static_cast<size_t>(a)];
+		DecodeTrace(s, seq, last, opt.max_tokens, &r.unbroken);
+		sslm_gpu_seq_release(s->ctx, seq);
+		if (opt.state_zero && !ZeroBlobWalkState(&blob, true)) {
+			r.error = "state_zero: unexpected blob magic";
+			continue;
+		}
+		SslmGpuSequenceHandle* restored = nullptr;
+		st = sslm_gpu_seq_restore(s->ctx, s->model, blob.data(), blob.size(), &restored);
+		if (st != SSLM_OK) {
+			r.error = Err("sslm_gpu_seq_restore", st);
+			continue;
+		}
+		r.restored_accepting = Accepting(s, restored);
+		r.restored_state = SslmGpuSeqWalkStateForG5Bridge(restored);
+		DecodeTrace(s, restored, last, opt.max_tokens, &r.continuation);
+		sslm_gpu_seq_release(s->ctx, restored);
+		restored = nullptr;
+		st = sslm_gpu_seq_restore(s->ctx, s->model, blob.data(), blob.size(), &restored);
+		if (st != SSLM_OK) {
+			r.error = Err("sslm_gpu_seq_restore (second)", st);
+			continue;
+		}
+		ForceTrace(s, restored, doc.data() + a + 1, doc.size() - static_cast<size_t>(a) - 1, &r.forced);
+		sslm_gpu_seq_release(s->ctx, restored);
 	}
 	return out;
 }

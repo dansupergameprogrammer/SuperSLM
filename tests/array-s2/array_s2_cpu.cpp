@@ -3,6 +3,7 @@
 #include <chrono>
 #include <memory>
 
+#include "superslm/model.h"  // SslmModel::Load, for the layer count only
 #include "superslm/sslm_abi.h"
 #include "array_s2_shared.h"
 
@@ -93,7 +94,17 @@ CpuSession* CpuOpen(const uint8_t* bytes, size_t n, const std::string& schema, b
 		sslm_model_unmap(s->model);
 		return nullptr;
 	}
-	s->layers = 24;  // Qwen2.5-0.5B
+	{
+		// The C ABI has no layer-count query; the artifact's own Config carries it.
+		superslm::SslmModelView view;
+		std::string load_err;
+		if (superslm::SslmModel::Load(bytes, n, view, &load_err) != superslm::SslmModelStatus::Ok) {
+			map->error = "SslmModel::Load: " + load_err;
+			CpuClose(s.release());
+			return nullptr;
+		}
+		s->layers = static_cast<int32_t>(view.config.num_hidden_layers);
+	}
 	sslm_config config{};
 	config.max_batch = 1;
 	config.max_chunk_budget = max_chunk;
@@ -150,22 +161,59 @@ sslm_status DecodeOne(CpuSession* s, sslm_seq seq, int32_t* token) {
 	return st;
 }
 
-// Decodes from a sequence ready to decode until the dead end (-2) or max_tokens.
-void DecodeToEnd(CpuSession* s, sslm_seq seq, int32_t max_tokens, std::vector<int32_t>* ids, std::string* end) {
-	while (static_cast<int32_t>(ids->size()) < max_tokens) {
+// Decodes from a sequence ready to decode until the dead end (-2) or until `out` holds max_tokens,
+// recording the accepting flag after each token.
+void DecodeTrace(CpuSession* s, sslm_seq seq, int32_t max_tokens, Trace* out) {
+	while (static_cast<int32_t>(out->ids.size()) < max_tokens) {
 		int32_t t = -1;
 		const sslm_status st = DecodeOne(s, seq, &t);
 		if (st != SSLM_OK) {
-			*end = Err("sslm_decode_step", st);
+			out->end = Err("sslm_decode_step", st);
 			return;
 		}
 		if (t == -2) {
-			*end = "dead_end";
+			out->end = "dead_end";
 			return;
 		}
-		ids->push_back(t);
+		out->ids.push_back(t);
+		out->accepting.push_back(Accepting(s, seq));
 	}
-	*end = "max_tokens";
+	out->end = "max_tokens";
+}
+
+// Teacher-forces `ids` one token per schema-content prefill call, recording each admitted token.
+void ForceTrace(CpuSession* s, sslm_seq seq, const int32_t* ids, size_t n, Trace* out) {
+	for (size_t i = 0; i < n; ++i) {
+		int32_t consumed = 0;
+		const sslm_status st = sslm_prefill(s->model, seq, &ids[i], 1, 1, SSLM_SPAN_SCHEMA_CONTENT, s->ws, &consumed);
+		if (st != SSLM_OK || consumed != 1) {
+			out->end = st == SSLM_SCHEMA_SPAN_UNREACHABLE ? "refused" : Err("sslm_prefill", st);
+			return;
+		}
+		out->ids.push_back(ids[i]);
+		out->accepting.push_back(Accepting(s, seq));
+	}
+	out->end = "forced";
+}
+
+sslm_status PrefillPrompt(CpuSession* s, sslm_seq seq, const std::vector<int32_t>& prompt) {
+	int32_t consumed = 0;
+	const sslm_status st = sslm_prefill(s->model, seq, prompt.data(), static_cast<int32_t>(prompt.size()),
+	                                    static_cast<int32_t>(prompt.size()), SSLM_SPAN_PROMPT, s->ws, &consumed);
+	return st == SSLM_OK && consumed != static_cast<int32_t>(prompt.size()) ? SSLM_INVALID_ARGUMENT : st;
+}
+
+bool SaveBlob(sslm_seq seq, std::vector<uint8_t>* blob, std::string* error) {
+	size_t n = 0;
+	sslm_seq_save(seq, nullptr, &n);
+	blob->assign(n, 0);
+	const sslm_status st = sslm_seq_save(seq, blob->data(), &n);
+	if (st != SSLM_OK) {
+		*error = Err("sslm_seq_save", st);
+		return false;
+	}
+	blob->resize(n);
+	return true;
 }
 
 }  // namespace
@@ -187,6 +235,7 @@ WalkResult CpuWalk(CpuSession* s, const std::vector<int32_t>& ids) {
 			break;
 		}
 		++r.admitted;
+		r.accepting.push_back(Accepting(s, seq));
 	}
 	r.accepting_end = Accepting(s, seq);
 	sslm_seq_release(seq);
@@ -263,62 +312,137 @@ GenResult CpuGen(CpuSession* s, const std::vector<int32_t>& prompt, int32_t max_
 
 std::vector<RestoreResult> CpuRestores(CpuSession* s, const std::vector<int32_t>& prompt,
                                        const std::vector<int32_t>& ref, const std::vector<int32_t>& after,
-                                       int32_t max_tokens, std::string* error) {
+                                       const RestoreOptions& opt, Trace* unbroken, std::string* error) {
 	std::vector<RestoreResult> out;
 	std::vector<std::vector<uint8_t>> blobs;
+	std::vector<int32_t> saved_accepting;
 	sslm_seq seq = nullptr;
 	sslm_status st = NewBoundSeq(s, &seq);
 	if (st != SSLM_OK) {
 		*error = Err("bind", st);
 		return out;
 	}
-	int32_t consumed = 0;
-	st = sslm_prefill(s->model, seq, prompt.data(), static_cast<int32_t>(prompt.size()),
-	                  static_cast<int32_t>(prompt.size()), SSLM_SPAN_PROMPT, s->ws, &consumed);
+	st = PrefillPrompt(s, seq, prompt);
 	if (st != SSLM_OK) {
 		*error = Err("sslm_prefill", st);
 		sslm_seq_release(seq);
 		return out;
 	}
+	// The unbroken run, through the whole reference and its dead end, saving at each point.
 	size_t next = 0;
-	for (size_t i = 0; i < ref.size() && next < after.size(); ++i) {
+	for (size_t i = 0; i <= ref.size(); ++i) {
 		int32_t t = -1;
 		st = DecodeOne(s, seq, &t);
-		if (st != SSLM_OK || t != ref[i]) {
+		if (st != SSLM_OK || (i < ref.size() && t != ref[i]) || (i == ref.size() && t != -2)) {
 			*error = "unbroken run left the reference at " + std::to_string(i) + ": " + std::to_string(t) +
-			         " != " + std::to_string(ref[i]);
+			         " != " + std::to_string(i < ref.size() ? ref[i] : -2) + " (status " + std::to_string(st) + ")";
 			sslm_seq_release(seq);
 			return out;
 		}
-		if (static_cast<int32_t>(i) == after[next]) {
-			size_t n = 0;
-			sslm_seq_save(seq, nullptr, &n);
-			std::vector<uint8_t> blob(n);
-			st = sslm_seq_save(seq, blob.data(), &n);
-			if (st != SSLM_OK) {
-				*error = Err("sslm_seq_save", st);
+		if (i == ref.size()) break;
+		unbroken->ids.push_back(t);
+		unbroken->accepting.push_back(Accepting(s, seq));
+		if (next < after.size() && static_cast<int32_t>(i) == after[next]) {
+			std::vector<uint8_t> blob;
+			if (!SaveBlob(seq, &blob, error)) {
 				sslm_seq_release(seq);
 				return out;
 			}
-			blob.resize(n);
 			blobs.push_back(std::move(blob));
+			saved_accepting.push_back(unbroken->accepting.back());
 			++next;
 		}
 	}
+	unbroken->end = "dead_end";
 	sslm_seq_release(seq);
 	for (size_t k = 0; k < blobs.size(); ++k) {
 		RestoreResult rr;
 		rr.after = after[k];
 		rr.blob_bytes = blobs[k].size();
+		rr.saved_accepting = saved_accepting[k];
+		if (opt.state_zero && !ZeroBlobWalkState(&blobs[k], false)) rr.error = "state_zero: unexpected blob magic";
 		sslm_seq restored = nullptr;
-		st = sslm_seq_restore(s->model, &s->pool, blobs[k].data(), blobs[k].size(), &restored);
+		st = rr.error.empty() ? sslm_seq_restore(s->model, &s->pool, blobs[k].data(), blobs[k].size(), &restored)
+		                      : SSLM_INVALID_ARGUMENT;
 		if (st != SSLM_OK) {
-			rr.end = Err("sslm_seq_restore", st);
+			if (rr.error.empty()) rr.error = Err("sslm_seq_restore", st);
 		} else {
-			DecodeToEnd(s, restored, max_tokens - rr.after - 1, &rr.continuation, &rr.end);
+			rr.restored_accepting = Accepting(s, restored);
+			DecodeTrace(s, restored, opt.max_tokens - rr.after - 1, &rr.continuation);
 			sslm_seq_release(restored);
 		}
+		std::vector<uint8_t>().swap(blobs[k]);
 		out.push_back(std::move(rr));
+	}
+	return out;
+}
+
+std::vector<RestoreResult> CpuTfRestores(CpuSession* s, const std::vector<int32_t>& prompt,
+                                         const std::vector<int32_t>& doc, const std::vector<int32_t>& after,
+                                         const RestoreOptions& opt, Trace* walk, std::string* error) {
+	std::vector<RestoreResult> out;
+	sslm_seq seq = nullptr;
+	sslm_status st = NewBoundSeq(s, &seq);
+	if (st == SSLM_OK) st = PrefillPrompt(s, seq, prompt);
+	if (st != SSLM_OK) {
+		*error = Err("walk setup", st);
+		if (seq) sslm_seq_release(seq);
+		return out;
+	}
+	ForceTrace(s, seq, doc.data(), doc.size(), walk);
+	sslm_seq_release(seq);
+	for (const int32_t a : after) {
+		RestoreResult rr;
+		rr.after = a;
+		out.push_back(rr);
+		RestoreResult& r = out.back();
+		if (a < 0 || static_cast<size_t>(a) + 1 >= doc.size()) {
+			r.error = "save index outside the document";
+			continue;
+		}
+		seq = nullptr;
+		st = NewBoundSeq(s, &seq);
+		if (st == SSLM_OK) st = PrefillPrompt(s, seq, prompt);
+		int32_t consumed = 0;
+		if (st == SSLM_OK) {
+			st = sslm_prefill(s->model, seq, doc.data(), a + 1, a + 1, SSLM_SPAN_SCHEMA_CONTENT, s->ws, &consumed);
+			if (st == SSLM_OK && consumed != a + 1) st = SSLM_SCHEMA_SPAN_UNREACHABLE;
+		}
+		if (st != SSLM_OK) {
+			r.error = Err("teacher-forced prefix", st);
+			if (seq) sslm_seq_release(seq);
+			continue;
+		}
+		r.saved_accepting = Accepting(s, seq);
+		std::vector<uint8_t> blob;
+		if (!SaveBlob(seq, &blob, &r.error)) {
+			sslm_seq_release(seq);
+			continue;
+		}
+		r.blob_bytes = blob.size();
+		DecodeTrace(s, seq, opt.max_tokens, &r.unbroken);
+		sslm_seq_release(seq);
+		if (opt.state_zero && !ZeroBlobWalkState(&blob, false)) {
+			r.error = "state_zero: unexpected blob magic";
+			continue;
+		}
+		sslm_seq restored = nullptr;
+		st = sslm_seq_restore(s->model, &s->pool, blob.data(), blob.size(), &restored);
+		if (st != SSLM_OK) {
+			r.error = Err("sslm_seq_restore", st);
+			continue;
+		}
+		r.restored_accepting = Accepting(s, restored);
+		DecodeTrace(s, restored, opt.max_tokens, &r.continuation);
+		sslm_seq_release(restored);
+		restored = nullptr;
+		st = sslm_seq_restore(s->model, &s->pool, blob.data(), blob.size(), &restored);
+		if (st != SSLM_OK) {
+			r.error = Err("sslm_seq_restore (second)", st);
+			continue;
+		}
+		ForceTrace(s, restored, doc.data() + a + 1, doc.size() - static_cast<size_t>(a) - 1, &r.forced);
+		sslm_seq_release(restored);
 	}
 	return out;
 }

@@ -12,11 +12,12 @@
 
 // A teacher-forced walk or a rejection: the ids are admitted one per schema-content prefill call.
 struct WalkResult {
-	int32_t admitted = 0;         // calls that admitted their token
-	int32_t refused_at = -1;      // index of the first refused token, -1 when none was refused
-	std::string refusal;          // the refusing call's status ("unreachable", or "status N")
-	int32_t accepting_end = -1;   // the walk's accepting flag after the last admitted token
-	std::vector<uint32_t> states; // walk state after each admitted token (GPU only; CPU has no query)
+	int32_t admitted = 0;           // calls that admitted their token
+	int32_t refused_at = -1;        // index of the first refused token, -1 when none was refused
+	std::string refusal;            // the refusing call's status ("unreachable", or "status N")
+	int32_t accepting_end = -1;     // the walk's accepting flag after the last admitted token
+	std::vector<int32_t> accepting; // accepting flag after each admitted token (CPU and GPU)
+	std::vector<uint32_t> states;   // walk state after each admitted token (GPU only; CPU has no query)
 };
 
 enum class GenMode { Plain, JumpCanonical, JumpExact };
@@ -31,12 +32,38 @@ struct GenResult {
 	double ms = 0.0;             // wall time from the first decode call to the end
 };
 
-// Save after ids[after], restore into a fresh sequence, decode to the end.
+// What a sequence did, token by token: the tokens it decoded (or was teacher-forced), and the
+// accepting flag and walk state after each. `states` is filled on GPU only (the CPU ABI has no
+// walk-state query); `end` is "dead_end", "max_tokens", "refused" or "error:<call> <status>".
+struct Trace {
+	std::vector<int32_t> ids;
+	std::vector<int32_t> accepting;
+	std::vector<uint32_t> states;
+	std::string end;
+};
+
+// One save point. A save is taken on the unbroken sequence after token `after`, the blob is
+// restored into a fresh sequence, and the restored sequence is observed.
 struct RestoreResult {
 	int32_t after = -1;
 	size_t blob_bytes = 0;
-	std::vector<int32_t> continuation;
-	std::string end;
+	std::string error;             // non-empty when the save point could not be run
+	int32_t saved_accepting = -1;  // on the unbroken sequence, at the save
+	uint32_t saved_state = 0;      // on the unbroken sequence, at the save (GPU only)
+	int32_t restored_accepting = -1;  // on the restored sequence, before it decodes
+	uint32_t restored_state = 0;      // on the restored sequence, before it decodes (GPU only)
+	Trace continuation;            // the restored sequence's greedy decode
+	Trace unbroken;                // teacher-forced only: the unbroken sequence's greedy decode
+	Trace forced;                  // teacher-forced only: a second restore, teacher-forced through
+	                               // the rest of the document
+};
+
+// `state_zero`: the restore-at-state-zero mutant. The harness overwrites the walk state recorded
+// in each save blob with 0 before restoring it, so a restore check that cannot tell a wrong walk
+// state from the right one passes the mutant.
+struct RestoreOptions {
+	int32_t max_tokens = 0;  // generated: the whole run's budget; teacher-forced: tokens per continuation
+	bool state_zero = false;
 };
 
 struct MapResult {
@@ -54,21 +81,43 @@ CpuSession* CpuOpen(const uint8_t* bytes, size_t n, const std::string& schema, b
 void CpuClose(CpuSession* s);
 WalkResult CpuWalk(CpuSession* s, const std::vector<int32_t>& ids);
 GenResult CpuGen(CpuSession* s, const std::vector<int32_t>& prompt, int32_t max_tokens, GenMode mode);
-// Re-runs the plain generation (its tokens must equal `ref`), saving after each index in `after`,
-// then restores every blob and decodes each continuation to the end.
+// Generated save points. Re-runs the plain generation, teacher-checked against `ref`, saving after
+// each index in `after`, and records the unbroken run's trace (ids, accepting, states) through the
+// dead end. Then restores every blob and decodes each continuation to the end.
 std::vector<RestoreResult> CpuRestores(CpuSession* s, const std::vector<int32_t>& prompt,
                                        const std::vector<int32_t>& ref, const std::vector<int32_t>& after,
-                                       int32_t max_tokens, std::string* error);
+                                       const RestoreOptions& opt, Trace* unbroken, std::string* error);
+// Teacher-forced save points. Walks `doc` after `prompt` one token per call into `walk`; then, for
+// each index in `after`, teacher-forces doc[0..after] after the prompt, saves, decodes the unbroken
+// continuation, and restores the blob twice: once to decode, once to teacher-force the rest of `doc`.
+std::vector<RestoreResult> CpuTfRestores(CpuSession* s, const std::vector<int32_t>& prompt,
+                                         const std::vector<int32_t>& doc, const std::vector<int32_t>& after,
+                                         const RestoreOptions& opt, Trace* walk, std::string* error);
 bool CpuSeamAvailable();
 
-// GPU side (adapter 0).
+// GPU side (adapter 0). The slice size comes from ARRAY_S2_GPU_LAYERS_PER_SLICE (array_s2_gpu.cpp);
+// `head_on_device` maps with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE (`gputime` only; every check maps
+// with default residency, the output head on the host).
+struct GpuOptions {
+	bool head_on_device = false;
+};
 struct GpuSession;
-GpuSession* GpuOpen(const uint8_t* bytes, size_t n, const std::string& schema, MapResult* map);
+GpuSession* GpuOpen(const uint8_t* bytes, size_t n, const std::string& schema, MapResult* map,
+                    const GpuOptions& opt = GpuOptions{});
 void GpuClose(GpuSession* s);
 WalkResult GpuWalk(GpuSession* s, const std::vector<int32_t>& ids);
 GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_tokens);
 std::vector<RestoreResult> GpuRestores(GpuSession* s, const std::vector<int32_t>& prompt,
                                        const std::vector<int32_t>& ref, const std::vector<int32_t>& after,
-                                       int32_t max_tokens, std::string* error);
+                                       const RestoreOptions& opt, Trace* unbroken, std::string* error);
+std::vector<RestoreResult> GpuTfRestores(GpuSession* s, const std::vector<int32_t>& prompt,
+                                         const std::vector<int32_t>& doc, const std::vector<int32_t>& after,
+                                         const RestoreOptions& opt, Trace* walk, std::string* error);
+
+// The restore-at-state-zero mutant: overwrites the walk state a save blob records with 0. The CPU
+// blob ('SSB5'/'SSB6', src/sslm_abi.cpp) holds it as LE32 at byte 48; the GPU blob ('SLM5'/'SLM6',
+// src/gpu/superslm_gpu.cpp and src/gpu/gpu_1p0.cpp) at byte 124, after the 120-byte header and the
+// bound schema index. Returns false, changing nothing, for any other magic.
+bool ZeroBlobWalkState(std::vector<uint8_t>* blob, bool gpu);
 
 #endif  // ARRAY_S2_SHARED_H
