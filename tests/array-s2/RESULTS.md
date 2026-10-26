@@ -15,7 +15,7 @@ in the 1.16.0 suites are listed under **Build**.
 | 4a Map | CPU +226 ms mean for the schema artifact; schema section VRAM 59,637,760 B |
 | 4b Walks | 3/3 pass on CPU, 3/3 on GPU |
 | 4c Rejections | 3/3 refused at the first bad token on CPU, 3/3 on GPU |
-| 4d Generation | 10/10 valid IntentDoc v2 documents; CPU and GPU streams identical 10/10 |
+| 4d Generation | 10/10 valid IntentDoc v2 documents; CPU and GPU streams identical 10/10 (and at every GPU slice size tested) |
 | 4e Save/restore | 54/54 on CPU, 54/54 on GPU |
 | 4f Engine features | exact jump-forward identical 10/10; full finish identical 10/10; canonical jump-forward valid 10/10 but different 10/10 (cause below) |
 | 5 Mutants | 2/2 killed. The verifier at `e9d73750` caught neither: one was caught by (b) and (d), the other at map time. The verifier at `d7ebeaee` refuses offset_swap |
@@ -82,10 +82,25 @@ tracked. `minItems`: `/properties/intents` 1, `/properties/intents/items/propert
 The schema's VRAM residency, 59,637,760 B, is the 59,614,386 B SCM1 section rounded up to 64 KiB (910 × 65,536).
 The GPU model also keeps a host copy of the section.
 
-**Decode speed** (idle box, greedy, the 10 prompts, 767 tokens in total; [gen.txt](results/gen.txt)): CPU 38.2 ms/token;
-GPU through the G5 bridge 146.5 ms/token (default residency, no `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`); CPU with
-canonical jump-forward 33.5 ms/token over its 291 tokens; CPU with exact jump-forward 37.6 ms/token. A second run of
-each variant produced the same tokens.
+**Decode speed** (idle box, greedy, the 10 prompts, 767 tokens in total; [gen.txt](results/gen.txt), [slices.txt](results/slices.txt)):
+
+- **CPU:** 38.2 ms/token in one slice per token (`layer_budget` 24, so all 24 layers run in one `sslm_decode_step`
+  call).
+- **CPU with jump-forward:** canonical 33.5 ms/token over its 291 tokens; exact 37.6 ms/token.
+- **GPU through the G5 bridge**, by slices per token. `SslmGpuSeqDecodeStepForG5Bridge` submits and then blocks on
+  `sslm_gpu_ready` once per `dispatch_budget`, and one layer is 25 dispatches. The harness reads the slice size from
+  `ARRAY_S2_GPU_LAYERS_PER_SLICE` (default 1). Default residency, no `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`:
+
+  | Layers per slice | Slices per token | ms/token | Tokens |
+  |---:|---:|---:|---|
+  | 1 | 24 | 148.7 | identical |
+  | 2 | 12 | 84.7 | identical |
+  | 6 | 4 | 39.6 | identical |
+  | 24 | 1 | 27.1 | identical |
+
+- **Per-slice cost.** Each extra slice costs about 5.3 ms, (148.7 − 27.1) / 23, measured in this cell. The 146.5
+  ms/token in (d) is the 24-slice setting. At one slice per token the GPU is 1.41× faster than the CPU.
+- **Determinism.** A second run of each variant, and every slice setting, produced the same tokens.
 
 ## Step 4: the runtime harness
 
