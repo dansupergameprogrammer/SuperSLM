@@ -19,7 +19,8 @@
 #            graded by the base leg) and flags (M2: the rows query and the ready flag across a call).
 #   base     the same executable built from --base's tree. Every `obs` line (status, blob, final hidden, context,
 #            ready flag for every sweep and refusal case) must equal the branch's.
-#   abi      E-7 (d): gpu_1p0.h declares the same functions and the same struct bodies as --base's.
+#   abi      E-7 (d): gpu_1p0.h declares the same functions and the same struct bodies as --base's, but for the one verb
+#            MR5 adds by spec, sslm_gpu_seq_rows_produced (ruling 31).
 #   mutants  MXE2, the tail row dropped: in a pass with fewer rows than its variant (k < H), the last real row is
 #            treated as padding. The sweep must go red. It proves the bridge runs multi-row passes and that the sweep
 #            sees a lost tail row.
@@ -180,7 +181,10 @@ def surface(path):
     structs = {m.group(1): m.group(2).strip() for m in re.finditer(r"typedef struct (\w+) \{(.*?)\}", flat)}
     return funcs, structs
 bf, bs = surface(sys.argv[1]); nf, ns = surface(sys.argv[2])
-bad = ["new public function " + f for f in sorted(set(nf) - set(bf))]
+# Ruling 31: MR5 adds sslm_gpu_seq_rows_produced by spec (plan §4.7). That one name is allowed; the base stays the
+# head before MR3e, so any other new verb is still red.
+ALLOWED_NEW = {"sslm_gpu_seq_rows_produced"}
+bad = ["new public function " + f for f in sorted(set(nf) - set(bf) - ALLOWED_NEW)]
 bad += ["removed public function " + f for f in sorted(set(bf) - set(nf))]
 bad += ["signature changed: " + f for f in sorted(set(bf) & set(nf)) if bf[f] != nf[f]]
 bad += ["struct changed: " + s for s in sorted(set(bs) | set(ns)) if bs.get(s) != ns.get(s)]
@@ -188,7 +192,7 @@ for b in bad: print("    abi: " + b)
 print("    abi: %d functions, %d structs compared" % (len(nf), len(ns)))
 sys.exit(1 if bad else 0)
 PY
-	then echo "PASS abi (gpu_1p0.h: no new verb, no signature or struct change against $(git rev-parse --short=8 "$BASE"))"; else echo "FAIL abi"; FAILED+=(abi); fi
+	then echo "PASS abi (gpu_1p0.h: no new verb but MR5's sslm_gpu_seq_rows_produced (ruling 31), no signature or struct change against $(git rev-parse --short=8 "$BASE"))"; else echo "FAIL abi"; FAILED+=(abi); fi
 fi
 
 # ------------------------------------------------------------------------------------------------ mutants
