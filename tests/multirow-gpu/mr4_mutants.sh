@@ -10,6 +10,7 @@
 #   MXK4  embed_schema_token's chunk-open guard removed                                                            -> 4.6e
 #   MXK5  forced_tokens' chunk-open guard removed                                                                  -> 4.6f
 #   MXK6  the jump no longer restores last_rows_committed                                                         -> n1
+#         (NOT GRADED while n1 is red without the mutant: ruling 25, ruling 29 N2)
 # (MXK1-MXK6 are the code review's K1-K6, ruling 18.) A mutant that crashes the cells (no verdict line) counts as red.
 # The site: the bool embed_rows derives from SSLM_GPU_ROWS_FIRST_PREWALKED for admission (its name contains "prewalk";
 # the bad-spec check that refuses the flag with PROMPT is not the site). One edit here if the engine names it otherwise.
@@ -29,7 +30,7 @@ for a in "$@"; do
 		--out=*) OUT="${a#--out=}" ;;
 		--jobs=*) JOBS="${a#--jobs=}" ;;
 		--only=*) ONLY="${a#--only=}" ;;
-		*) sed -n '2,16p' "$0"; exit 2 ;;
+		*) sed -n '2,17p' "$0"; exit 2 ;;
 	esac
 done
 cd "$REPO"
@@ -108,8 +109,24 @@ if want MXK4; then host_mutant MXK4 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) retu
 	'\1(void)0;  // MXK4: the embed_schema_token guard removed\2' && must_red MXK4 4.6e; fi
 if want MXK5; then host_mutant MXK5 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) return SSLM_BUSY;(  // multi-row plan §4\.6 \(R-17\): the walk the chunk will advance is not at rest)' \
 	'\1(void)0;  // MXK5: the forced_tokens guard removed\2' && must_red MXK5 4.6f; fi
-if want MXK6; then host_mutant MXK6 $G 1 '~LastRowsKeep\(\) \{ s->last_rows_committed = v; \}' \
-	'~LastRowsKeep() { (void)s; (void)v; }  // MXK6: no restore' && must_red MXK6 n1; fi
+# Ruling 29 (MRX review N2; ruling 25): MXK6 is graded only on a green n1. While n1 is red without the mutant (the GPU
+# refuses Exact until MR5) it prints NOT GRADED, neither PASS nor FAIL.
+n1_green() {
+	local d="$OUT/baseline-n1"
+	mkdir -p "$d"
+	set +e
+	(cd "$CELLS" && WINEPREFIX="$WINEPREFIX-m" timeout 1800 "$WINE" ./mr4_cells.exe --fixtures="$F4" --cells=n1) >"$d/run.log" 2>&1
+	set -e
+	tr -d '\r' <"$d/run.log" | grep -q "^    cell n1: PASS"
+}
+if want MXK6; then
+	if n1_green; then
+		host_mutant MXK6 $G 1 '~LastRowsKeep\(\) \{ s->last_rows_committed = v; \}' \
+			'~LastRowsKeep() { (void)s; (void)v; }  // MXK6: no restore' && must_red MXK6 n1
+	else
+		echo "    mutant MXK6: NOT GRADED (n1 is red without the mutant; ruling 25: graded once MR5 turns n1 green)"
+	fi
+fi
 if [ ${#FAILED[@]} -eq 0 ]; then echo "mutants: PASS"; exit 0; fi
 echo "mutants: FAIL (${FAILED[*]})"
 exit 1

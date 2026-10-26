@@ -118,7 +118,12 @@ must_red() {
 	local name="$1" suite="$2" cells="$3" c rc ok=1 vac=""
 	for c in ${cells//,/ }; do baseline "$suite" "$c" || vac="$vac $c"; done
 	if [ -n "$vac" ]; then
-		echo "FAIL mutant $name: VACUOUS (cell$vac red on the unmutated build; ruling 25: graded only against a green cell)"
+		if [ "$name" = MXK6 ]; then
+			# Ruling 29 N2: NOT GRADED, not PASS. It still fails this leg: MR5's done criteria need MXK6 red on a green n1.
+			echo "FAIL mutant MXK6: NOT GRADED (n1 red on the unmutated build; ruling 25: graded once n1 is green)"
+		else
+			echo "FAIL mutant $name: VACUOUS (cell$vac red on the unmutated build; ruling 25: graded only against a green cell)"
+		fi
 		FAILED+=("$name"); rm -rf "$OUT/$name/shaders"; return 0
 	fi
 	run_cells "$suite" "$OUT/$name" "$cells" "$OUT/$name/run.log" && rc=0 || rc=$?
