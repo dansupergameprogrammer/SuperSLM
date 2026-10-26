@@ -26,12 +26,15 @@
 #               header has statuses the tag lacks (the leg can see the defect it exists for).
 #   tests       superslm_tests.exe, built from build.bat's own superslm_tests command (sources, /D and /I
 #               parsed from the file, so the cloud build follows the box build), run under Wine. Green when its
-#               FAIL lines are exactly p41_wine_baseline_v1.15.0.txt (the base tag's own three under Wine).
+#               FAIL lines are exactly p41_wine_baseline_<base>.txt (the base tag's own under Wine), or, where
+#               p41_wine_branch_<base>.txt exists (ruling 23, MRX), exactly its FAIL lines with the base still
+#               failing exactly its own pin.
 #   pkvg        (opt-in) the paged-KV GPU suite's step-G5 runner (tests/paged-kv-gpu, pkvg_g5) over
 #               tools/gen_paged_kv_fixture.py's fixtures (pkv_def, pkv_qk, ...), real-artifact cells skipped; exit 0.
 #
 #               And its total check count equals the base tag's own superslm_tests, built the same way from a
-#               detached worktree (<out>/base-tree) and run in the same session: a silent drop is red.
+#               detached worktree (<out>/base-tree) and run in the same session, plus the branch pin's DELTA (0
+#               without one): a silent drop is red.
 # Build notes: mingw-w64 11's d3d12.h lacks an enumerator the engine uses, so compiles go through
 # tests/multirow-gpu/mingw_cxx.sh (force-includes mingw_d3d12_compat.h). wine_gpu.sh's own `build` source
 # list predates tests/test_schema_fast_decode.cpp and no longer links; this script does not use it.
@@ -74,13 +77,20 @@ want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 ORD_CELLS=(tests/t2791-gpu-prefill-read-red-suite/cell_status_ordinals.cpp tests/t2956-token-finish-red-suite/cell_status_ordinals.cpp)
 # Errata E-3 (R-17): 1.17's G0.2 status-mirror checker admits the branch-provisional status after 31 and 32.
 E3_FILE=tests/schema-fast-decode-gpu/check_gpu_status_mirrors.py
+# Ruling 23's P4.1 amendment (MRX, as E-2/E-3 were): MRX's listed edits under tests/ outside multirow-gpu. 1.17's CPU
+# schema-fast-decode suite's Canonical cells retired or re-pointed to Exact (the table in red-suite-mrx.md), the
+# 1183-1185 relabel (21b), and the te425 census rows that move with the verb (e66f893b).
+MRX_FILES=(tests/test_schema_fast_decode.cpp tests/schema_fast_decode/sfd_cells_x.inc
+	tests/te425-gpu-alloc-status-red-suite/gpu_status_sites.txt)
+EXCL=(':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}" ":(exclude)$E3_FILE")
+for f in "${MRX_FILES[@]}"; do EXCL+=(":(exclude)$f"); done
 
 if want unmodified; then
 	echo "== P4.1 unmodified: the suite's sources and build.bat's superslm_tests command against $BASE"
 	ok=1
-	if ! git diff --quiet "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}" ":(exclude)$E3_FILE"; then
+	if ! git diff --quiet "$BASE" HEAD -- tests "${EXCL[@]}"; then
 		echo "    tests/ outside tests/multirow-gpu differs from $BASE:"
-		git diff --stat "$BASE" HEAD -- tests ':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}" ":(exclude)$E3_FILE" | sed 's/^/        /'
+		git diff --stat "$BASE" HEAD -- tests "${EXCL[@]}" | sed 's/^/        /'
 		ok=0
 	fi
 	# The ordinal cells may only gain the appended statuses: every pin and case line of the tag's copy stays.
@@ -225,23 +235,40 @@ if want tests; then
 			echo "   no pin $BASELINE; writing it from $BASE's run (commit it)"
 			grep "^FAIL" "$BLOG" >"$BASELINE" || true
 		fi
+		# Ruling 23 (MRX): the branch's expected FAIL set and its check count are re-recorded on the MRX tree, in
+		# p41_wine_branch_<base>.txt: one "DELTA <n>" line (the branch's total minus the base's, measured in the same
+		# session, so the host-dependent sha256 cells cancel) and the branch's FAIL lines verbatim. Every difference
+		# from the base's pin maps to a row of red-suite-mrx.md's ruling-23 table. With the file present the base run
+		# must still fail exactly its own pin; without it the branch is graded against the base's pin, N = BN.
+		BRANCH_PIN="$HERE/p41_wine_branch_$BASE.txt"
+		EXPECT="$BASELINE"; DELTA=0
+		if [ -f "$BRANCH_PIN" ]; then
+			EXPECT="$OUT/superslm_tests.expected"; grep "^FAIL" "$BRANCH_PIN" >"$EXPECT" || true
+			DELTA="$(sed -n 's/^DELTA \(-\{0,1\}[0-9]\{1,\}\)$/\1/p' "$BRANCH_PIN")"
+		fi
 		ok=1
-		if [ -z "$N" ]; then
+		if [ -z "$DELTA" ]; then
+			echo "FAIL tests: $BRANCH_PIN has no DELTA line"; ok=0
+		elif [ -z "$N" ]; then
 			echo "FAIL tests: the branch run did not reach its totals line (exit $rc, log $LOG)"; ok=0
 		elif [ -z "$BN" ]; then
 			echo "FAIL tests: the $BASE run did not reach its totals line (exit $brc, log $BLOG)"; ok=0
 		else
-			if ! diff -u "$BASELINE" "$OUT/superslm_tests.failures" >"$OUT/superslm_tests.failures.diff"; then
-				echo "FAIL tests: failures differ from the base tag's pinned set ($OUT/superslm_tests.failures.diff):"
+			if ! diff -u "$EXPECT" "$OUT/superslm_tests.failures" >"$OUT/superslm_tests.failures.diff"; then
+				echo "FAIL tests: failures differ from the pinned set ($(basename "$EXPECT"); $OUT/superslm_tests.failures.diff):"
 				sed -n '3,30p' "$OUT/superslm_tests.failures.diff" | sed 's/^/    /'; ok=0
 			fi
-			# A silent drop (a suite skipped, a cell gone) is red: the branch runs every check the tag runs here.
-			if [ "$N" != "$BN" ]; then
-				echo "FAIL tests: the branch ran $N checks, $BASE ran $BN under the same build and host"; ok=0
+			if [ -f "$BRANCH_PIN" ] && ! diff -u "$BASELINE" <(grep "^FAIL" "$BLOG" || true) >"$OUT/superslm_tests.base.diff"; then
+				echo "FAIL tests: the $BASE run's failures differ from its own pin ($OUT/superslm_tests.base.diff)"; ok=0
+			fi
+			# A silent drop (a suite skipped, a cell gone) is red: the branch runs every check the tag runs here,
+			# give or take the pinned delta.
+			if [ "$((N - BN))" != "$DELTA" ]; then
+				echo "FAIL tests: the branch ran $N checks, $BASE ran $BN under the same build and host (pinned delta $DELTA)"; ok=0
 			fi
 		fi
 		if [ $ok = 1 ]; then
-			echo "PASS tests (exit $rc; $N checks = $BASE's $BN on this host; failures are exactly the base tag's $(wc -l <"$BASELINE") pinned sfd_cells_x lines)"
+			echo "PASS tests (exit $rc; $N checks = $BASE's $BN + ($DELTA) on this host; failures are exactly the $(wc -l <"$EXPECT") pinned lines of $(basename "$EXPECT"))"
 		else
 			FAILED+=(tests)
 		fi

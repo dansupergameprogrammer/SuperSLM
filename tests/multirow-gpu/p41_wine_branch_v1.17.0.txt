@@ -1,0 +1,4 @@
+# P4.1 tests leg, ruling 23 (MRX): the branch total minus v1.17.0's, same session and host, and the branch FAIL lines.
+# -1770 = the CPU schema-fast-decode suite alone (v1.17.0 192148 -> branch 190378; red-suite-mrx.md ruling-23 table).
+# No FAIL lines: the branch and v1.17.0 both fail nothing under Wine on this host.
+DELTA -1770
