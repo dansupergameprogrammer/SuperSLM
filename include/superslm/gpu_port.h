@@ -498,6 +498,8 @@ GpuCallTiming LastCallTiming();
 // narrowing and argmax. `rows` is the stage's row count; `stages` counts the stages run in this process (0: none
 // yet). gpu_ms is 0.0 when the queue reports no timestamp frequency. A process-wide diagnostic, like
 // LastCallTiming(): with several threads it is whichever stage published last.
+// The stage runs on an Exact close of two or more rows; a one-row EXACT_DRAFT close takes Off's own one-row logits
+// call, untimed (ruling 37), so g(1) comes from the measured table (gpu_rows_cost_table.h).
 // Ruling 33 S7: the same record carries the host side of the most recent Exact close (an EXACT_DRAFT close at any M,
 // or a jump pass's close): host_finish_ms is the wall time, on the closing thread, of its rows' host finishes (final_norm,
 // then each row's logits path, narrowing, mask and argmax), excluding the widened stage's submission and wait;

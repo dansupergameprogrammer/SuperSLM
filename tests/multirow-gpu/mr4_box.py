@@ -19,7 +19,9 @@ every product in Python ints, divisions as exact floor and ceiling, never floats
         ceil(logits_stage_gpu_us(M) x 1000 / C(1)), no W - C subtraction. logits_stage_gpu_us is the logits = 1 row's
         column (the widened logits stage's GPU time, the maximum over the timed runs, in whole us rounded up; the
         builder's name, build-mr5.md) and C(1) the logits = 0, M = 1 maximum. Red if the column is missing or not
-        positive on a logits = 1 row. `check102 TABLE.csv --pre-mr5` grades a table under 18b's old rule (MB4's tables).
+        positive on a logits = 1 row, except that M = 1's may be empty: ruling 37 keeps a one-row close on Off's
+        one-row logits call, with no stage, so g(1) is the measured table's (printed "table").
+        `check102 TABLE.csv --pre-mr5` grades a table under 18b's old rule (MB4's tables).
         Ruling 33 S7: the logits = 1 row also carries host_finish_us, the Exact close's M host finishes (the maximum
         over the timed runs, per close; with the bench's --schema, the bound close's, the certified models' shape).
         REPORT ONLY: printed per model and M beside g(M) for the certification record, never a gate (the GPU frame
@@ -128,6 +130,11 @@ def g_per_mille(rows, model):
         if not (c1 and w):
             continue
         stage = w.get("logits_stage_gpu_us")
+        if stage is None and M == 1:
+            # Ruling 37: a one-row Exact close keeps Off's one-row logits call and times no stage; g(1) is the
+            # measured table's (gpu_rows_cost_table.h), not this run's.
+            g.append("table")
+            continue
         if stage is None or stage <= 0:
             bad.append("%s M=%d logits=1: logits_stage_gpu_us %r, want a positive whole us (MR5's logits-stage bracket)" % (model, M, stage))
             continue
@@ -282,6 +289,12 @@ def self_test():
     gt[("0.5B", 1, 1)]["logits_stage_gpu_us"] = 311
     if g_per_mille(gt, "0.5B")[0][:1] != [51]:
         bad.append("g(M): ceil(311 x 1000 / 6,200) is not 51")
+    # Ruling 37: M = 1's column may be empty (no stage at M = 1; g(1) from the table), and is then not red.
+    g1 = dict(gt)
+    g1[("0.5B", 1, 1)] = {"max_us": 1}
+    g, gbad = g_per_mille(g1, "0.5B")
+    if gbad or g[0] != "table":
+        bad.append("g(M): an empty M = 1 stage is %s %s, want 'table' and not red" % (g[:1], gbad))
     del gt[("0.5B", 2, 1)]["logits_stage_gpu_us"]
     gt[("0.5B", 3, 1)]["logits_stage_gpu_us"] = 0
     if len(g_per_mille(gt, "0.5B")[1]) != 2:

@@ -8783,8 +8783,10 @@ void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_statu
 			RowsDropChunkImpl(seq);
 			if (exact) {
 				// Exact at M = 1 (MR5): the row's finish, Off's own, on the handle; a = 1 whatever it gives. On the
-				// device path its logits come from the widened stage at one row (ruling 33 S7: every Exact close
-				// runs exactly one stage, timed, so g(1) is measured as g(M) is); the row is RunDeviceLogits's.
+				// device path its logits come from Off's own one-row call (RunDeviceLogits), not the widened stage
+				// (ruling 37: the one-row widened path measured 1.66x slower on the box), so no stage is timed at
+				// M = 1 and g(1) comes from the measured table. The call is made here rather than inside the finish
+				// only so that its submission and wait stay out of host_finish_ms (ruling 33 S7).
 				SslmGpuModelHandle* model = seq->model;
 				std::vector<int8_t> final_codes(model->hidden_size);
 				auto host_t0 = HostClock::now();
@@ -8800,11 +8802,8 @@ void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_statu
 					fin.status = g;  // the finish's own guard (Off's): refused, as Off's finish would be
 				} else if (GpuFinishPathFor(model, seq->bound_schema_index) == GpuFinishPath::kDevice) {
 					std::vector<int64_t> wide(static_cast<size_t>(model->vocab_size));
-					double gpu_ms = 0.0;
 					host_ms += HostMsSince(host_t0);
-					const SslmGpuStatus ws =
-					    RunDeviceLogitsRows(seq->ctx, *model->device_logits, final_codes.data(), 1, wide.data(), &gpu_ms);
-					if (ws == SSLM_OK) PublishLogitsStageTiming(gpu_ms, 1);
+					const SslmGpuStatus ws = RunDeviceLogits(seq->ctx, *model->device_logits, final_codes.data(), wide.data());
 					host_t0 = HostClock::now();
 					const GpuDeviceRow pre{ws, wide.data()};
 					fin = GpuFinishFromNorm(seq->ctx, model, seq->bound_schema_index, seq->dfa_walk_state, final_codes.data(),

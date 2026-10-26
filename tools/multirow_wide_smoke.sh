@@ -140,8 +140,9 @@ case "$SUITE" in
 		done
 		[ "$(head -1 "$OUT/multirow_cost_bench.csv")" = "model,M,logits,runs,warmup,median_us,p95_us,max_us,clock,wall_median_us,wall_p95_us,wall_max_us,logits_stage_gpu_us,host_finish_us" ] &&
 			[ "$(grep -c ',0,[0-9]*,[0-9]*,[0-9]*,[0-9]*,[0-9]*,gpu,[0-9]*,[0-9]*,[0-9]*,,$' "$OUT/multirow_cost_bench.csv")" = 8 ] &&
-			[ "$(grep -c ',1,[0-9]*,[0-9]*,[0-9]*,[0-9]*,[0-9]*,gpu,[0-9]*,[0-9]*,[0-9]*,[1-9][0-9]*,[1-9][0-9]*$' "$OUT/multirow_cost_bench.csv")" = 8 ] &&
-			[ "$(wc -l <"$OUT/multirow_cost_bench.csv")" = 17 ] && echo "    PASS CSV: mr4_box.py's columns plus clock and wall, 16 rows on the GPU clock, logits 1 with positive logits_stage_gpu_us and host_finish_us" ||
+			[ "$(grep -c ',1,[0-9]*,[0-9]*,[0-9]*,[0-9]*,[0-9]*,gpu,[0-9]*,[0-9]*,[0-9]*,[1-9][0-9]*,[1-9][0-9]*$' "$OUT/multirow_cost_bench.csv")" = 7 ] &&
+			[ "$(grep -c '^[^,]*,1,1,[0-9]*,[0-9]*,[0-9]*,[0-9]*,[0-9]*,gpu,[0-9]*,[0-9]*,[0-9]*,,[1-9][0-9]*$' "$OUT/multirow_cost_bench.csv")" = 1 ] &&
+			[ "$(wc -l <"$OUT/multirow_cost_bench.csv")" = 17 ] && echo "    PASS CSV: mr4_box.py's columns plus clock and wall, 16 rows on the GPU clock, logits 1 with positive logits_stage_gpu_us (M >= 2; M = 1 empty, g(1) from the table, ruling 37) and host_finish_us" ||
 			{ echo "    FAIL CSV"; FAILED+=(bench-csv); }
 		# MB5's grader on this table (ruling 33 S7): g(M) from logits_stage_gpu_us, host_finish_us reported.
 		if python3 tests/multirow-gpu/mr4_box.py report-exact "$OUT/multirow_cost_bench.csv" pkv_def; then echo "    PASS mr4_box report-exact"

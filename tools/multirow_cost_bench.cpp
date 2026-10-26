@@ -22,6 +22,8 @@
 //          its wall time is filed beside it.
 //   S      the widened logits stage alone (LastLogitsStageTiming().gpu_ms): the CSV's logits_stage_gpu_us, at its
 //          maximum over the timed runs, whole us rounded up. mr4_box.py prices g(M) = ceil(S(M) x 1000 / C(1)).
+//          M >= 2 only: a one-row close takes Off's own one-row logits call, untimed (ruling 37), so the M = 1 row's
+//          column is empty and g(1) is the table's (kGpuRowsLogitsRatioPerMille[0]).
 //   HF     the close's host finishes (LastLogitsStageTiming().host_finish_ms: final_norm and each row's logits path,
 //          narrowing, mask and argmax; the stage excluded): the CSV's host_finish_us, its maximum, report only (the GPU
 //          frame budget stays GPU-only; the host finish runs on the worker thread).
@@ -29,7 +31,7 @@
 // mapping of the model that has it. They run unbound, where the close's finish takes the device head and the stage
 // runs. --schema=NAME also runs them bound to that schema (the certified models' shape: on a tied model the bound close
 // finishes on the host's legal rows and runs no stage); host_finish_us is then the bound close's, and the unbound
-// one is printed beside it. The written header still carries g's estimates (MR7 takes the measured per-M maxima).
+// one is printed beside it. The written header (--out) carries the measured r(M) and g(M) (g(1) from the table).
 //
 // The table: C(M) at its MAXIMUM over the timed runs (MR-D15); r(M) = ceil(1000 x maxC_gpu(M) / maxC_gpu(1)), integer
 // per-mille, rounded up (costs round up, §5.1).
@@ -206,9 +208,14 @@ bool RunExact(const Env& e, int32_t schema_index, uint32_t m, int p0, const std:
 	}
 	s->host_us = after.host_finish_ms * 1000.0;
 	s->stage_us = after.stages == before.stages + 1 ? after.gpu_ms * 1000.0 : 0.0;  // no stage: a host finish path
-	if (schema_index < 0 && !(after.stages == before.stages + 1 && after.rows == m && s->stage_us > 0)) {
-		std::snprintf(buf, sizeof buf, "unbound: %llu logits stages of %u rows, %.1f us (want 1 of %u, timed)",
-		              static_cast<unsigned long long>(after.stages - before.stages), after.rows, s->stage_us, m);
+	// Unbound, the close's finish takes the device head: one timed stage of M rows for M >= 2; at M = 1 Off's own
+	// one-row call and no stage (ruling 37: g(1) is the table's).
+	const bool stage_ok = m == 1 ? after.stages == before.stages
+	                             : after.stages == before.stages + 1 && after.rows == m && s->stage_us > 0;
+	if (schema_index < 0 && !stage_ok) {
+		std::snprintf(buf, sizeof buf, "unbound: %llu logits stages of %u rows, %.1f us (want %s)",
+		              static_cast<unsigned long long>(after.stages - before.stages), after.rows, s->stage_us,
+		              m == 1 ? "none at M = 1" : "1 of M rows, timed");
 		return *why = buf, false;
 	}
 	s->x_gpu_us = layers_gpu_us + s->stage_us;
@@ -452,7 +459,8 @@ int main(int argc, char** argv) {
 	            " host finish max%s\n", schema_index >= 0 ? " (unbound / bound)" : "");
 	for (uint32_t m = 1; m <= kMaxM; ++m) {
 		r[m] = m == 1 ? 1000 : CeilPerMille(c_stats[m].max, c_stats[1].max);
-		g[m] = CeilPerMille(std::ceil(s_stats[m].max), std::ceil(c_stats[1].max));
+		g[m] = m == 1 ? superslm_gpu::kGpuRowsLogitsRatioPerMille[0]  // no stage at M = 1: the table's (ruling 37)
+		              : CeilPerMille(std::ceil(s_stats[m].max), std::ceil(c_stats[1].max));
 		std::printf("  %u | %17.0f %8.0f %8.0f | %11.0f %8.0f %8.0f | %4lld | %15.0f | %5.0f | %4lld | %8.0f", m,
 		            c_stats[m].median, c_stats[m].p95, c_stats[m].max, cw_stats[m].median, cw_stats[m].p95, cw_stats[m].max,
 		            static_cast<long long>(r[m]), x_stats[m].max, s_stats[m].max, static_cast<long long>(g[m]), hf_stats[m].max);
@@ -460,7 +468,7 @@ int main(int argc, char** argv) {
 		std::printf("\n");
 	}
 	std::printf("  port rule C(4) / (4 x C(1)) on GPU time at the median: %.3f (MR0: <= 0.6); g(M) = ceil(S(M) x 1000 / C(1)),"
-	            " printed, not written into the header (MR7 takes the per-M maxima)\n",
+	            " M >= 2; g(1) from the table (no stage at M = 1, ruling 37)\n",
 	            c_stats[4].median / (4.0 * c_stats[1].median));
 
 	if (!json_path.empty()) {
@@ -517,7 +525,8 @@ int main(int argc, char** argv) {
 				             up(st.median), up(st.p95), up(st.max), up(wall.median), up(wall.p95), up(wall.max));
 				if (lg) {
 					const Stats& hf = schema_index >= 0 ? hfb_stats[m] : hf_stats[m];  // the certified (bound) shape when named
-					std::fprintf(f, "%lld,%lld\n", up(s_stats[m].max), up(hf.max));
+					if (m == 1) std::fprintf(f, ",%lld\n", up(hf.max));  // no stage at M = 1: g(1) from the table (ruling 37)
+					else std::fprintf(f, "%lld,%lld\n", up(s_stats[m].max), up(hf.max));
 				} else {
 					std::fprintf(f, ",\n");
 				}
@@ -538,13 +547,14 @@ int main(int argc, char** argv) {
 		             "//\n"
 		             "// WRITTEN BY tools/multirow_cost_bench (model %s): L = %u, p0 = %d, %d warm-up + %d timed runs per M, %s.\n"
 		             "// C(1) = %.0f us of GPU time at its max (superslm_gpu::LastCallTiming().gpu_busy_ms; wall time is not used).\n"
-		             "// r(M) = ceil(1000 x maxC(M) / maxC(1)), measured. g(M) is NOT measured: the estimates are carried over unchanged\n"
-		             "// until MR5's widened logits stage times its own GPU work (ruling 18a).\n"
-		             "// Host-only data for the plugin's integer chooser (MR6); index M - 1. See the estimates' header for the layout.\n"
+		             "// r(M) = ceil(1000 x maxC(M) / maxC(1)), measured. g(M) = ceil(1000 x S(M) / maxC(1)) for M >= 2, S the widened\n"
+		             "// logits stage's GPU time at its max (rulings 18a, 27); g(1) is carried from the table this bench was built\n"
+		             "// against (no stage runs at M = 1, ruling 37).\n"
+		             "// Host-only data for the plugin's integer chooser (MR6); index M - 1. The layout is include/superslm/gpu_rows_cost_table.h's.\n"
 		             "#ifndef SUPERSLM_GPU_ROWS_COST_TABLE_H\n#define SUPERSLM_GPU_ROWS_COST_TABLE_H\n\n#include <cstdint>\n\n"
 		             "namespace superslm_gpu {\n\n"
 		             "constexpr bool kGpuRowsCostTableMeasured = true;     // r(M), on this card\n"
-		             "constexpr bool kGpuRowsLogitsRatioMeasured = false;  // g(M): estimates until MR5\n"
+		             "constexpr bool kGpuRowsLogitsRatioMeasured = true;   // g(M), M >= 2, on this card; g(1) from the table\n"
 		             "constexpr uint32_t kGpuRowCostUs = 6200;  // GpuRowCostMs's default (6.2 ms) in us: C(1), the M = 1 entry\n\n",
 		             model_name.c_str(), e.L, p0, warmup, runs, device_head ? "device head" : "host head", c_stats[1].max);
 		const char* names[2] = {"kGpuRowsCostRatioPerMille", "kGpuRowsLogitsRatioPerMille"};
@@ -552,8 +562,7 @@ int main(int argc, char** argv) {
 			std::fprintf(f, "constexpr uint32_t %s[8] = {\n", names[t]);
 			for (uint32_t m = 1; m <= kMaxM; ++m)
 				std::fprintf(f, "    %lld,  // M = %u%s\n",
-				             static_cast<long long>(t == 0 ? r[m] : superslm_gpu::kGpuRowsLogitsRatioPerMille[m - 1]), m,
-				             t == 0 ? "" : ": estimate, carried over");
+				             static_cast<long long>(t == 0 ? r[m] : g[m]), m, t == 1 && m == 1 ? ": from the table" : "");
 			std::fprintf(f, "};\n\n");
 		}
 		std::fprintf(f, "}  // namespace superslm_gpu\n\n#endif  // SUPERSLM_GPU_ROWS_COST_TABLE_H\n");
