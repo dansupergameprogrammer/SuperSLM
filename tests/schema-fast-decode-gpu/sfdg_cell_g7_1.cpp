@@ -28,10 +28,12 @@ int main(int argc, char** argv) {
 			bool want_dead = false;
 			if (sslm_seq cs = c.New(g.schema)) {
 				if (c.Prefill(cs, prompt, SSLM_SPAN_PROMPT) == SSLM_OK) {
+					// cpu::Token (g1e_cpu_twin.h): layer-budget-1 steps to the next token, -2 at the dead end.
 					for (int i = 0; i < 400; ++i) {
-						const int32_t t = c.Decode(cs);
-						if (t == -2) { want_dead = true; break; }
-						if (t < 0) break;
+						sslm_status st = SSLM_OK;
+						const int32_t t = cpu::Token(c.M(), cs, &st);
+						if (st == SSLM_OK && t == -2) { want_dead = true; break; }
+						if (st != SSLM_OK || t < 0) break;
 						want.push_back(t);
 					}
 				}
