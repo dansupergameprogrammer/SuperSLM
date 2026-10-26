@@ -20,6 +20,13 @@ every product in Python ints, divisions as exact floor and ceiling, never floats
         column (the widened logits stage's GPU time, the maximum over the timed runs, in whole us rounded up; the
         builder's name, build-mr5.md) and C(1) the logits = 0, M = 1 maximum. Red if the column is missing or not
         positive on a logits = 1 row. `check102 TABLE.csv --pre-mr5` grades a table under 18b's old rule (MB4's tables).
+        Ruling 33 S7: the logits = 1 row also carries host_finish_us, the Exact close's M host finishes (the maximum
+        over the timed runs, per close; with the bench's --schema, the bound close's, the certified models' shape).
+        REPORT ONLY: printed per model and M beside g(M) for the certification record, never a gate (the GPU frame
+        budget stays GPU-only; the host finish runs on the worker thread). A missing column is reported, not red.
+  report-exact  python3 mr4_box.py report-exact TABLE.csv MODEL
+        The same g(M) rule and host_finish_us report for one model of any name (the cloud's reduced bench table, e.g.
+        tools/multirow_wide_smoke.sh --suite=bench on pkv_def); red only where g(M) is red. Not a 10.2 verdict.
   10.5  python3 mr4_box.py canon105 TABLE.csv [--margin=150] [--spans=3,5,6,5,2]   RETIRED at MRX (prints RETIRED)
         Canonical over B2's spans, red if not faster: the M-row frames are >= 1.17's one-row Canonical frames at the default
         budget (one row per frame: sum of spans). C18: frames are decided from the configuration alone, so they follow from
@@ -86,6 +93,9 @@ def load(path):
             stage = (r.get("logits_stage_gpu_us") or "").strip()
             if stage:
                 row["logits_stage_gpu_us"] = int(stage)
+            host = (r.get("host_finish_us") or "").strip()
+            if host:
+                row["host_finish_us"] = int(host)
             rows[(r["model"], int(r["M"]), int(r["logits"]))] = row
     return rows
 
@@ -125,6 +135,45 @@ def g_per_mille(rows, model):
     return g, bad
 
 
+def host_finish_report(rows, model):
+    """Ruling 33 S7: host_finish_us(M) per logits = 1 row, report only; (values, 'not measured' rows)."""
+    vals, missing = [], []
+    for M in range(1, 9):
+        w = rows.get((model, M, 1))
+        if w is None:
+            continue
+        h = w.get("host_finish_us")
+        if h is None:
+            missing.append(M)
+            vals.append(None)
+        else:
+            vals.append(h)
+    return vals, missing
+
+
+def print_host_finish(rows, model):
+    vals, missing = host_finish_report(rows, model)
+    print("10.2 %s: host_finish_us(M) %s (the Exact close's M host finishes, max per close; report only, ruling 33 S7)%s"
+          % (model, vals, "" if not missing else "; not measured at M = %s" % missing))
+
+
+def report_exact(path, model):
+    rows = load(path)
+    bad = [b for b in clock_problems(rows) if b.startswith(model + " ")]
+    c1 = rows.get((model, 1, 0))
+    if c1 is None:
+        bad.append("missing %s M=1 logits=0 (C(1))" % model)
+    g, gbad = g_per_mille(rows, model)
+    bad.extend(gbad)
+    print("report-exact %s: g(M) per mille %s (logits_stage_gpu_us / C(1)); logits_stage_gpu_us(M) %s" %
+          (model, g, [rows.get((model, M, 1), {}).get("logits_stage_gpu_us") for M in range(1, 9)]))
+    print_host_finish(rows, model)
+    for b in bad:
+        print("RED report-exact: " + b)
+    print("%s report-exact %s" % ("RED" if bad else "PASS", model))
+    return 1 if bad else 0
+
+
 def check102(path, bracket=None):
     if bracket is None:
         bracket = GPU_LOGITS_BRACKET
@@ -151,6 +200,7 @@ def check102(path, bracket=None):
                 bad.extend(gbad)
                 print("10.2 %s: r(M) per mille %s (logits = 0, clock gpu); g(M) per mille %s (logits_stage_gpu_us / C(1), clock gpu;"
                       " rulings 18a, 27)" % (model, r, g))
+                print_host_finish(rows, model)
             else:
                 print("10.2 %s: r(M) per mille %s (logits = 0, clock gpu); g(M) not derived (ruling 18b: the logits = 1 rows are"
                       " the wall stand-in, information only)" % (model, r))
@@ -236,6 +286,17 @@ def self_test():
     gt[("0.5B", 3, 1)]["logits_stage_gpu_us"] = 0
     if len(g_per_mille(gt, "0.5B")[1]) != 2:
         bad.append("g(M): a missing or zero logits_stage_gpu_us is not red")
+    # Ruling 33 S7: host_finish_us is read and reported, never graded: a missing column is listed, not red.
+    gt[("0.5B", 2, 1)]["logits_stage_gpu_us"] = 620
+    gt[("0.5B", 3, 1)]["logits_stage_gpu_us"] = 930
+    for M in range(1, 9):
+        gt[("0.5B", M, 1)]["host_finish_us"] = 40 * M
+    del gt[("0.5B", 5, 1)]["host_finish_us"]
+    vals, missing = host_finish_report(gt, "0.5B")
+    if vals != [40, 80, 120, 160, None, 240, 280, 320] or missing != [5]:
+        bad.append("host_finish_us report: %s, missing %s" % (vals, missing))
+    if g_per_mille(gt, "0.5B")[1]:
+        bad.append("host_finish_us: a missing column turned g(M) red (it is report only)")
     for b in bad:
         print("RED self-test: " + b)
     print("%s mr4_box self-test" % ("RED" if bad else "PASS"))
@@ -245,6 +306,8 @@ def self_test():
 def main(argv):
     if len(argv) >= 2 and argv[1] == "--self-test":
         return self_test()
+    if len(argv) >= 4 and argv[1] == "report-exact":
+        return report_exact(argv[2], argv[3])
     if len(argv) >= 3 and argv[1] == "check102":
         return check102(argv[2], False if "--pre-mr5" in argv[3:] else None)
     if len(argv) >= 3 and argv[1] == "canon105":

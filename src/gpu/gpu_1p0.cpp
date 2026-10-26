@@ -48,6 +48,7 @@ static_assert(sizeof(GpuResidencyConfig) == 4 && offsetof(GpuResidencyConfig, fl
 #include <array>
 #include <cassert>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -1597,6 +1598,17 @@ void PublishLogitsStageTiming(double gpu_ms, uint32_t rows) {
 	g_logits_stage_timing.gpu_ms = gpu_ms;
 	g_logits_stage_timing.rows = rows;
 	++g_logits_stage_timing.stages;
+}
+// Ruling 33 S7: the host side of an Exact close (gpu_port.h).
+void PublishExactCloseHostTiming(double host_ms, uint32_t rows) {
+	const std::lock_guard<std::mutex> lock(g_logits_stage_mu);
+	g_logits_stage_timing.host_finish_ms = host_ms;
+	g_logits_stage_timing.host_rows = rows;
+	++g_logits_stage_timing.closes;
+}
+using HostClock = std::chrono::steady_clock;
+double HostMsSince(HostClock::time_point t0) {
+	return std::chrono::duration<double, std::milli>(HostClock::now() - t0).count();
 }
 }  // namespace
 namespace superslm_gpu {
@@ -8602,6 +8614,8 @@ SslmGpuStatus RowsExactClose(SslmGpuSequenceHandle* seq, const std::vector<GpuRo
 	// final_norm for every row to finish, up to the first that fails.
 	const size_t H = model->hidden_size, V = static_cast<size_t>(model->vocab_size);
 	std::vector<int8_t> finals(static_cast<size_t>(to_finish) * H);
+	auto host_t0 = HostClock::now();  // ruling 33 S7: the host finishes, the widened stage excluded
+	double host_ms = 0.0;
 	uint32_t normed = 0;
 	superslm::SslmForwardStatus norm_fail = superslm::SslmForwardStatus::Ok;
 	for (; normed < to_finish; ++normed) {
@@ -8613,12 +8627,15 @@ SslmGpuStatus RowsExactClose(SslmGpuSequenceHandle* seq, const std::vector<GpuRo
 	std::vector<int64_t> wide;
 	SslmGpuStatus wide_status = SSLM_OK;
 	const bool device_stage = normed > 0 && GpuFinishPathFor(model, seq->bound_schema_index) == GpuFinishPath::kDevice;
+	host_ms += HostMsSince(host_t0);
 	if (device_stage) {
 		wide.resize(static_cast<size_t>(normed) * V);
 		double gpu_ms = 0.0;
 		wide_status = RunDeviceLogitsRows(seq->ctx, *model->device_logits, finals.data(), normed, wide.data(), &gpu_ms);
 		if (wide_status == SSLM_OK) PublishLogitsStageTiming(gpu_ms, normed);
 	}
+	host_t0 = HostClock::now();
+	uint32_t host_rows = 0;
 	// The check, row by row.
 	int32_t a = -1;  // rows kept
 	GpuFinishResult last{};
@@ -8635,6 +8652,7 @@ SslmGpuStatus RowsExactClose(SslmGpuSequenceHandle* seq, const std::vector<GpuRo
 			const GpuDeviceRow pre{wide_status, device_stage ? wide.data() + static_cast<size_t>(r) * V : nullptr};
 			fin = GpuFinishFromNorm(seq->ctx, model, seq->bound_schema_index, c.walk_after[r],
 			                        finals.data() + static_cast<size_t>(r) * H, device_stage ? &pre : nullptr);
+			++host_rows;
 		}
 		const int32_t next = pass ? c.verify_next[r] : (r + 1 < M ? c.tokens[r + 1] : -1);
 		const bool agrees = fin.status == SSLM_OK && (next >= 0) &&
@@ -8646,6 +8664,7 @@ SslmGpuStatus RowsExactClose(SslmGpuSequenceHandle* seq, const std::vector<GpuRo
 			break;
 		}
 	}
+	PublishExactCloseHostTiming(host_ms + HostMsSince(host_t0), host_rows);
 	if (pass) {
 		if (a < 0) a = static_cast<int32_t>(M);  // every row agreed: the next pass checks on
 		seq->exact_pass_kept = a;
@@ -8755,9 +8774,14 @@ void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_statu
 			const bool exact = c.kind == SSLM_GPU_ROWS_EXACT_DRAFT;
 			RowsDropChunkImpl(seq);
 			if (exact) {
-				// Exact at M = 1 (MR5): the row's finish, Off's own, on the handle; a = 1 whatever it gives.
+				// Exact at M = 1 (MR5): the row's finish, Off's own, on the handle; a = 1 whatever it gives. On the
+				// device path its logits come from the widened stage at one row (ruling 33 S7: every Exact close
+				// runs exactly one stage, timed, so g(1) is measured as g(M) is); the row is RunDeviceLogits's.
 				SslmGpuModelHandle* model = seq->model;
 				std::vector<int8_t> final_codes(model->hidden_size);
+				auto host_t0 = HostClock::now();
+				double host_ms = 0.0;
+				uint32_t host_rows = 0;
 				const superslm::SslmForwardStatus nst =
 				    GpuFinishNorm(model, seq->hidden_codes.data(), seq->hidden_scale, final_codes.data());
 				GpuFinishResult fin;
@@ -8766,10 +8790,24 @@ void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_statu
 				} else if (const SslmGpuStatus g = EntrySubmitGuard(ScopeForHolder(seq), GuardDevice::kPerContextOnly);
 				           g != SSLM_OK) {
 					fin.status = g;  // the finish's own guard (Off's): refused, as Off's finish would be
+				} else if (GpuFinishPathFor(model, seq->bound_schema_index) == GpuFinishPath::kDevice) {
+					std::vector<int64_t> wide(static_cast<size_t>(model->vocab_size));
+					double gpu_ms = 0.0;
+					host_ms += HostMsSince(host_t0);
+					const SslmGpuStatus ws =
+					    RunDeviceLogitsRows(seq->ctx, *model->device_logits, final_codes.data(), 1, wide.data(), &gpu_ms);
+					if (ws == SSLM_OK) PublishLogitsStageTiming(gpu_ms, 1);
+					host_t0 = HostClock::now();
+					const GpuDeviceRow pre{ws, wide.data()};
+					fin = GpuFinishFromNorm(seq->ctx, model, seq->bound_schema_index, seq->dfa_walk_state, final_codes.data(),
+					                        &pre);
+					host_rows = 1;
 				} else {
 					fin = GpuFinishFromNorm(seq->ctx, model, seq->bound_schema_index, seq->dfa_walk_state, final_codes.data(),
 					                        /*pre=*/nullptr);
+					host_rows = 1;
 				}
+				PublishExactCloseHostTiming(host_ms + HostMsSince(host_t0), host_rows);
 				ExactApplyFinish(seq, fin, seq->dfa_walk_state);
 			}
 		}
