@@ -681,7 +681,10 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
  * sslm_gpu_seq_rows_abandon restores the state before sslm_gpu_seq_embed_rows and closes the chunk.
  * A null context or sequence, or a sequence of another context: SSLM_SEQUENCE_KV_BUFFER_MISMATCH. A
  * Submitted sequence, or another claimed verb running on it: SSLM_BUSY. No chunk open: SSLM_OK, no
- * change.
+ * change. An EXACT_DRAFT chunk whose first slice ran puts its rows' device K/V back with one submission,
+ * so the abandon then passes the same entry guard as the decode verbs: a guard refusal returns its status
+ * and changes nothing, with the chunk still open. If that restore fails, the chunk is still closed and the
+ * failure is returned (SSLM_DEVICE_LOST, or SSLM_GPU_ALLOCATION_FAILED).
  *
  * sslm_gpu_seq_rows_open writes the open chunk's row count to `*out_rows` (0 when none);
  * sslm_gpu_seq_last_rows_committed writes the rows the last close committed (the admitted count after a

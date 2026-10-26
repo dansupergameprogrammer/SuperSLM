@@ -495,7 +495,11 @@ do {
 - **Failure and abandon.** A device or allocation failure in any slice puts
   the sequence back exactly as it was before `sslm_gpu_seq_embed_rows`, and
   closes the chunk. `sslm_gpu_seq_rows_abandon` does the same on request,
-  and returns `SSLM_OK` with no change when no chunk is open.
+  and returns `SSLM_OK` with no change when no chunk is open. Abandoning an
+  Exact chunk after its first slice submits one copy to put back its rows'
+  device K/V. That copy passes the decode verbs' entry guard. A refusal
+  changes nothing and leaves the chunk open. A failed copy still closes the
+  chunk, and the abandon returns the failure.
 - **Other verbs while a chunk is open.** Token embedding, adapter binding,
   prefix adoption, every schema/prefill bridge, `sslm_gpu_seq_jump_forward`,
   `sslm_gpu_seq_embed_schema_token` and `sslm_gpu_seq_forced_tokens` return

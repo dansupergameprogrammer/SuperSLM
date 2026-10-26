@@ -8240,11 +8240,13 @@ void RowsDropChunkImpl(SslmGpuSequenceHandle* seq) {
 // Exact (MR5, plan §4.7, decision (b) in build-mr5.md): the chunk's rows `first`..M-1 put back on the device as
 // the first slice found them (RowsDecodeStep's snapshot), so a rejected row leaves the device K/V Off's twin has,
 // as the S1 fix does for the prompt bridge's refused pass. A no-op without a snapshot (PROMPT, M = 1, and a chunk
-// whose first slice never ran). False when the copy failed; the rows then hold the chunk's values (unread: they lie
-// above the committed length).
-bool RowsRestoreDeviceKvAbove(SslmGpuSequenceHandle* seq, uint32_t first) noexcept {
+// whose first slice never ran). It submits on the singleton, so its caller has passed EntrySubmitGuard
+// (kReachesSingleton). A failed copy returns the snapshot's own classification (an allocation failure
+// SSLM_GPU_ALLOCATION_FAILED, anything else SSLM_DEVICE_LOST); the rows then hold the chunk's values (unread: they
+// lie above the committed length).
+SslmGpuStatus RowsRestoreDeviceKvAbove(SslmGpuSequenceHandle* seq, uint32_t first) noexcept {
 	GpuRowsChunk& c = *seq->rows_chunk;
-	if (!c.device_kv_snap || c.rows == 0 || first >= c.rows) return true;
+	if (!c.device_kv_snap || c.rows == 0 || first >= c.rows) return SSLM_OK;
 	const size_t per_row = c.device_kv_offsets.size() / c.rows;
 	const size_t hd = seq->model->head_dim;
 	try {
@@ -8263,14 +8265,20 @@ bool RowsRestoreDeviceKvAbove(SslmGpuSequenceHandle* seq, uint32_t first) noexce
 		dev.CloseListOrThrow();
 		dev.SubmitAndWaitKeepingAlive(/*retry=*/false, c.device_kv_snap, buf);
 		latch = false;
-		return true;
+		return SSLM_OK;
+	} catch (const superslm_gpu::harness::GpuAllocationError&) {
+		return SSLM_GPU_ALLOCATION_FAILED;
+	} catch (const std::bad_alloc&) {
+		return SSLM_GPU_ALLOCATION_FAILED;
 	} catch (...) {
-		return false;
+		return SSLM_DEVICE_LOST;
 	}
 }
 
 // Full rollback (plan §3.6): every snapshot item restored, the holder's tail through HolderUnmapTail, the chunk
-// closed, nothing committed. For M = 1 also row p0's mirror bytes, which the one-row body's finishes wrote.
+// closed, nothing committed. For M = 1 also row p0's mirror bytes, which the one-row body's finishes wrote. The
+// chunk closes whatever happens; the status is the device K/V restore's failure if it failed (ruling 35: never
+// swallowed), else the unmap's.
 SslmGpuStatus RowsRollbackAndClose(SslmGpuSequenceHandle* seq) {
 	GpuRowsChunk& c = *seq->rows_chunk;
 	const GpuRowsEntrySnapshot& e = c.entry;
@@ -8286,11 +8294,11 @@ SslmGpuStatus RowsRollbackAndClose(SslmGpuSequenceHandle* seq) {
 			std::memcpy(base + e.mirror_offsets[k], e.mirror_bytes.data() + k * hd, hd);
 		}
 	}
-	(void)RowsRestoreDeviceKvAbove(seq, 0);  // Exact (MR5): every row's device K/V as at the first slice
+	const SslmGpuStatus restored = RowsRestoreDeviceKvAbove(seq, 0);  // Exact (MR5): every row's device K/V as at the first slice
 	const SslmGpuStatus unmap = RowsUnmapTailTo(seq, e.holder_mapped);
 	seq->last_rows_committed = 0;
 	RowsDropChunkImpl(seq);
-	return unmap;
+	return restored != SSLM_OK ? restored : unmap;
 }
 
 // The K/V row offsets of position `pos` at every layer, in the host mirror the handle's view addresses, ordered
@@ -8338,9 +8346,9 @@ SslmGpuStatus RowsCommitPrefix(SslmGpuSequenceHandle* seq, const std::vector<Gpu
 	const uint32_t f = exact_a > 0 ? static_cast<uint32_t>(exact_a) - 1 : j < 0 ? M - 1 : static_cast<uint32_t>(j);
 	// Exact (MR5): the rows above f back on the device as they were (decision (b)), before anything is
 	// committed (a failed copy rolls the chunk back).
-	if (!RowsRestoreDeviceKvAbove(seq, f + 1)) {
+	if (const SslmGpuStatus restored = RowsRestoreDeviceKvAbove(seq, f + 1); restored != SSLM_OK) {
 		RowsRollbackAndClose(seq);
-		return SSLM_DEVICE_LOST;
+		return restored;
 	}
 	// Counters: entry + the deltas of rows 0..f (a refused row's pre-refusal increments included; MX19, MX20).
 	uint64_t counters[superslm_gpu::kGpuRowsCounterCount];
@@ -8984,6 +8992,14 @@ SslmGpuStatus sslm_gpu_seq_rows_abandonImpl(SslmGpuContext* ctx, SslmGpuSequence
 	if (!claim.held()) return SSLM_BUSY;
 	if (seq->state() == superslm_gpu::SslmSequenceGpuState::Submitted) return SSLM_BUSY;
 	if (seq->rows_chunk == nullptr) return SSLM_OK;  // nothing open: no change
+	// Ruling 35: an Exact chunk whose first slice ran holds its rows' device K/V snapshot, and the rollback submits
+	// on the singleton to put it back (decision (b)). That submission passes the entry guard as every submitting
+	// verb does; a refusal changes nothing (the chunk stays open, to be abandoned again).
+	if (seq->rows_chunk->device_kv_snap) {
+		if (const SslmGpuStatus g = EntrySubmitGuard(ScopeForHolder(seq), GuardDevice::kReachesSingleton); g != SSLM_OK) {
+			return g;  // the abandon's submit guard (ruling 35)
+		}
+	}
 	return RowsRollbackAndClose(seq);
 }
 
