@@ -5077,30 +5077,55 @@ namespace {
 // capped by the rows left, whenever the budget buys at least one layer (budget >= dispatches per layer), and 1
 // otherwise. 1 under the opt-out (SSLM_GPU_MULTIROW_PROMPT=0, read at context create). H = 1 is the shipped one-row
 // path, byte for byte.
-// MR3e: writes `rows` (HD bytes each, back to back) into the handle's device K/V buffer at the host-mirror byte
-// offsets `offsets` (the device buffer and the host mirror share one layout: every readback copies a row from its
-// device offset to the same mirror offset). The guard-refusal replay calls it to put a refused pass's device rows
-// back as they were at the pass's entry, so the one-row replay reads back what the one-row path alone would have
-// read: that path copies every row of its sub-chunk back to the mirror, refused or not. On the process's device, as
-// the pool upload (its latch rule and its ledger reset); the bridge already passed its entry guard. Throws on any
-// D3D12 failure; the caller classifies.
+// MR3e, review S1 (ruling 24): the guard-refusal replay puts a refused pass's device K/V rows back as they were at
+// the pass's entry, so the one-row replay reads back what the one-row path alone would have read (that path copies
+// every row of its sub-chunk back to the mirror, refused or not). The entry rows are snapshotted on the device, never
+// taken from the host mirror: the two differ at uncommitted positions on a reused handle (a dedicated reset zeroes
+// the mirror and leaves the device buffer), and the shipped path reads the device's. PromptSnapshotDeviceKvRowsSync
+// copies the rows at the host-mirror byte offsets `offsets` (the device buffer and the mirror share one layout:
+// every readback copies a row from its device offset to the same mirror offset) into a new default-heap buffer,
+// left in COPY_SOURCE; PromptRestoreDeviceKvRowsSync copies them back. On the process's device, as the pool upload
+// (its latch rule and its ledger reset); the bridge already passed its entry guard. Both throw on any D3D12 failure
+// (an allocation failure as GpuAllocationError); the caller classifies.
+Microsoft::WRL::ComPtr<ID3D12Resource> PromptSnapshotDeviceKvRowsSync(SslmGpuSequenceHandle* seq,
+                                                                     const std::vector<size_t>& offsets, size_t hd) {
+	if (offsets.empty()) return {};
+	superslm_gpu::harness::Device& dev = superslm_gpu::harness::GetDevice();
+	const Microsoft::WRL::ComPtr<ID3D12Resource>& buf = seq->pool != nullptr ? seq->pool->pool_buf : seq->kv_buf;
+	bool& latch = seq->pool != nullptr ? seq->pool->kv_needs_resume_barrier : seq->kv_needs_resume_barrier;
+	Microsoft::WRL::ComPtr<ID3D12Resource> snap = dev.MakeBuffer(offsets.size() * hd, D3D12_HEAP_TYPE_DEFAULT,
+	                                                              D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+	dev.BeginRecording();
+	// ---- no allocation and no throw from here to CloseListOrThrow ----
+	superslm_gpu::harness::RecordKvTransitionFromLatch(dev.list.Get(), buf.Get(), latch, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	for (size_t k = 0; k < offsets.size(); ++k) {
+		superslm_gpu::harness::RecordCopyBufferRegion(dev.list.Get(), snap.Get(), k * hd, buf.Get(), offsets[k], hd);
+	}
+	superslm_gpu::harness::RecordTransition(dev.list.Get(), buf.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	superslm_gpu::harness::RecordTransition(dev.list.Get(), snap.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+	                                        D3D12_RESOURCE_STATE_COPY_SOURCE);
+	dev.CloseListOrThrow();
+	dev.SubmitAndWaitKeepingAlive(/*retry=*/false, snap, buf);
+	latch = false;
+	return snap;
+}
 void PromptRestoreDeviceKvRowsSync(SslmGpuSequenceHandle* seq, const std::vector<size_t>& offsets,
-                                   const std::vector<uint8_t>& rows, size_t hd) {
+                                   const Microsoft::WRL::ComPtr<ID3D12Resource>& snap, size_t hd) {
 	if (offsets.empty()) return;
 	superslm_gpu::harness::Device& dev = superslm_gpu::harness::GetDevice();
 	const Microsoft::WRL::ComPtr<ID3D12Resource>& buf = seq->pool != nullptr ? seq->pool->pool_buf : seq->kv_buf;
 	bool& latch = seq->pool != nullptr ? seq->pool->kv_needs_resume_barrier : seq->kv_needs_resume_barrier;
-	const Microsoft::WRL::ComPtr<ID3D12Resource> staging = dev.Upload(rows.data(), rows.size());
 	dev.BeginRecording();
 	// ---- no allocation and no throw from here to CloseListOrThrow ----
 	superslm_gpu::harness::RecordKvTransitionFromLatch(dev.list.Get(), buf.Get(), latch, D3D12_RESOURCE_STATE_COPY_DEST);
 	for (size_t k = 0; k < offsets.size(); ++k) {
-		superslm_gpu::harness::RecordCopyBufferRegion(dev.list.Get(), buf.Get(), offsets[k], staging.Get(), k * hd, hd);
+		superslm_gpu::harness::RecordCopyBufferRegion(dev.list.Get(), buf.Get(), offsets[k], snap.Get(), k * hd, hd);
 	}
 	superslm_gpu::harness::RecordTransition(dev.list.Get(), buf.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
 	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	dev.CloseListOrThrow();
-	dev.SubmitAndWaitKeepingAlive(/*retry=*/false, staging, buf);
+	dev.SubmitAndWaitKeepingAlive(/*retry=*/false, snap, buf);
 	latch = false;
 }
 
@@ -5186,7 +5211,8 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 					                                seq->context_length, &one_derived, &guard_rejected, &chunk_fault);
 					if (one_derived < 1) break;
 				} else {
-					// The pass's K/V mirror rows at entry, for the guard-refusal replay below.
+					// The pass's K/V rows at entry, mirror and device (S1: the device's own, snapshotted on the device), for
+					// the guard-refusal replay below.
 					std::vector<size_t> pass_offsets;
 					for (uint32_t r = 0; r < n; ++r) {
 						const std::vector<size_t> o = RowsMirrorOffsetsAt(seq, seq->context_length + r);
@@ -5197,6 +5223,7 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 					for (size_t k = 0; k < pass_offsets.size(); ++k) {
 						std::memcpy(pass_mirror.data() + k * hd, KvHostBase(seq) + pass_offsets[k], hd);
 					}
+					const Microsoft::WRL::ComPtr<ID3D12Resource> pass_device = PromptSnapshotDeviceKvRowsSync(seq, pass_offsets, hd);
 					if (!RowsOpenChunk(ctx, seq, SSLM_GPU_ROWS_PROMPT, 0u, tokens + off, n, {})) {
 						chunk_fault = superslm::SslmForwardStatus::GpuOperationFailed;  // unreachable: pre-scanned rows
 						break;
@@ -5237,7 +5264,7 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 								std::memcpy(KvHostBase(seq) + pass_offsets[k], pass_mirror.data() + k * hd, hd);
 							}
 							(void)RowsUnmapTailTo(seq, pass_entry.holder_mapped);
-							PromptRestoreDeviceKvRowsSync(seq, pass_offsets, pass_mirror, hd);
+							PromptRestoreDeviceKvRowsSync(seq, pass_offsets, pass_device, hd);
 							int64_t replayed = 0;
 							SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data() + off * block_bytes, n,
 							                                seq->context_length, &replayed, &guard_rejected, &chunk_fault);
