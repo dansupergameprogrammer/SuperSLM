@@ -8,7 +8,8 @@
 //        no draft) byte for byte: status, out_forced, count, the save blob, then six decode steps (tokens and blob).
 //        Three schemas, budgets 1, 4 and 8. And a mode outside the enum (-1, SSLM_JUMP_EXACT + 1, 99) is refused
 //        through the malformed-options status (SSLM_INVALID_ARGUMENT) with nothing changed: the count unwritten,
-//        out_forced untouched, the save blob equal, and a fresh bound sequence still bindable.
+//        out_forced untouched, the save blob equal, and a fresh bound sequence still bindable. Ruling 22 (21b): so is
+//        mode 0 with a draft, with draft_count 2 and no draft, and with both.
 //   x.3  NULL options equal explicit Exact byte for byte, the same comparison as x.1's.
 //   x.5  Saves made by 1.15, 1.16 and 1.17 under Canonical restore: SSLM_OK, and the resumed sequence continues under
 //        the mode the caller asks for. Decode-only, it gives the recorder's own next 8 tokens. One decode then an Exact
@@ -202,13 +203,25 @@ void CellX3(Engine& e) { EqualsExact(e, nullptr, "NULL options"); }
 
 // ------------------------------------------------------------------------------------------------ x.1
 void CellX1(Engine& e) {
+	// Ruling 22 (21b): mode 0 means exactly what NULL options give, Exact with no caller draft, so mode 0 with a
+	// draft, or with draft_count != 0, is refused the same way (a caller draft needs SSLM_JUMP_EXACT).
+	static const int32_t kDraft[2] = {0, 0};
+	struct Refused {
+		sslm_jump_options o;
+		std::string what;
+	};
+	std::vector<Refused> refused;
+	for (int32_t mode : kModesOutside) refused.push_back({Opts(mode), F("mode %d (outside the enum)", mode)});
+	refused.push_back({sslm_jump_options{sizeof(sslm_jump_options), kModeDefault, kDraft, 1}, "mode 0 with a draft"});
+	refused.push_back({sslm_jump_options{sizeof(sslm_jump_options), kModeDefault, nullptr, 2}, "mode 0, draft_count 2"});
+	refused.push_back({sslm_jump_options{sizeof(sslm_jump_options), kModeDefault, kDraft, 2}, "mode 0, draft and count"});
 	for (const char* schema : kSchemas)
-		for (int32_t mode : kModesOutside) {
-			const std::string tag = F("%s mode %d (outside the enum)", schema, mode);
+		for (const Refused& r : refused) {
+			const std::string tag = F("%s %s", schema, r.what.c_str());
 			sslm_seq s = e.Pending(schema, 3, 1);
 			if (!s) { Check(false, tag + ": setup"); continue; }
 			const std::vector<uint8_t> before = e.Save(s);
-			const sslm_jump_options o = Opts(mode);
+			const sslm_jump_options o = r.o;
 			Jump j = DoJump(e, s, 4, &o);
 			Check(j.st == SSLM_INVALID_ARGUMENT, F("%s: returned %d, want SSLM_INVALID_ARGUMENT (%d)", tag.c_str(), j.st, SSLM_INVALID_ARGUMENT));
 			Check(j.count == -7, F("%s: the count was written (%d)", tag.c_str(), j.count));

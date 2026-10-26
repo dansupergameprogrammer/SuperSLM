@@ -153,6 +153,8 @@ constexpr GoldenStream kGoldenStreams[] = {
 // is constraint C8 (the save format does not change) with a cell that can fail inside one binary.
 // Cell 6.5 (rev 1.2.2, X14's kill): the contract-breaking POTION stream (one start-chain token, then a
 // decode at the forced state it leaves, then the §5.6 loop), from main's reference replay with that head.
+// MRX (ruling 23): no longer asserted (Canonical's stream; PrintGoldens still prints it), nor are kGoldenStreams'
+// digests: cell 6.6 compares the loop's stream with the decode-only run's, live.
 constexpr size_t kBrokenStreamLength = 23;
 constexpr const char* kBrokenStreamDigest = "ad0a0c70c0e1d0ffd8e8093a7855b9c81e859185a98839278f8ceb852e7e97d3";
 constexpr size_t kMainBlobSize = 32992;
@@ -826,6 +828,11 @@ struct Jump {
 	std::vector<int32_t> forced;
 };
 
+// MRX (plan §16 E-11, ruling 23): Canonical is removed, so the NULL options this passes select Exact with no caller
+// draft (the forced chain from the state after the pending token). The cells' expectations are Exact's, computed
+// from its contract (docs/api.md, "Exact mode"): its output, tokens and save blobs, equals a run that never calls
+// the verb; it is a no-op with no pending token or an empty clipped draft; it keeps the pending token and the
+// drafted tokens up to the first one the model would not have produced, and rests ready for logits there.
 Jump JumpForward(sslm_model m, sslm_seq s, int32_t budget, const sslm_decode_params* params, sslm_workspace w,
                  int32_t cap = -1) {
 	Jump j;
@@ -838,6 +845,136 @@ Jump JumpForward(sslm_model m, sslm_seq s, int32_t budget, const sslm_decode_par
 	return j;
 }
 
+// MRX (ruling 23): the verb in Exact mode with an explicit draft (an empty draft stays empty: a non-null pointer).
+Jump JumpDraft(sslm_model m, sslm_seq s, int32_t budget, const sslm_decode_params* params, sslm_workspace w,
+               const std::vector<int32_t>& draft, int32_t cap = -1) {
+	static const int32_t kNoDraft = 0;
+	Jump j;
+	const int32_t c = cap < 0 ? budget : cap;
+	std::vector<int32_t> buf(size_t(c > 0 ? c : 1), -7);
+	const sslm_jump_options o{sizeof(sslm_jump_options), SSLM_JUMP_EXACT, draft.empty() ? &kNoDraft : draft.data(),
+	                          static_cast<int32_t>(draft.size())};
+	j.st = sfd::JumpWithOptions(m, s, budget, params, &o, w, buf.data(), c, &j.count);
+	if (j.count > 0 && j.count <= c) j.forced.assign(buf.begin(), buf.begin() + j.count);
+	return j;
+}
+
+std::vector<uint8_t> SaveOf(sslm_model m, sslm_seq s) {
+	std::vector<uint8_t> blob(sslm_seq_state_size(m) + 4096);
+	size_t n = blob.size();
+	if (sslm_seq_save(s, blob.data(), &n) != SSLM_OK) return {};
+	blob.resize(n);
+	return blob;
+}
+
+// MRX (ruling 23): the model's own next `n` tokens from `s`'s state, each by sslm_decode_step_v2 under `p` (NULL:
+// greedy) on a twin restored from `s`'s blob in a rig of its own: the run that never calls the verb. Stops early at
+// a dead end or a failure.
+std::vector<int32_t> OwnNext(sslm_model m, sslm_seq s, int n, const sslm_decode_params* p = nullptr) {
+	std::vector<int32_t> out;
+	const std::vector<uint8_t> blob = SaveOf(m, s);
+	if (blob.empty() || n <= 0) return out;
+	const size_t size = 16 * sslm_kv_block_size(m) + sslm_kv_pool_overhead_size(m, 16);
+	Aligned pool_buf(size);
+	sslm_kv_pool pool = nullptr;
+	if (sslm_kv_pool_create(m, pool_buf.p, size, 16, &pool) != SSLM_OK) return out;
+	const sslm_config cfg{1, 64, kLayers, 0u};
+	const size_t wsz = sslm_workspace_size(m, &cfg);
+	Aligned ws_buf(wsz);
+	sslm_workspace w = nullptr;
+	sslm_seq q = nullptr;
+	if (sslm_workspace_create(m, &cfg, ws_buf.p, wsz, &w) == SSLM_OK &&
+	    sslm_seq_restore(m, &pool, blob.data(), blob.size(), &q) == SSLM_OK) {
+		sslm_decode_params g{};
+		sslm_decode_params_init(m, SSLM_DECODE_MODE_GREEDY, kLayers, &g);
+		for (int i = 0; i < n; ++i) {
+			int32_t t = -100;
+			if (sslm_decode_step_v2(m, &q, 1, p ? p : &g, w, &t) != SSLM_OK || t < 0) break;
+			out.push_back(t);
+		}
+		sslm_seq_release(q);
+	}
+	if (w) sslm_workspace_destroy(w);
+	sslm_kv_pool_destroy(pool);
+	return out;
+}
+
+// MRX (ruling 23): what a NULL-options call at `budget` keeps from `s`, by Exact's rule: nothing without a pending
+// token; else the forced chain from the walk state (the read-only query's), clipped to budget - 1 and to the rows
+// `headroom` leaves after the pending token, cut at the first token the model would not itself produce.
+std::vector<int32_t> ExactKept(sslm_model m, sslm_seq s, int32_t budget, const sslm_decode_params* p = nullptr,
+                               int64_t headroom = INT64_MAX) {
+	std::vector<uint8_t> blob = SaveOf(m, s);
+	const Blob b = ParseBlob(blob);
+	const bool pending = b.ok && b.layer == 0 && b.ready == 0 && b.current >= 0;
+	if (!pending) return {};
+	std::vector<int32_t> ids(512, -7);
+	int32_t count = 0, acc = 0;
+	if (sslm_seq_forced_tokens(m, s, ids.data(), 512, &count, &acc) != SSLM_OK) return {};
+	int64_t k = std::min<int64_t>(std::min<int64_t>(count, 512), int64_t(budget) - 1);
+	k = std::min<int64_t>(k, headroom - 1);
+	if (k <= 0) return {};
+	const std::vector<int32_t> own = OwnNext(m, s, int(k), p);
+	std::vector<int32_t> kept;
+	for (int64_t i = 0; i < k && size_t(i) < own.size() && own[size_t(i)] == ids[size_t(i)]; ++i) kept.push_back(own[size_t(i)]);
+	return kept;
+}
+
+// MRX (ruling 23): the run that never calls the verb, from a fresh bound sequence and the prompt: the stream to its
+// dead end (or `max` tokens) and the save blob after each token (blob_at[L]: after the L-th token's decode).
+struct OffRun {
+	bool ok = false;
+	bool dead_end = false;
+	std::vector<int32_t> stream;
+	std::vector<std::vector<uint8_t>> blob_at;
+};
+OffRun DecodeOnly(sslm_model m, const char* schema, const std::vector<int32_t>& prompt,
+                  const sslm_decode_params* p = nullptr, sslm_adapter adapter = nullptr, int max = 400) {
+	OffRun o;
+	const size_t size = 16 * sslm_kv_block_size(m) + sslm_kv_pool_overhead_size(m, 16);
+	Aligned pool_buf(size);
+	sslm_kv_pool pool = nullptr;
+	if (sslm_kv_pool_create(m, pool_buf.p, size, 16, &pool) != SSLM_OK) return o;
+	const sslm_config cfg{1, 64, kLayers, 0u};
+	const size_t wsz = sslm_workspace_size(m, &cfg);
+	Aligned ws_buf(wsz);
+	sslm_workspace w = nullptr;
+	sslm_seq q = nullptr;
+	sslm_schema h = nullptr;
+	int32_t consumed = 0;
+	if (sslm_workspace_create(m, &cfg, ws_buf.p, wsz, &w) == SSLM_OK && sslm_seq_create(m, &pool, &q) == SSLM_OK &&
+	    (!adapter || sslm_seq_set_adapter(q, adapter) == SSLM_OK) &&
+	    (!schema || (sslm_schema_lookup(m, schema, &h) == SSLM_OK && sslm_seq_set_schema(q, h) == SSLM_OK)) &&
+	    sslm_prefill(m, q, prompt.data(), int32_t(prompt.size()), int32_t(prompt.size()), SSLM_SPAN_PROMPT, w,
+	                 &consumed) == SSLM_OK) {
+		sslm_decode_params g{};
+		sslm_decode_params_init(m, SSLM_DECODE_MODE_GREEDY, kLayers, &g);
+		o.ok = true;
+		o.blob_at.push_back(SaveOf(m, q));
+		for (int i = 0; i < max; ++i) {
+			int32_t t = -100;
+			if (sslm_decode_step_v2(m, &q, 1, p ? p : &g, w, &t) != SSLM_OK) {
+				o.ok = false;
+				break;
+			}
+			if (t == -2) {
+				o.dead_end = true;
+				break;
+			}
+			if (t < 0) {
+				o.ok = false;
+				break;
+			}
+			o.stream.push_back(t);
+			o.blob_at.push_back(SaveOf(m, q));
+		}
+	}
+	if (q) sslm_seq_release(q);
+	if (w) sslm_workspace_destroy(w);
+	sslm_kv_pool_destroy(pool);
+	return o;
+}
+
 // ---- the §5.6 host loop -----------------------------------------------------------------------------
 
 struct JfStep {
@@ -846,6 +983,9 @@ struct JfStep {
 	std::vector<int32_t> toks;  // verb: the forced ids it admitted; decode: {out}
 	bool pending_before = false;
 	bool embedded_pending = false;  // verb: this call embedded the pending token (read from the blob)
+	// MRX (ruling 23): verb: the rows of Exact's pass, 1 + the draft clipped to budget - 1 (0: a no-op, no pending
+	// token or an empty draft), read from the shape and the query before the call.
+	int32_t pass_rows = 0;
 };
 
 struct JfRun {
@@ -905,6 +1045,11 @@ JfRun RunJf(sslm_model m, sslm_seq& s, const JfOpts& o) {
 			JfStep step;
 			step.kind = 0;
 			step.pending_before = before.pending;
+			if (before.pending) {
+				const Query q0 = QueryForced(m, s, 0);
+				const int32_t k = std::min(q0.count, o.budget - 1);
+				step.pass_rows = k > 0 ? 1 + k : 0;
+			}
 			const Jump j = JumpForward(m, s, o.budget, o.vparams, o.w);
 			step.st = j.st;
 			step.toks = j.forced;
@@ -925,11 +1070,10 @@ JfRun RunJf(sslm_model m, sslm_seq& s, const JfOpts& o) {
 				return r;
 			}
 			if (q.count == 0) break;
-			if (j.forced.empty() && !embedded_pending) {
-				r.stuck = true;
-				r.end_status = SSLM_INVALID_ARGUMENT;
-				return r;
-			}
+			// MRX (ruling 23): under Exact a call that makes no progress (no pending token, or the model rejects the
+			// draft's first token after the pending one is kept) is the hand-off to decode_step, not a stuck loop:
+			// "any interleaving of the verb and decode_step gives the output of a run without the verb".
+			if (j.forced.empty() && !embedded_pending) break;
 		}
 		JfStep step;
 		step.kind = 1;
@@ -957,31 +1101,6 @@ JfRun RunJf(sslm_model m, sslm_seq& s, const JfOpts& o) {
 		r.choices.push_back(out);
 	}
 	return r;
-}
-
-// The stream the reference rule gives for these choices: the start chain, then for each choice the
-// choice and the chain from the state it leads to. False when a choice is not legal where it lands.
-bool RefStream(const Sfd& f, const char* schema, const std::vector<int32_t>& choices, std::vector<int32_t>* out,
-               uint32_t* end_state = nullptr) {
-	const RefSchema& r = f.R(schema);
-	out->clear();
-	if (r.st.empty()) return false;
-	uint32_t s = r.start;
-	auto chain = [&](uint32_t from) {
-		for (int32_t t : r.st[from].chain) {
-			out->push_back(t);
-			if (!f.Step(schema, s, t, &s)) return false;
-		}
-		return true;
-	};
-	if (!chain(s)) return false;
-	for (int32_t c : choices) {
-		out->push_back(c);
-		if (!f.Step(schema, s, c, &s)) return false;
-		if (!chain(s)) return false;
-	}
-	if (end_state) *end_state = s;
-	return true;
 }
 
 // The reference replay, main's paths only: for each choice, a fresh sequence prefills the prompt and
@@ -1800,20 +1919,24 @@ JfRun FreshRun(Rig& rig, const Sfd& /*f*/, const char* schema, const std::vector
 	return r;
 }
 
-// Everything 10.1 (a) asks of a run: it ended at a dead end, and its stream is the reference rule's
-// for the choices it made.
-void CheckStreamIsReference(const char* cell, const Sfd& f, const char* schema, const JfRun& r) {
+// Everything 10.1 (a) asks of a run: it ended at a dead end, and its stream is the run that never calls the verb.
+// MRX (ruling 23): re-pointed from the reference rule's stream (Canonical's admission of each forced chain) to Exact's
+// contract, the decode-only stream from the same prompt under the same decode params.
+void CheckStreamIsReference(const char* cell, const Sfd& f, const char* schema, const std::vector<int32_t>& prompt,
+                            const JfRun& r, const sslm_decode_params* p = nullptr) {
 	CHECK_MSG(r.dead_end && r.end_status == SSLM_OK, "[%s] %s: the loop ended with status %d (dead end %d, stuck %d) "
 	          "after %d verb calls and %d decodes", cell, schema, static_cast<int>(r.end_status), r.dead_end, r.stuck,
 	          r.verb_calls, r.decodes);
-	std::vector<int32_t> want;
-	const bool legal = RefStream(f, schema, r.choices, &want);
-	CHECK_MSG(legal && r.stream == want, "[%s] %s: stream %s, reference %s", cell, schema, Str(r.stream).c_str(),
-	          Str(want).c_str());
+	const OffRun off = DecodeOnly(f.m1->m, schema, prompt, p);
+	CHECK_MSG(off.ok && off.dead_end && r.stream == off.stream, "[%s] %s: stream %s, decode-only %s", cell, schema,
+	          Str(r.stream).c_str(), Str(off.stream).c_str());
 }
 
-// 10.1 [J1] The feature oracle, (a) through (e) (§5.9), with forced_token_count asserted, and (f) (rev 1.2.2) the
-// verb's admission at every forced state (X19 with (a)).
+// 10.1 [J1] The feature oracle, (a), (b), (d) and (e) (§5.9), with forced_token_count asserted.
+// MRX (ruling 23): NULL options are Exact. (a) and (e) are re-pointed to the run that never calls the verb; (b) keeps
+// its budget bound and drops the canonical row accounting (an Exact pass runs the pending token and its draft, then
+// rolls back past the first mismatch); (c) finishes = choices + 1 and (f) the verb's admission of each reference
+// chain are retired (Canonical-only); forced_token_count stays 0 (Exact never adds to it).
 void Cell_10_1() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
@@ -1823,62 +1946,49 @@ void Cell_10_1() {
 	};
 	const Case cases[] = {{kPotion, &f.prompt_potion}, {kPromptResult, &f.prompt_pr}};
 	for (const Case& c : cases) {
-		const Replay rp = ReferenceReplay(f.m1->m, f, c.schema, *c.prompt);
-		CHECK_MSG(rp.ok && rp.dead_end, "[10.1] %s: the reference replay did not end at a dead end (ok %d, capped %d)",
-		          c.schema, rp.ok, rp.capped);
+		const OffRun off = DecodeOnly(f.m1->m, c.schema, *c.prompt);
+		CHECK_MSG(off.ok && off.dead_end, "[10.1] %s: the decode-only run did not end at a dead end (ok %d)", c.schema,
+		          off.ok);
 		Rig rig(f.m1->m);
 		sslm_seq s = rig.NewSeq(c.schema);
 		if (!s || !rig.PromptOk(s, *c.prompt)) continue;
-		// (e) is checked at each decode: the run's choice and K/V bytes equal the replay's.
-		size_t choice_i = 0;
-		int bad_e = 0;
+		// (e) is checked at each decode: the blob equals the decode-only run's after as many tokens.
+		size_t len = 0;
+		int bad_e = 0, decodes_e = 0;
 		JfOpts o = GreedyOpts(rig);
 		o.after = [&](sslm_seq& q, const JfStep& st) {
-			if (st.kind != 1 || st.st != SSLM_OK || st.toks[0] < 0) return;
-			const Blob b = rig.State(q);
-			if (choice_i >= rp.choices.size() || st.toks[0] != rp.choices[choice_i] || b.kv != rp.kv_after[choice_i] ||
-			    b.ctx != rp.ctx_after[choice_i])
-				++bad_e;
-			++choice_i;
+			if (st.kind == 0) {
+				len += st.toks.size();
+				return;
+			}
+			if (st.st != SSLM_OK || st.toks[0] < 0) return;
+			++len;
+			++decodes_e;
+			if (len >= off.blob_at.size() || rig.Save(q) != off.blob_at[len]) ++bad_e;
 		};
 		sfd::LayerRowsLogReset();
 		sfd::RowsLogReset();
 		const JfRun r = RunJf(rig.m, s, o);
 		// (a)
-		CheckStreamIsReference("10.1 (a)", f, c.schema, r);
-		CHECK_MSG(r.stream == rp.stream, "[10.1 (a)] %s: stream %s, replay %s", c.schema, Str(r.stream).c_str(),
-		          Str(rp.stream).c_str());
-		// (b) token rows
-		size_t batched = 0, decode_rows = 0, over_budget = 0, entries = sfd::LayerRowsLogCount();
-		uint64_t batched_rows = 0;
+		CheckStreamIsReference("10.1 (a)", f, c.schema, *c.prompt, r);
+		// (b) token rows: the verb's passes are batched and none exceeds the budget.
+		size_t batched = 0, over_budget = 0, entries = sfd::LayerRowsLogCount();
 		for (size_t i = 0; i < entries; ++i) {
 			const sfd::LayerRowsEntry e = sfd::LayerRowsLogAt(i);
 			if (e.kind == sfd::kLayerRowsBatched) {
 				++batched;
-				batched_rows += e.rows;
 				if (e.rows > uint64_t(o.budget)) ++over_budget;
-			} else if (e.kind == sfd::kLayerRowsDecode) {
-				++decode_rows;
 			}
 		}
 		CHECK_MSG(batched > 0 && over_budget == 0, "[10.1 (b)] %s: %zu batched passes, %zu over the budget", c.schema,
 		          batched, over_budget);
-		CHECK_MSG(batched_rows + decode_rows == r.stream.size(), "[10.1 (b)] %s: %llu batched rows + %zu decode rows, "
-		          "the stream has %zu tokens", c.schema, static_cast<unsigned long long>(batched_rows), decode_rows,
-		          r.stream.size());
-		CHECK_MSG(decode_rows == size_t(r.choice_choice), "[10.1 (b)] %s: %zu layer-running decodes, %d choice->choice "
-		          "transitions", c.schema, decode_rows, r.choice_choice);
-		// (c) finishes = choices + 1
-		CHECK_MSG(r.decodes == int(r.choices.size()) + 1 && sfd::RowsLogCount() == r.choices.size() + 1,
-		          "[10.1 (c)] %s: %d decodes, %zu finishes logged, %zu choices", c.schema, r.decodes, sfd::RowsLogCount(),
-		          r.choices.size());
 		// (e)
-		CHECK_MSG(choice_i == rp.choices.size() && bad_e == 0, "[10.1 (e)] %s: %d of %zu choices differ from a fresh "
-		          "sequence's (choice or K/V), %zu replay choices", c.schema, bad_e, choice_i, rp.choices.size());
-		// forced_token_count: every token the verbs admitted, never a choice.
+		CHECK_MSG(decodes_e > 0 && bad_e == 0, "[10.1 (e)] %s: %d of %d decodes leave a blob that differs from the "
+		          "decode-only run's", c.schema, bad_e, decodes_e);
+		// forced_token_count: Exact never adds to it.
 		const Blob b = rig.State(s);
-		CHECK_MSG(b.ok && b.forced == int64_t(r.stream.size() - r.choices.size()), "[10.1] %s: forced_token_count %lld, "
-		          "want %zu", c.schema, static_cast<long long>(b.forced), r.stream.size() - r.choices.size());
+		CHECK_MSG(b.ok && b.forced == 0, "[10.1] %s: forced_token_count %lld, want 0", c.schema,
+		          static_cast<long long>(b.forced));
 	}
 	// (d) per-state chain: on every state of every schema, the engine's chain equals the reference rule's.
 	int bad_d = 0, states = 0;
@@ -1901,29 +2011,6 @@ void Cell_10_1() {
 	}
 	CHECK_MSG(states == 266 && bad_d == 0, "[10.1 (d)] %d of %d states: the engine's chain differs from the reference "
 	          "rule's", bad_d, states);
-	// (f) (rev 1.2.2; audit F-10) the verb's own admission at every forced state of every schema, the 4
-	// fallback states included: ids equal the reference chain, and context_length rises by its length.
-	int bad_f = 0, forced_states = 0;
-	for (const auto& [name, r] : f.ref) {
-		Rig rig(f.m1->m);
-		for (uint32_t st = 0; st < r.st.size(); ++st) {
-			const RefState& rs = r.st[st];
-			if (!rs.forced || rs.chain.empty()) continue;
-			++forced_states;
-			sslm_seq s = ReachState(rig, f, name.c_str(), st, f.prompt_potion);
-			if (!s) {
-				++bad_f;
-				continue;
-			}
-			const int64_t ctx0 = rig.State(s).ctx;
-			const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
-			const Blob b = rig.State(s);
-			if (j.st != SSLM_OK || j.forced != rs.chain || b.ctx != ctx0 + int64_t(rs.chain.size())) ++bad_f;
-			rig.Release(s);
-		}
-	}
-	CHECK_MSG(forced_states > 0 && bad_f == 0, "[10.1 (f)] %d of %d forced states: the verb's admission differs from the "
-	          "reference chain (ids or context_length)", bad_f, forced_states);
 }
 
 // 1.1 [J1] One sequence: prompt, the loop to completion, reset, bind another schema, the loop again.
@@ -1956,10 +2043,16 @@ void Cell_1_2() {
 	if (!f.ok) return;
 	Rig rig(f.m1->m);
 	{
+		// MRX (ruling 23): Exact keeps a span only after a pending token, so the span is the pending token and a draft
+		// of the model's own next token (kept by Exact's rule).
 		sslm_seq s = rig.NewSeq(kPotion);
 		if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
-		const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
-		CHECK_MSG(j.st == SSLM_OK && j.count > 0, "[1.2] the start span: status %d count %d", static_cast<int>(j.st), j.count);
+		int32_t p = -100;
+		CHECK_MSG(rig.Decode1(s, rig.Greedy(), rig.W(), &p) == SSLM_OK && p >= 0, "[1.2] the entry decode gave %d", p);
+		const std::vector<int32_t> draft = OwnNext(rig.m, s, 1);
+		const Jump j = JumpDraft(rig.m, s, 64, nullptr, rig.W(), draft);
+		CHECK_MSG(j.st == SSLM_OK && j.count == 1 && j.forced == draft, "[1.2] the span: status %d count %d forced %s, "
+		          "draft %s", static_cast<int>(j.st), j.count, Str(j.forced).c_str(), Str(draft).c_str());
 		const std::vector<uint8_t> before = rig.Save(s);
 		const sslm_status a = rig.TryBind(s, nullptr);
 		const sslm_status b = rig.TryBind(s, kLongKey);
@@ -1976,12 +2069,14 @@ void Cell_1_2() {
 		CHECK_MSG(rig.TryBind(s, kPotion) == SSLM_SCHEMA_BIND_REJECTED, "[1.2] a bind after a no-op verb call was accepted");
 	}
 	{
-		// The same on a fresh bound sequence at its forced start (no prompt): the start span is admitted.
+		// The same on a fresh bound sequence at its forced start (no prompt). MRX (ruling 23): with no pending token
+		// Exact is a no-op (OK, count 0), and the call still clears eligibility.
 		sslm_seq s = rig.NewSeq(kPotion);
 		if (!s) return;
+		const std::vector<uint8_t> before = rig.Save(s);
 		const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
-		CHECK_MSG(j.st == SSLM_OK && j.forced == f.R(kPotion).st[f.R(kPotion).start].chain,
-		          "[1.2] fresh bound, no prompt: status %d forced %s", static_cast<int>(j.st), Str(j.forced).c_str());
+		CHECK_MSG(j.st == SSLM_OK && j.count == 0 && rig.Save(s) == before, "[1.2] fresh bound, no prompt: status %d "
+		          "count %d (want a no-op)", static_cast<int>(j.st), j.count);
 		CHECK_MSG(rig.TryBind(s, kLongKey) == SSLM_SCHEMA_BIND_REJECTED, "[1.2] a bind after a verb call was accepted");
 	}
 	{
@@ -2033,8 +2128,12 @@ void Cell_2_1() {
 	JfOpts o = GreedyOpts(rig);
 	o.max_decodes = 1;
 	const JfRun r = RunJf(rig.m, s, o);
-	CHECK_MSG(r.stream.size() == 2 && !r.stream.empty() && r.stream[0] == h.tok_brace && r.decodes == 1,
-	          "[2.1] the loop: stream %s after %d decodes; want '{' then one decode", Str(r.stream).c_str(), r.decodes);
+	// MRX (ruling 23): with no pending token the verb is a no-op, so the loop's one decode gives the only legal
+	// token at state 0, '{', the decode-only run's first token.
+	const OffRun off = DecodeOnly(rig.m, "h_cycle", f.prompt_potion, nullptr, nullptr, 1);
+	CHECK_MSG(r.stream.size() == 1 && r.stream[0] == h.tok_brace && off.stream == r.stream && r.decodes == 1,
+	          "[2.1] the loop: stream %s after %d decodes (decode-only %s); want '{' from one decode",
+	          Str(r.stream).c_str(), r.decodes, Str(off.stream).c_str());
 	// The decode's choice is pending, but the cycle's states are unforced, so this call is a no-op (§5.3: an
 	// unforced state admits nothing and the pending token stays for decode_step); so is the next one.
 	(void)JumpForward(rig.m, s, 8, nullptr, rig.W());
@@ -2131,6 +2230,8 @@ void Cell_2_5() {
 
 // 2.6 [J1, F-SFD UTF8ENUM] S-CHOICE chooses the 0xC3 byte token. The chain's bytes equal F, the
 // replacement character's token 5691 never appears, and the chain equals the reference rule's.
+// MRX (ruling 23): the choice state is reached by prefilling the start chain as content (Exact keeps no start span);
+// the chain is read by the query, and the verb keeps Exact's verified prefix of it, never 5691.
 void Cell_2_6() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
@@ -2138,16 +2239,11 @@ void Cell_2_6() {
 	const int32_t c3 = f.byte_tok[0xC3];
 	Rig rig(f.m1->m);
 	sslm_seq s = rig.NewSeq(kUtf8Enum);
-	if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
-	const Jump start = JumpForward(rig.m, s, 64, nullptr, rig.W());
-	CHECK_MSG(start.st == SSLM_OK && start.forced == r.st[r.start].chain, "[2.6] the start span: status %d forced %s",
-	          static_cast<int>(start.st), Str(start.forced).c_str());
-	// The choice state is the reference walk's over the start span (not the engine's, so a verb that
-	// admitted nothing fails above and here, not at the S-CHOICE legality check).
+	if (!s || !rig.PromptOk(s, f.prompt_potion) || !rig.ContentOk(s, r.st[r.start].chain)) return;
 	uint32_t choice = r.start;
 	bool walked = true;
 	for (int32_t tok : r.st[r.start].chain) walked = walked && f.Step(kUtf8Enum, choice, tok, &choice);
-	CHECK_MSG(walked && rig.State(s).walk == choice, "[2.6] after the start span the walk is at %u, the reference's %u",
+	CHECK_MSG(walked && rig.State(s).walk == choice, "[2.6] after the start chain the walk is at %u, the reference's %u",
 	          rig.State(s).walk, choice);
 	uint32_t next = 0;
 	CHECK_MSG(walked && f.Step(kUtf8Enum, choice, c3, &next), "[2.6] 0xC3 (%d) is not legal at state %u", c3, choice);
@@ -2156,13 +2252,19 @@ void Cell_2_6() {
 	const sslm_status ds = rig.Decode1(s, rig.Greedy(), rig.W(), &t);
 	sfd::DisarmChoice();
 	CHECK_MSG(ds == SSLM_OK && t == c3, "[2.6] S-CHOICE: decode status %d token %d, want %d", static_cast<int>(ds), t, c3);
-	const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
 	const RefState& rs = next < r.st.size() ? r.st[next] : r.st[0];
-	CHECK_MSG(j.st == SSLM_OK && j.forced == rs.chain, "[2.6] chain after 0xC3: status %d %s, reference %s",
-	          static_cast<int>(j.st), Str(j.forced).c_str(), Str(rs.chain).c_str());
-	CHECK_MSG(f.Bytes(j.forced) == rs.F && !rs.F.empty(), "[2.6] the chain's bytes are not F");
-	CHECK_MSG(std::find(j.forced.begin(), j.forced.end(), kReplacementToken) == j.forced.end(),
+	const Query q = QueryForced(rig.m, s);
+	CHECK_MSG(q.st == SSLM_OK && q.ids == rs.chain, "[2.6] chain after 0xC3: status %d %s, reference %s",
+	          static_cast<int>(q.st), Str(q.ids).c_str(), Str(rs.chain).c_str());
+	CHECK_MSG(f.Bytes(q.ids) == rs.F && !rs.F.empty(), "[2.6] the chain's bytes are not F");
+	CHECK_MSG(std::find(q.ids.begin(), q.ids.end(), kReplacementToken) == q.ids.end(),
 	          "[2.6] the chain holds the replacement character's token 5691");
+	const std::vector<int32_t> want = ExactKept(rig.m, s, 64);
+	const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
+	CHECK_MSG(j.st == SSLM_OK && j.forced == want, "[2.6] the verb after 0xC3: status %d kept %s, Exact's %s",
+	          static_cast<int>(j.st), Str(j.forced).c_str(), Str(want).c_str());
+	CHECK_MSG(std::find(j.forced.begin(), j.forced.end(), kReplacementToken) == j.forced.end(),
+	          "[2.6] the verb kept the replacement character's token 5691");
 }
 
 // 2.7 (rev 1.2.2) [J1] The read-only query's refusals (§5.3): NULL model, NULL seq, NULL out_count, NULL
@@ -2385,31 +2487,41 @@ struct MinWorkScope {
 };
 constexpr size_t kSmallMinWork = 1024;  // at most 4 KiB: every F-SFD M = 1 projection then threads
 
+// MRX (ruling 23): Exact keeps nothing without a pending token, so the verb is held in a two-row pass (the pending
+// token and one drafted row, budget 2) at an entry that decoded the pending token before the hook went in; the verb
+// keeps Exact's verified prefix, and the serial reference is entry, verb, decode.
 void Cell_3_3() {
 	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
-	const std::vector<int32_t>& start = f.R(kPotion).st[f.R(kPotion).start].chain;
-	// The serial reference for the decode arm: verb (budget 1), then decode.
+	// The serial reference for the decode arm: entry decode, verb (budget 2), then decode.
 	int32_t ref_tok = -100;
 	{
 		Rig rig(f.m1->m);
 		sslm_seq s = rig.NewSeq(kPotion);
 		if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
-		JumpForward(rig.m, s, 1, nullptr, rig.W());
+		int32_t p = -100;
+		rig.Decode1(s, rig.Greedy(), rig.W(), &p);
+		JumpForward(rig.m, s, 2, nullptr, rig.W());
 		rig.Decode1(s, rig.Greedy(), rig.W(), &ref_tok);
 	}
 	for (int arm = 0; arm < 2; ++arm) {
 		Rig rig(f.m1->m);
 		BlockingHook h;
 		const sslm_parallel_for pf = h.Pf();
-		if (!rig.ok || sslm_workspace_set_parallel_for(rig.W(), &pf) != SSLM_OK) continue;
 		sslm_seq s = rig.NewSeq(kPotion);
 		if (!s || !rig.PromptOk(s, f.prompt_potion)) continue;
+		int32_t p = -100;
+		if (rig.Decode1(s, rig.Greedy(), rig.W(), &p) != SSLM_OK || p < 0) continue;
+		const Query q0 = QueryForced(rig.m, s, 0);
+		CHECK_MSG(q0.st == SSLM_OK && q0.count >= 1, "[3.3] arm %d: no chain after the pending token (count %d)", arm,
+		          q0.count);
+		const std::vector<int32_t> want = ExactKept(rig.m, s, 2);
+		if (!rig.ok || sslm_workspace_set_parallel_for(rig.W(), &pf) != SSLM_OK) continue;
 		Jump j;
-		std::thread verb([&] { j = JumpForward(rig.m, s, 1, nullptr, rig.W()); });
+		std::thread verb([&] { j = JumpForward(rig.m, s, 2, nullptr, rig.W()); });
 		const bool inside = h.WaitEntered(5);
-		CHECK_MSG(inside, "[3.3] arm %d: the verb never entered the hook's run (a one-token admission under bit 1)", arm);
+		CHECK_MSG(inside, "[3.3] arm %d: the verb never entered the hook's run (a two-row pass under bit 1)", arm);
 		std::thread other;
 		sslm_status other_st = SSLM_OK;
 		int32_t other_tok = -100;
@@ -2429,9 +2541,8 @@ void Cell_3_3() {
 		h.Release();
 		verb.join();
 		if (other.joinable()) other.join();
-		CHECK_MSG(j.st == SSLM_OK && j.forced.size() == 1 && !start.empty() && j.forced[0] == start[0],
-		          "[3.3] arm %d: the verb gave status %d forced %s, want {%d}", arm, static_cast<int>(j.st),
-		          Str(j.forced).c_str(), start.empty() ? -1 : start[0]);
+		CHECK_MSG(j.st == SSLM_OK && j.forced == want, "[3.3] arm %d: the verb gave status %d kept %s, want Exact's %s",
+		          arm, static_cast<int>(j.st), Str(j.forced).c_str(), Str(want).c_str());
 		if (arm == 0) {
 			CHECK_MSG(other_st == SSLM_OK, "[3.3] the concurrent release == %d", static_cast<int>(other_st));
 		} else {
@@ -2443,61 +2554,74 @@ void Cell_3_3() {
 
 // 4.2 [J1] Spans of 1..8 tokens and 9+ (LONGKEY): K/V equals token-by-token prefill (on every tier the
 // suite runs on: scalar, SSE2, AVX2, AVX-512).
+// MRX (ruling 23): an Exact span is the pending token and a draft of the model's own next m tokens (budget m + 1,
+// all kept); token by token is now the run that never calls the verb, compared after one more decode, when both
+// rest with the same pending token.
 void Cell_4_2() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
-	const std::vector<int32_t>& chain = f.R(kLongKey).st[f.R(kLongKey).start].chain;
-	CHECK_MSG(chain.size() >= 9, "[4.2] LONGKEY's start chain has %zu tokens; 9+ needed", chain.size());
 	for (int32_t m : {1, 2, 3, 4, 5, 6, 7, 8, 26}) {
-		const size_t k = std::min<size_t>(size_t(m), chain.size());
 		Rig rig(f.m1->m);
 		sslm_seq a = rig.NewSeq(kLongKey);
 		sslm_seq b = rig.NewSeq(kLongKey);
 		if (!a || !b || !rig.PromptOk(a, f.prompt_potion) || !rig.PromptOk(b, f.prompt_potion)) continue;
-		const Jump j = JumpForward(rig.m, a, m, nullptr, rig.W());
-		CHECK_MSG(j.st == SSLM_OK && j.forced.size() == k, "[4.2] span of %d: status %d, admitted %zu", m,
+		const sslm_decode_params g = rig.Greedy();
+		int32_t t = -100;
+		rig.Decode1(a, g, rig.W(), &t);
+		const std::vector<int32_t> draft = OwnNext(rig.m, a, m);
+		CHECK_MSG(draft.size() == size_t(m), "[4.2] span of %d: the model gave %zu next tokens", m, draft.size());
+		const Jump j = JumpDraft(rig.m, a, m + 1, nullptr, rig.W(), draft);
+		CHECK_MSG(j.st == SSLM_OK && j.forced == draft, "[4.2] span of %d: status %d, kept %zu", m,
 		          static_cast<int>(j.st), j.forced.size());
-		rig.ContentOk(b, std::vector<int32_t>(chain.begin(), chain.begin() + std::ptrdiff_t(k)), 1);
+		int32_t ta = -100, tb = -100;
+		rig.Decode1(a, g, rig.W(), &ta);
+		for (int i = 0; i < m + 2; ++i) rig.Decode1(b, g, rig.W(), &tb);
 		const Blob ba = rig.State(a), bb = rig.State(b);
-		CHECK_MSG(ba.ok && bb.ok && ba.kv == bb.kv && ba.ctx == bb.ctx, "[4.2] span of %d: K/V differs from token-by-token "
-		          "prefill (context %lld vs %lld)", m, static_cast<long long>(ba.ctx), static_cast<long long>(bb.ctx));
-		// Fix round 1 (audit N-6): explicit SCHEMA_CONTENT prefill also adds to forced_token_count, so the
-		// whole blob compares, not the K/V region alone.
-		CHECK_MSG(rig.Save(a) == rig.Save(b), "[4.2] span of %d: the blob differs from token-by-token prefill's", m);
+		CHECK_MSG(ba.ok && bb.ok && ba.kv == bb.kv && ba.ctx == bb.ctx && ta == tb, "[4.2] span of %d: K/V differs from "
+		          "token-by-token decode (context %lld vs %lld, token %d vs %d)", m, static_cast<long long>(ba.ctx),
+		          static_cast<long long>(bb.ctx), ta, tb);
+		CHECK_MSG(rig.Save(a) == rig.Save(b), "[4.2] span of %d: the blob differs from token-by-token decode's", m);
 	}
-	// Fix round 1 (audit F-6; §5.3): the two lawful call shapes no other cell makes. The LONGKEY start span
-	// (26 tokens) admitted (a) with ws NULL and (b) at budget 65 on a workspace whose max_chunk_budget is 8
-	// (the heap fallback; rev 1's refusal is withdrawn) gives status OK, the reference chain, and a blob
-	// byte-equal to the in-workspace budget-64 admission's.
+	// Fix round 1 (audit F-6; §5.3): the two lawful call shapes no other cell makes. A 26-token span admitted (a)
+	// with ws NULL and (b) at budget 65 on a workspace whose max_chunk_budget is 8 (the heap fallback; rev 1's refusal
+	// is withdrawn) gives status OK, the draft, and a blob byte-equal to the in-workspace budget-64 call's.
 	{
 		std::vector<uint8_t> want;
+		std::vector<int32_t> draft;
+		auto entry = [&](Rig& rig) -> sslm_seq {
+			sslm_seq s = rig.NewSeq(kLongKey);
+			int32_t t = -100;
+			if (!s || !rig.PromptOk(s, f.prompt_potion) || rig.Decode1(s, rig.Greedy(), rig.W(), &t) != SSLM_OK) return nullptr;
+			return s;
+		};
 		{
 			Rig rig(f.m1->m);
-			sslm_seq s = rig.NewSeq(kLongKey);
-			if (s && rig.PromptOk(s, f.prompt_potion)) {
-				const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
-				if (j.st == SSLM_OK && j.forced == chain) want = rig.Save(s);
+			sslm_seq s = entry(rig);
+			if (s) {
+				draft = OwnNext(rig.m, s, 26);
+				const Jump j = JumpDraft(rig.m, s, 64, nullptr, rig.W(), draft);
+				if (j.st == SSLM_OK && j.forced == draft && draft.size() == 26) want = rig.Save(s);
 			}
 		}
-		CHECK_MSG(!want.empty(), "[4.2 reference] the in-workspace budget-64 admission of the LONGKEY start span failed");
+		CHECK_MSG(!want.empty(), "[4.2 reference] the in-workspace budget-64 call with a 26-token draft failed");
 		{
 			Rig rig(f.m1->m);
-			sslm_seq s = rig.NewSeq(kLongKey);
-			if (s && rig.PromptOk(s, f.prompt_potion)) {
-				const Jump j = JumpForward(rig.m, s, 64, nullptr, nullptr);
-				CHECK_MSG(j.st == SSLM_OK && j.forced == chain && !want.empty() && rig.Save(s) == want,
-				          "[4.2 ws NULL] status %d, admitted %zu (want %zu), blob equal %d", static_cast<int>(j.st),
-				          j.forced.size(), chain.size(), !want.empty() && rig.Save(s) == want);
+			sslm_seq s = entry(rig);
+			if (s) {
+				const Jump j = JumpDraft(rig.m, s, 64, nullptr, nullptr, draft);
+				CHECK_MSG(j.st == SSLM_OK && j.forced == draft && !want.empty() && rig.Save(s) == want,
+				          "[4.2 ws NULL] status %d, kept %zu (want %zu), blob equal %d", static_cast<int>(j.st),
+				          j.forced.size(), draft.size(), !want.empty() && rig.Save(s) == want);
 			}
 		}
 		{
 			Rig rig(f.m1->m, 1, 8, 3, 8);
-			sslm_seq s = rig.NewSeq(kLongKey);
-			if (rig.ok && s && rig.PromptOk(s, f.prompt_potion)) {
-				const Jump j = JumpForward(rig.m, s, 65, nullptr, rig.W());
-				CHECK_MSG(j.st == SSLM_OK && j.forced == chain && !want.empty() && rig.Save(s) == want,
-				          "[4.2 budget 65 > max_chunk_budget 8] status %d, admitted %zu (want %zu), blob equal %d",
-				          static_cast<int>(j.st), j.forced.size(), chain.size(), !want.empty() && rig.Save(s) == want);
+			sslm_seq s = rig.ok ? entry(rig) : nullptr;
+			if (s) {
+				const Jump j = JumpDraft(rig.m, s, 65, nullptr, rig.W(), draft);
+				CHECK_MSG(j.st == SSLM_OK && j.forced == draft && !want.empty() && rig.Save(s) == want,
+				          "[4.2 budget 65 > max_chunk_budget 8] status %d, kept %zu (want %zu), blob equal %d",
+				          static_cast<int>(j.st), j.forced.size(), draft.size(), !want.empty() && rig.Save(s) == want);
 			}
 		}
 	}
@@ -2505,21 +2629,24 @@ void Cell_4_2() {
 
 // 5.1 [J1] §5.5's table, row by row, on a cap holder and on a KV-budget holder. Each case is followed by
 // one decode_step, in which context_length must not rise.
+// MRX (ruling 23): Exact's limit rows (docs/api.md, "Exact mode"): with h rows of headroom at the pending choice the
+// draft is clipped to h - 1 rows after the pending token. h = 0 (no row for the pending token) and an empty clipped
+// draft (h = 1, or no chain after the choice) are no-ops: OK, count 0, nothing changed, and the pending token is left
+// for decode_step, which returns the limit status at h = 0 and embeds it at h >= 1. Otherwise the call returns OK,
+// keeps the pending token and the verified prefix of the clipped draft, rests ready for logits, leaves
+// forced_token_count alone, and the next decode runs the finish only. Canonical's partial-span limit status, and the
+// sweep's k - 1 / k / k + 1 classification by the reference chain, are retired.
 void Cell_5_1() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
 	const RefSchema& r = f.R(kPotion);
-	const size_t start_n = r.st[r.start].chain.size();  // 3
+	const std::vector<int32_t>& start = r.st[r.start].chain;
+	const size_t start_n = start.size();  // 3
 	for (int holder = 0; holder < 2; ++holder) {
 		const sslm_status limit_st = holder == 0 ? SSLM_CONTEXT_CAP_EXCEEDED : SSLM_KV_BUDGET_EXCEEDED;
 		const char* hname = holder == 0 ? "cap holder" : "KV-budget holder";
-		// Fix round 1 (audit F-5): k is derived from the run, through the reference walk (the start chain,
-		// then the decode's choice), never from the engine's walk. The sweep runs h = 0 .. 10, which spans
-		// k - 1, k and k + 1 for every k F-SFD's POTION gives here (6 on main); each h is classified by its
-		// own k, and the rows h = k - 1, h = k and h = k + 1 must all have run on both holders.
-		bool saw_below = false, saw_exact = false, saw_above = false;
+		int kept_rows = 0;
 		for (int h = 0; h <= 10; ++h) {  // the headroom at the pending choice
-			Rig rig(f.m1->m);
 			std::vector<int32_t> prompt;
 			int32_t budget = 0;
 			if (holder == 0) {
@@ -2529,73 +2656,66 @@ void Cell_5_1() {
 				prompt = f.prompt_potion;
 				budget = static_cast<int32_t>(prompt.size() + start_n) + h;
 			}
-			sslm_seq s = holder == 0 ? rig.NewSeq(kPotion) : rig.NewBudgeted(budget, kPotion);
-			if (!s || !rig.PromptOk(s, prompt)) continue;
-			const Jump st0 = JumpForward(rig.m, s, 64, nullptr, rig.W());
-			CHECK_MSG(st0.st == SSLM_OK && st0.forced.size() == start_n, "[5.1 %s h %d] the start span: status %d, %zu",
-			          hname, h, static_cast<int>(st0.st), st0.forced.size());
-			int32_t c = -100;
-			if (rig.Decode1(s, rig.Greedy(), rig.W(), &c) != SSLM_OK || c < 0) continue;
+			// The entry: the prompt, the start chain as content, and one decode (the pending choice). A twin built
+			// the same way in a rig of its own gives the model's own next tokens (the run that never calls the verb).
+			auto entry = [&](Rig& rig, int32_t* c) -> sslm_seq {
+				sslm_seq q = holder == 0 ? rig.NewSeq(kPotion) : rig.NewBudgeted(budget, kPotion);
+				if (!q || !rig.PromptOk(q, prompt) || !rig.ContentOk(q, start)) return nullptr;
+				if (rig.Decode1(q, rig.Greedy(), rig.W(), c) != SSLM_OK || *c < 0) return nullptr;
+				return q;
+			};
+			Rig rig(f.m1->m), twin_rig(f.m1->m);
+			int32_t c = -100, ct = -100;
+			sslm_seq s = entry(rig, &c);
+			sslm_seq twin = entry(twin_rig, &ct);
+			if (!s || !twin) continue;
 			const Blob before = rig.State(s);
-			uint32_t ref_walk = r.start;
-			bool walked = true;
-			for (int32_t tok : r.st[r.start].chain) walked = walked && f.Step(kPotion, ref_walk, tok, &ref_walk);
-			walked = walked && f.Step(kPotion, ref_walk, c, &ref_walk);
-			CHECK_MSG(walked && ref_walk < r.st.size(), "[5.1 %s h %d] the choice %d is not legal on the reference walk",
-			          hname, h, c);
-			if (!walked || ref_walk >= r.st.size()) continue;
-			const RefState& next = r.st[ref_walk];
-			const size_t k = 1 + next.chain.size();
-			if (h > 0 && size_t(h) + 1 == k) saw_below = true;
-			if (size_t(h) == k) saw_exact = true;
-			if (size_t(h) == k + 1) saw_above = true;
+			const Query q = QueryForced(rig.m, s);
+			const int32_t k = h == 0 ? 0 : std::max(0, std::min({q.count, 63, h - 1}));
+			std::vector<int32_t> kept;
+			for (int32_t i = 0; i < k; ++i) {
+				int32_t t = -100;
+				if (twin_rig.Decode1(twin, twin_rig.Greedy(), twin_rig.W(), &t) != SSLM_OK || t != q.ids[size_t(i)]) break;
+				kept.push_back(t);
+			}
 			const std::vector<uint8_t> blob_before = rig.Save(s);
 			const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
 			const Blob after = rig.State(s);
-			if (h == 0) {
-				CHECK_MSG(j.st == limit_st && rig.Save(s) == blob_before, "[5.1 %s h 0] status %d; want the limit status "
-				          "and nothing changed", hname, static_cast<int>(j.st));
+			if (k == 0) {
+				CHECK_MSG(j.st == SSLM_OK && j.count == 0 && rig.Save(s) == blob_before, "[5.1 %s h %d] status %d count "
+				          "%d (chain %d); want a no-op", hname, h, static_cast<int>(j.st), j.count, q.count);
 				int32_t t = -100;
 				const sslm_status ds = rig.Decode1(s, rig.Greedy(), rig.W(), &t);
-				CHECK_MSG(ds == limit_st, "[5.1 %s h 0] the next decode: status %d, want the limit status", hname,
-				          static_cast<int>(ds));
+				const int64_t ctx = rig.State(s).ctx;
+				if (h == 0) {
+					CHECK_MSG(ds == limit_st, "[5.1 %s h 0] the next decode: status %d, want the limit status", hname,
+					          static_cast<int>(ds));
+				} else {
+					CHECK_MSG(ds == SSLM_OK && ctx == before.ctx + 1, "[5.1 %s h %d] the next decode: status %d, context "
+					          "%lld -> %lld; want SSLM_OK and the pending token embedded", hname, h, static_cast<int>(ds),
+					          static_cast<long long>(before.ctx), static_cast<long long>(ctx));
+				}
 				continue;
 			}
-			if (size_t(h) < k) {
-				const size_t forced = size_t(h) - 1;  // the pending token takes one row
-				uint32_t walk = ref_walk;
-				for (size_t i = 0; i < forced; ++i) f.Step(kPotion, walk, next.chain[i], &walk);
-				CHECK_MSG(j.st == limit_st, "[5.1 %s h %d < k %zu] status %d, want the limit status", hname, h, k,
-				          static_cast<int>(j.st));
-				CHECK_MSG(j.forced.size() == forced && after.ready == 1 && after.walk == walk &&
-				              after.forced == before.forced + int64_t(forced) && after.ctx == before.ctx + h,
-				          "[5.1 %s h %d] admitted %zu forced (want %zu), ready %u, walk %u (want %u), forced_token_count "
-				          "%lld (want %lld), context %lld (want %lld)", hname, h, j.forced.size(), forced, after.ready,
-				          after.walk, walk, static_cast<long long>(after.forced),
-				          static_cast<long long>(before.forced + int64_t(forced)), static_cast<long long>(after.ctx),
-				          static_cast<long long>(before.ctx + h));
-			} else {
-				CHECK_MSG(j.st == SSLM_OK && j.forced == next.chain && after.ctx == before.ctx + int64_t(k),
-				          "[5.1 %s h %d >= k %zu] status %d, forced %s", hname, h, k, static_cast<int>(j.st),
-				          Str(j.forced).c_str());
-			}
+			kept_rows += int(kept.size());
+			CHECK_MSG(j.st == SSLM_OK && j.forced == kept && after.ready == 1 && after.forced == before.forced &&
+			              after.ctx == before.ctx + 1 + int64_t(kept.size()),
+			          "[5.1 %s h %d] status %d kept %s (want %s), ready %u, forced_token_count %lld (want %lld), context "
+			          "%lld (want %lld)", hname, h, static_cast<int>(j.st), Str(j.forced).c_str(), Str(kept).c_str(),
+			          after.ready, static_cast<long long>(after.forced), static_cast<long long>(before.forced),
+			          static_cast<long long>(after.ctx), static_cast<long long>(before.ctx + 1 + int64_t(kept.size())));
 			const int64_t ctx = rig.State(s).ctx;
 			int32_t t = -100;
 			rig.Decode1(s, rig.Greedy(), rig.W(), &t);
 			CHECK_MSG(rig.State(s).ctx == ctx, "[5.1 %s h %d] the next decode raised context_length %lld -> %lld", hname, h,
 			          static_cast<long long>(ctx), static_cast<long long>(rig.State(s).ctx));
 		}
-		CHECK_MSG(saw_below && saw_exact && saw_above, "[5.1 %s] the sweep missed a boundary row: h = k - 1 %d, h = k %d, "
-		          "h = k + 1 %d", hname, saw_below, saw_exact, saw_above);
+		(void)kept_rows;
 	}
-	// Fix round 3 (code review round 1, finding 4): h = 0 with NO pending token. A first verb call with one
-	// token of headroom admits the start chain's first forced token (a partial case, 1 <= h < k), so the
-	// sequence rests ready for logits with h = 0 and nothing pending. A second verb call admits nothing,
-	// returns the limit status and changes nothing. §5.5's partial rows apply ("the next decode_step runs the
-	// finish only, with no re-embed"): the finish needs no row, so the next decode returns SSLM_OK with a
-	// token and context_length does not rise. (§5.5's h = 0 row says the next decode returns "today's status
-	// for that limit"; with no pending token today's decode at a ready sequence is SSLM_OK. docs/api.md's
-	// "returns the same" limit status holds only when a token is pending.)
+	// Fix round 3 (code review round 1, finding 4), re-pointed by MRX (ruling 23): the limit with NO pending token.
+	// The prompt leaves one row. A verb call with nothing pending is a no-op; the decode then leaves its token
+	// pending with one row left, where the clipped draft is empty and the verb is again a no-op; the next decode
+	// embeds it (OK); with no row left and a token pending the verb is a no-op and the decode returns the limit status.
 	for (int holder = 0; holder < 2; ++holder) {
 		const sslm_status limit_st = holder == 0 ? SSLM_CONTEXT_CAP_EXCEEDED : SSLM_KV_BUDGET_EXCEEDED;
 		const char* hname = holder == 0 ? "cap holder" : "KV-budget holder";
@@ -2610,23 +2730,26 @@ void Cell_5_1() {
 		}
 		sslm_seq s = holder == 0 ? rig.NewSeq(kPotion) : rig.NewBudgeted(budget, kPotion);
 		if (!s || !rig.PromptOk(s, prompt)) continue;
-		const Jump j1 = JumpForward(rig.m, s, 64, nullptr, rig.W());
-		const Blob b1 = rig.State(s);
-		CHECK_MSG(j1.st == limit_st && j1.forced.size() == 1 && j1.forced[0] == r.st[r.start].chain[0] && b1.ready == 1,
-		          "[5.1 %s h 0, no pending] setup: status %d, forced %s, ready %u; want the limit status, the start "
-		          "chain's first token and ready for logits", hname, static_cast<int>(j1.st), Str(j1.forced).c_str(),
-		          b1.ready);
-		const std::vector<uint8_t> blob_before = rig.Save(s);
-		const Jump j2 = JumpForward(rig.m, s, 64, nullptr, rig.W());
-		CHECK_MSG(j2.st == limit_st && j2.count == 0 && rig.Save(s) == blob_before, "[5.1 %s h 0, no pending] status %d "
-		          "count %d; want the limit status, nothing admitted and nothing changed", hname, static_cast<int>(j2.st),
-		          j2.count);
-		int32_t t = -100;
-		const sslm_status ds = rig.Decode1(s, rig.Greedy(), rig.W(), &t);
-		const Blob b2 = rig.State(s);
-		CHECK_MSG(ds == SSLM_OK && t >= 0 && t < kV && b2.ctx == b1.ctx, "[5.1 %s h 0, no pending] the next decode: "
-		          "status %d token %d, context_length %lld -> %lld; want SSLM_OK, a token, and no rise", hname,
-		          static_cast<int>(ds), t, static_cast<long long>(b1.ctx), static_cast<long long>(b2.ctx));
+		const sslm_decode_params g = rig.Greedy();
+		const char* what[3] = {"no pending, one row", "pending, one row", "pending, no row"};
+		for (int i = 0; i < 3; ++i) {
+			const std::vector<uint8_t> blob_before = rig.Save(s);
+			const Blob b0 = ParseBlob(blob_before);
+			const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
+			CHECK_MSG(j.st == SSLM_OK && j.count == 0 && rig.Save(s) == blob_before, "[5.1 %s, %s] status %d count %d; "
+			          "want a no-op", hname, what[i], static_cast<int>(j.st), j.count);
+			int32_t t = -100;
+			const sslm_status ds = rig.Decode1(s, g, rig.W(), &t);
+			const Blob b1 = rig.State(s);
+			if (i < 2) {
+				CHECK_MSG(ds == SSLM_OK && t >= 0 && t < kV && b1.ctx == b0.ctx + i, "[5.1 %s, %s] the next decode: "
+				          "status %d token %d, context_length %lld -> %lld", hname, what[i], static_cast<int>(ds), t,
+				          static_cast<long long>(b0.ctx), static_cast<long long>(b1.ctx));
+			} else {
+				CHECK_MSG(ds == limit_st, "[5.1 %s, %s] the next decode: status %d, want the limit status", hname, what[i],
+				          static_cast<int>(ds));
+			}
+		}
 	}
 }
 
@@ -2666,31 +2789,36 @@ void PriorStateFailure(const char* cell, Rekey fault) {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
 	const char* name = RekeyName(fault);
-	// The reference: the same two calls with no failure.
+	// MRX (ruling 23): the prior state is a damped@3 decode (order 3, a one-token history: the pending token); the
+	// failing call is the verb at damped order 2, budget 2, with a draft of the model's own next token under order 2,
+	// a two-row pass, so Exact re-keys the state before the pass. The reference: the same calls with no failure.
 	std::vector<uint8_t> ref_after;
+	std::vector<int32_t> draft;
 	{
 		Rig ref(f.m1->m);
 		sslm_seq s = ref.NewSeq(kPotion);
 		if (!s || !ref.PromptOk(s, f.prompt_potion)) return;
 		const sslm_decode_params p3 = ref.Damped(3), p2 = ref.Damped(2);
-		const Jump a = JumpForward(ref.m, s, 1, &p3, ref.W());
-		const Jump b = JumpForward(ref.m, s, 1, &p2, ref.W());
-		CHECK_MSG(a.st == SSLM_OK && a.count == 1 && b.st == SSLM_OK && b.count == 1, "[%s, %s] the reference: verb@3 "
-		          "status %d count %d, verb@2 status %d count %d", cell, name, static_cast<int>(a.st), a.count,
-		          static_cast<int>(b.st), b.count);
+		int32_t t = -100;
+		const sslm_status a = ref.Decode1(s, p3, ref.W(), &t);
+		draft = OwnNext(ref.m, s, 1, &p2);
+		const Jump b = JumpDraft(ref.m, s, 2, &p2, ref.W(), draft);
+		CHECK_MSG(a == SSLM_OK && t >= 0 && draft.size() == 1 && b.st == SSLM_OK && b.forced == draft, "[%s, %s] the "
+		          "reference: decode@3 status %d, verb@2 status %d kept %s (draft %s)", cell, name, static_cast<int>(a),
+		          static_cast<int>(b.st), Str(b.forced).c_str(), Str(draft).c_str());
 		ref_after = ref.Save(s);
 	}
 	Rig rig(f.m1->m);
 	sslm_seq s = rig.NewSeq(kPotion);
 	if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
 	const sslm_decode_params p3 = rig.Damped(3), p2 = rig.Damped(2);
-	const Jump setup = JumpForward(rig.m, s, 1, &p3, rig.W());
+	int32_t t0 = -100;
+	const sslm_status setup = rig.Decode1(s, p3, rig.W(), &t0);
 	const std::vector<uint8_t> before = rig.Save(s);
 	const Blob b0 = ParseBlob(before);
-	CHECK_MSG(setup.st == SSLM_OK && setup.count == 1 && b0.order == 3 && b0.hist.size() == 1, "[%s, %s] setup: verb@3 "
-	          "status %d count %d, order %d, history %s", cell, name, static_cast<int>(setup.st), setup.count, b0.order,
-	          Str(b0.hist).c_str());
-	if (setup.st != SSLM_OK || b0.order != 3 || b0.hist.size() != 1) return;
+	CHECK_MSG(setup == SSLM_OK && b0.order == 3 && b0.hist.size() == 1, "[%s, %s] setup: decode@3 status %d, order %d, "
+	          "history %s", cell, name, static_cast<int>(setup), b0.order, Str(b0.hist).c_str());
+	if (setup != SSLM_OK || b0.order != 3 || b0.hist.size() != 1) return;
 	sslm_status want = SSLM_ALLOCATION_FAILED;
 	CountingHook h;
 	h.max_tasks = 4;
@@ -2717,7 +2845,7 @@ void PriorStateFailure(const char* cell, Rekey fault) {
 		want = SSLM_INVALID_ARGUMENT;
 		break;
 	}
-	const Jump j = JumpForward(rig.m, s, 1, &p2, rig.W());
+	const Jump j = JumpDraft(rig.m, s, 2, &p2, rig.W(), draft);
 	bool fired = true;
 	switch (fault) {
 	case Rekey::kPassSlot:
@@ -2747,7 +2875,7 @@ void PriorStateFailure(const char* cell, Rekey fault) {
 	CHECK_MSG(b1.hist == b0.hist, "[%s, %s] the failed call changed the anti-LM history %s -> %s", cell, name,
 	          Str(b0.hist).c_str(), Str(b1.hist).c_str());
 	CHECK_MSG(after == before, "[%s, %s] the failed call changed the save blob", cell, name);
-	const Jump retry = JumpForward(rig.m, s, 1, &p2, rig.W());
+	const Jump retry = JumpDraft(rig.m, s, 2, &p2, rig.W(), draft);
 	CHECK_MSG(retry.st == SSLM_OK && retry.count == 1 && rig.Save(s) == ref_after, "[%s, %s] the retry: status %d count "
 	          "%d, blob %s the never-failed sequence's", cell, name, static_cast<int>(retry.st), retry.count,
 	          rig.Save(s) == ref_after ? "equals" : "differs from");
@@ -2759,20 +2887,25 @@ void PriorStateFailure(const char* cell, Rekey fault) {
 void Cell_5_2() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
+	// MRX (ruling 23): Exact's pass needs a pending token and a draft: the entry decodes one token, and the draft is
+	// the model's own next token, which the retry keeps.
 	Rig rig(f.m1->m);
 	sslm_seq s = rig.NewSeq(kPotion);
 	if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
+	int32_t p = -100;
+	rig.Decode1(s, rig.Greedy(), rig.W(), &p);
+	const std::vector<int32_t> draft = OwnNext(rig.m, s, 1);
 	const std::vector<uint8_t> before = rig.Save(s);
 	superslm_test::g_inject_jump_forward_pass_alloc_failure = true;
-	const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
+	const Jump j = JumpDraft(rig.m, s, 64, nullptr, rig.W(), draft);
 	const bool consumed = !superslm_test::g_inject_jump_forward_pass_alloc_failure;
 	superslm_test::g_inject_jump_forward_pass_alloc_failure = false;
 	CHECK_MSG(consumed && j.st == SSLM_ALLOCATION_FAILED, "[5.2] status %d (slot consumed %d), want SSLM_ALLOCATION_FAILED",
 	          static_cast<int>(j.st), consumed);
 	CHECK_MSG(rig.Save(s) == before, "[5.2] the failed call changed the sequence");
-	const Jump retry = JumpForward(rig.m, s, 64, nullptr, rig.W());
-	CHECK_MSG(retry.st == SSLM_OK && retry.forced == f.R(kPotion).st[0].chain, "[5.2] the retry: status %d forced %s",
-	          static_cast<int>(retry.st), Str(retry.forced).c_str());
+	const Jump retry = JumpDraft(rig.m, s, 64, nullptr, rig.W(), draft);
+	CHECK_MSG(retry.st == SSLM_OK && retry.forced == draft && draft.size() == 1, "[5.2] the retry: status %d kept %s, "
+	          "draft %s", static_cast<int>(retry.st), Str(retry.forced).c_str(), Str(draft).c_str());
 	// Fix round 3 (review finding 3): the same failure after the re-key, on a prior damped state.
 	for (Rekey k : {Rekey::kPassSlot, Rekey::kQBadAlloc, Rekey::kDownBadAlloc, Rekey::kGateUpStatus, Rekey::kHostileHook})
 		PriorStateFailure("5.2", k);
@@ -2856,42 +2989,41 @@ void Cell_6_4() {
 
 // 6.5 [J1] Contract violation: a decode_step at a forced state after a partial span. The output is
 // schema-valid and deterministic, and it differs from 6.2's stream. This documents why §5.6 binds.
+// MRX (ruling 23): under Exact a partial span (the pending token and one verified row at most, budget 2) followed
+// by a decode is no violation: any interleaving gives the run that never calls the verb. Re-pointed: the stream is
+// schema-valid, deterministic and equal to the decode-only stream. The pinned digest of Canonical's broken stream and
+// "differs from the lawful stream" are retired.
 void Cell_6_5() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
-	std::vector<int32_t> lawful;
-	{
-		Rig rig(f.m1->m);
-		lawful = FreshRun(rig, f, kPotion, f.prompt_potion, GreedyOpts(rig)).stream;
-	}
-	std::vector<int32_t> broken[2];
+	const OffRun off = DecodeOnly(f.m1->m, kPotion, f.prompt_potion);
+	std::vector<int32_t> mixed[2];
 	for (int rep = 0; rep < 2; ++rep) {
 		Rig rig(f.m1->m);
 		sslm_seq s = rig.NewSeq(kPotion);
 		if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
-		const Jump j = JumpForward(rig.m, s, 1, nullptr, rig.W());  // a partial span: one of the start chain's tokens
-		CHECK_MSG(j.st == SSLM_OK && j.count == 1, "[6.5] the partial span: status %d count %d", static_cast<int>(j.st), j.count);
-		broken[rep] = j.forced;
+		int32_t p = -100;
+		if (rig.Decode1(s, rig.Greedy(), rig.W(), &p) != SSLM_OK || p < 0) continue;
+		mixed[rep].push_back(p);
+		const std::vector<int32_t> want = ExactKept(rig.m, s, 2);
+		const Jump j = JumpForward(rig.m, s, 2, nullptr, rig.W());  // a partial span
+		CHECK_MSG(j.st == SSLM_OK && j.forced == want, "[6.5] the partial span: status %d kept %s, Exact's %s",
+		          static_cast<int>(j.st), Str(j.forced).c_str(), Str(want).c_str());
+		mixed[rep].insert(mixed[rep].end(), j.forced.begin(), j.forced.end());
 		int32_t t = -100;
-		const sslm_status ds = rig.Decode1(s, rig.Greedy(), rig.W(), &t);  // at a forced state: the violation
+		const sslm_status ds = rig.Decode1(s, rig.Greedy(), rig.W(), &t);
 		if (ds != SSLM_OK || t < 0) continue;
-		broken[rep].push_back(t);
+		mixed[rep].push_back(t);
 		const JfRun rest = RunJf(rig.m, s, GreedyOpts(rig));
-		broken[rep].insert(broken[rep].end(), rest.stream.begin(), rest.stream.end());
+		mixed[rep].insert(mixed[rep].end(), rest.stream.begin(), rest.stream.end());
 		uint32_t w = f.R(kPotion).start;
 		bool valid = true;
-		for (int32_t x : broken[rep]) valid = valid && f.Step(kPotion, w, x, &w);
-		CHECK_MSG(valid && rest.dead_end, "[6.5] the contract-breaking stream is not schema-valid or did not end");
+		for (int32_t x : mixed[rep]) valid = valid && f.Step(kPotion, w, x, &w);
+		CHECK_MSG(valid && rest.dead_end, "[6.5] the mixed stream is not schema-valid or did not end");
 	}
-	CHECK_MSG(broken[0] == broken[1] && !broken[0].empty(), "[6.5] the contract-breaking stream is not deterministic");
-	// Rev 1.2.2: the pinned stream. The violation moves the walk mid-chain, so a verb that carried a chain
-	// remainder across calls (X14) admits an illegal token next and cannot produce this stream.
-	CHECK_MSG(broken[0].size() == kBrokenStreamLength && HexDigest(broken[0]) == kBrokenStreamDigest,
-	          "[6.5] the contract-breaking stream %s (%zu tokens, digest %s); main's replay pins %zu, %s",
-	          Str(broken[0]).c_str(), broken[0].size(), HexDigest(broken[0]).c_str(), kBrokenStreamLength,
-	          kBrokenStreamDigest);
-	CHECK_MSG(broken[0] != lawful && !lawful.empty(), "[6.5] the contract-breaking stream equals the lawful one; the cell "
-	          "shows nothing");
+	CHECK_MSG(mixed[0] == mixed[1] && !mixed[0].empty(), "[6.5] the mixed stream is not deterministic");
+	CHECK_MSG(off.ok && off.dead_end && mixed[0] == off.stream, "[6.5] the mixed stream %s, decode-only %s",
+	          Str(mixed[0]).c_str(), Str(off.stream).c_str());
 }
 
 // 6.6 [J1] Golden hashes of (next_forced, |F|) for every F-SFD schema, and of the jump-forward stream.
@@ -2916,11 +3048,14 @@ void Cell_6_6() {
 	}
 	for (const GoldenStream& g : kGoldenStreams) {
 		Rig rig(f.m1->m);
-		const JfRun r = FreshRun(rig, f, g.schema, std::string(g.schema) == kPotion ? f.prompt_potion : f.prompt_pr,
-		                         GreedyOpts(rig));
-		const std::string got = HexDigest(r.stream);
-		CHECK_MSG(r.stream.size() == g.length && got == g.digest, "[6.6] %s: the stream digest %s (%zu tokens), pinned %s "
-		          "(%zu)", g.schema, got.c_str(), r.stream.size(), g.digest, g.length);
+		// MRX (ruling 23): the stream digest is the decode-only run's, computed live (the pinned digests are
+		// Canonical's streams).
+		const std::vector<int32_t>& prompt = std::string(g.schema) == kPotion ? f.prompt_potion : f.prompt_pr;
+		const JfRun r = FreshRun(rig, f, g.schema, prompt, GreedyOpts(rig));
+		const OffRun off = DecodeOnly(f.m1->m, g.schema, prompt);
+		const std::string got = HexDigest(r.stream), want = HexDigest(off.stream);
+		CHECK_MSG(off.ok && off.dead_end && got == want, "[6.6] %s: the stream digest %s (%zu tokens), decode-only %s "
+		          "(%zu)", g.schema, got.c_str(), r.stream.size(), want.c_str(), off.stream.size());
 	}
 }
 
@@ -2981,11 +3116,16 @@ void Cell_8_1() {
 // (serial). The outputs equal the run without a hook.
 // §16 Q6 C (k = 7, box rule 3.10): an admission of M = 2..7 rows now runs as one-row threaded passes, so
 // only M >= 8 stays serial; the budget-64 arm asserts both halves (the Q6C cells cover the rule itself).
+// MRX (ruling 23): budget 1 is always a no-op under Exact (the draft is clipped to budget - 1), so the budgets are
+// 2 and 64. Exact's pass is the pending token and its clipped draft, h rows; under bit 1 a pass of 2..7 rows runs as
+// one-row passes, each threaded on the lowered minimum work, so every call with such a pass calls run. The rows
+// classified are the pass's, read before the call, not the tokens kept. The M >= 8 "no run" arm is dropped: Exact's
+// checking finishes run inside the call, and on the lowered minimum work they may thread.
 void Cell_8_2() {
 	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
-	for (int32_t budget : {1, 64}) {
+	for (int32_t budget : {2, 64}) {
 		std::vector<int32_t> plain;
 		{
 			Rig rig(f.m1->m);
@@ -3001,23 +3141,14 @@ void Cell_8_2() {
 		if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) continue;
 		sslm_seq s = rig.NewSeq(kPotion);
 		if (!s || !rig.PromptOk(s, f.prompt_potion)) continue;
-		int one_row = 0, one_row_threaded = 0, multi_row = 0, multi_row_threaded = 0, wide_row = 0, wide_row_threaded = 0;
+		int multi_row = 0, multi_row_threaded = 0;
 		JfOpts o = GreedyOpts(rig, budget);
 		size_t calls_before = 0;
 		o.after = [&](sslm_seq&, const JfStep& st) {
 			const size_t now = h.Counts().size();
-			if (st.kind == 0 && st.st == SSLM_OK) {
-				const size_t m = st.toks.size() + (st.embedded_pending ? 1 : 0);
-				if (m == 1) {
-					++one_row;
-					if (now > calls_before) ++one_row_threaded;
-				} else if (m >= 2 && m <= 7) {
-					++multi_row;
-					if (now > calls_before) ++multi_row_threaded;
-				} else if (m >= 8) {
-					++wide_row;
-					if (now > calls_before) ++wide_row_threaded;
-				}
+			if (st.kind == 0 && st.st == SSLM_OK && st.pass_rows >= 2 && st.pass_rows <= 7) {
+				++multi_row;
+				if (now > calls_before) ++multi_row_threaded;
 			}
 			calls_before = now;
 		};
@@ -3027,19 +3158,15 @@ void Cell_8_2() {
 		          static_cast<int>(r.end_status), r.stuck);
 		CHECK_MSG(r.stream == plain && !plain.empty(), "[8.2] budget %d with the hook: %s, without %s", budget,
 		          Str(r.stream).c_str(), Str(plain).c_str());
-		if (budget == 1) {
-			CHECK_MSG(one_row > 0 && one_row_threaded == one_row, "[8.2] %d of %d one-token admissions called run", one_row_threaded,
-			          one_row);
-		} else {
-			CHECK_MSG(multi_row > 0 && multi_row_threaded == multi_row, "[8.2] %d of %d admissions of M = 2..7 called run "
-			          "(Q6 C: all of them)", multi_row_threaded, multi_row);
-			CHECK_MSG(wide_row_threaded == 0, "[8.2] %d of %d admissions of M >= 8 called run", wide_row_threaded, wide_row);
-		}
+		CHECK_MSG(multi_row > 0 && multi_row_threaded == multi_row, "[8.2] budget %d: %d of %d calls with a pass of "
+		          "2..7 rows called run (Q6 C: all of them)", budget, multi_row_threaded, multi_row);
 	}
 }
 
 // 8.3 [J1] Today's explicit SCHEMA_CONTENT prefill from a ready seed is unchanged: it admits, walks and
 // counts as it does on main, and its K/V equals the verb's admission of the same tokens.
+// MRX (ruling 23): the comparison with the verb's admission of the start chain is retired (Exact admits no start
+// span); the explicit-prefill half stands.
 void Cell_8_3() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
@@ -3047,20 +3174,13 @@ void Cell_8_3() {
 	const std::vector<int32_t>& chain = r.st[r.start].chain;
 	Rig rig(f.m1->m);
 	sslm_seq a = rig.NewSeq(kPotion);
-	sslm_seq b = rig.NewSeq(kPotion);
-	if (!a || !b || !rig.PromptOk(a, f.prompt_potion) || !rig.PromptOk(b, f.prompt_potion)) return;
+	if (!a || !rig.PromptOk(a, f.prompt_potion)) return;
 	CHECK_MSG(rig.ContentOk(a, chain), "[8.3] the explicit prefill");
 	uint32_t walk = r.start;
 	for (int32_t t : chain) f.Step(kPotion, walk, t, &walk);
 	const Blob ba = rig.State(a);
 	CHECK_MSG(ba.walk == walk && ba.forced == int64_t(chain.size()) && ba.ready == 1, "[8.3] explicit prefill: walk %u "
 	          "(want %u), forced %lld, ready %u", ba.walk, walk, static_cast<long long>(ba.forced), ba.ready);
-	const Jump j = JumpForward(rig.m, b, 64, nullptr, rig.W());
-	const Blob bb = rig.State(b);
-	CHECK_MSG(j.st == SSLM_OK && j.forced == chain && bb.kv == ba.kv && bb.walk == ba.walk && bb.forced == ba.forced,
-	          "[8.3] the verb's admission differs from the explicit prefill (status %d)", static_cast<int>(j.st));
-	// Fix round 1 (audit N-6): both admissions add to forced_token_count, so the whole blob compares.
-	CHECK_MSG(rig.Save(a) == rig.Save(b), "[8.3] the blob after the verb differs from the explicit prefill's");
 }
 
 // 8.5 [J1] An adapter-bound sequence. Oracle (e) runs against a fresh sequence with the same adapter.
@@ -3077,26 +3197,35 @@ void Cell_8_5() {
 	CHECK_MSG(as == SSLM_OK, "[8.5] sslm_adapter_map == %d", static_cast<int>(as));
 	if (!ad) return;
 	{
-		const Replay rp = ReferenceReplay(f.m1->m, f, kPotion, f.prompt_potion, ad);
-		const Replay base = ReferenceReplay(f.m1->m, f, kPotion, f.prompt_potion);
-		CHECK_MSG(rp.ok && rp.dead_end, "[8.5] the adapter replay did not complete");
+		// MRX (ruling 23): oracle (e) runs against the decode-only run with the same adapter (Exact's contract), in
+		// place of the reference replay.
+		const OffRun rp = DecodeOnly(f.m1->m, kPotion, f.prompt_potion, nullptr, ad);
+		const OffRun base = DecodeOnly(f.m1->m, kPotion, f.prompt_potion);
+		CHECK_MSG(rp.ok && rp.dead_end, "[8.5] the adapter decode-only run did not complete");
 		Rig rig(f.m1->m);
 		sslm_seq s = rig.NewSeq(kPotion, ad);
 		if (s && rig.PromptOk(s, f.prompt_potion)) {
-			size_t ci = 0;
-			int bad = 0;
+			size_t len = 0;
+			int bad = 0, decodes = 0;
 			JfOpts o = GreedyOpts(rig);
 			o.after = [&](sslm_seq& q, const JfStep& st) {
-				if (st.kind != 1 || st.st != SSLM_OK || st.toks[0] < 0) return;
-				const Blob b = rig.State(q);
-				if (ci >= rp.choices.size() || st.toks[0] != rp.choices[ci] || b.kv != rp.kv_after[ci]) ++bad;
-				++ci;
+				if (st.kind == 0) {
+					len += st.toks.size();
+					return;
+				}
+				if (st.st != SSLM_OK || st.toks[0] < 0) return;
+				++len;
+				++decodes;
+				if (len >= rp.blob_at.size() || rig.Save(q) != rp.blob_at[len]) ++bad;
 			};
 			const JfRun r = RunJf(rig.m, s, o);
-			CHECK_MSG(r.dead_end && r.stream == rp.stream && bad == 0 && ci == rp.choices.size(),
-			          "[8.5] adapter-bound: stream %s, adapter replay %s, %d choices differ", Str(r.stream).c_str(),
-			          Str(rp.stream).c_str(), bad);
-			CHECK_MSG(rp.kv_after != base.kv_after, "[8.5] the adapter does not move the K/V rows; the cell shows nothing");
+			CHECK_MSG(r.dead_end && r.stream == rp.stream && bad == 0 && decodes > 0,
+			          "[8.5] adapter-bound: stream %s, adapter decode-only %s, %d of %d decodes' blobs differ",
+			          Str(r.stream).c_str(), Str(rp.stream).c_str(), bad, decodes);
+			bool moved = false;
+			for (size_t i = 1; i < rp.blob_at.size() && i < base.blob_at.size(); ++i)
+				moved = moved || ParseBlob(rp.blob_at[i]).kv != ParseBlob(base.blob_at[i]).kv;
+			CHECK_MSG(moved, "[8.5] the adapter does not move the K/V rows; the cell shows nothing");
 			rig.Release(s);
 		}
 	}
@@ -3131,22 +3260,38 @@ int32_t FindChoiceChoice(const Sfd& f, uint32_t* s_q, uint32_t* s_t) {
 
 // 8.6 (rev 1.2, arms through (ix) at rev 1.2.2) [J1, AL, F-SFD POTION] The anti-LM rule, read through the SSB
 // blob's history. X23d maps to (ix) with LSan.
+// MRX (ruling 23): Exact's anti-LM rule (docs/api.md, "Exact mode"): the state is created or re-keyed only for a pass
+// of two or more rows, installed after the first finish, and fed confirmed tokens only, so the history equals the
+// run that never calls the verb. The arms that needed a start span ((i), (iv), (vi), (ix)) use an entry with a
+// pending token and a draft of the model's own next tokens; the limit arms ((viii) 1, (viii) d) are Exact's no-ops.
 void Cell_8_6() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
 	const RefSchema& r = f.R(kPotion);
 	const std::vector<int32_t>& start = r.st[r.start].chain;
-	// (i) Start span, damped order 3.
+	// (i) A span at damped order 3 after a damped decode: the history and order equal a decode-only twin's, and
+	// after one more decode the whole blob does.
 	{
 		Rig rig(f.m1->m);
 		sslm_seq s = rig.NewSeq(kPotion);
-		if (s && rig.PromptOk(s, f.prompt_potion)) {
+		sslm_seq tw = rig.NewSeq(kPotion);
+		if (s && tw && rig.PromptOk(s, f.prompt_potion) && rig.PromptOk(tw, f.prompt_potion)) {
 			const sslm_decode_params p = rig.Damped(3);
-			const Jump j = JumpForward(rig.m, s, 64, &p, rig.W());
-			const AntiLm a = ReadAntiLm(rig, s);
-			CHECK_MSG(j.st == SSLM_OK && a.order == 3 && a.hist == start && start.size() == 3, "[8.6 (i)] status %d, order "
-			          "%d, history %s, want the start span %s", static_cast<int>(j.st), a.order, Str(a.hist).c_str(),
-			          Str(start).c_str());
+			int32_t t = -100, tt = -100;
+			rig.Decode1(s, p, rig.W(), &t);
+			rig.Decode1(tw, p, rig.W(), &tt);
+			const std::vector<int32_t> draft = OwnNext(rig.m, s, 2, &p);
+			const Jump j = JumpDraft(rig.m, s, 64, &p, rig.W(), draft);
+			for (size_t i = 0; i < draft.size(); ++i) rig.Decode1(tw, p, rig.W(), &tt);
+			const AntiLm a = ReadAntiLm(rig, s), at = ReadAntiLm(rig, tw);
+			CHECK_MSG(j.st == SSLM_OK && j.forced == draft && draft.size() == 2 && a.order == 3 && a.hist == at.hist &&
+			              at.order == 3,
+			          "[8.6 (i)] status %d kept %s (draft %s), order %d, history %s; the twin's %s", static_cast<int>(j.st),
+			          Str(j.forced).c_str(), Str(draft).c_str(), a.order, Str(a.hist).c_str(), Str(at.hist).c_str());
+			rig.Decode1(s, p, rig.W(), &t);
+			rig.Decode1(tw, p, rig.W(), &tt);
+			CHECK_MSG(t == tt && rig.Save(s) == rig.Save(tw), "[8.6 (i)] after one more decode: token %d vs %d, blob %s",
+			          t, tt, rig.Save(s) == rig.Save(tw) ? "equal" : "differs");
 		}
 	}
 	// (ii) Whole run: the same params throughout; the history equals the output so far after every call.
@@ -3196,11 +3341,13 @@ void Cell_8_6() {
 			rig.Decode1(s, rig.Damped(3), rig.W(), &t);  // at the forced start: a damped decode makes a state
 			const AntiLm before = ReadAntiLm(rig, s);
 			const sslm_decode_params g = rig.Greedy();
-			const Jump j = JumpForward(rig.m, s, 64, &g, rig.W());
+			const std::vector<int32_t> draft = OwnNext(rig.m, s, 2, &g);
+			const Jump j = JumpDraft(rig.m, s, 64, &g, rig.W(), draft);
 			const AntiLm after = ReadAntiLm(rig, s);
 			CHECK_MSG(before.order == 3 && before.hist.size() == 1, "[8.6 (iv)] setup: order %d history %zu", before.order,
 			          before.hist.size());
-			CHECK_MSG(j.st == SSLM_OK && j.count > 0 && after.hist == before.hist && after.order == before.order,
+			CHECK_MSG(j.st == SSLM_OK && j.count == 2 && j.forced == draft && after.hist == before.hist &&
+			              after.order == before.order,
 			          "[8.6 (iv)] the greedy verb: status %d count %d, history %s -> %s", static_cast<int>(j.st), j.count,
 			          Str(before.hist).c_str(), Str(after.hist).c_str());
 		}
@@ -3236,15 +3383,18 @@ void Cell_8_6() {
 			          static_cast<int>(j.st), a.order, Str(a.hist).c_str(), Str(ref_hist).c_str());
 		}
 	}
-	// (vi) Allocation failure at the create: SSLM_ALLOCATION_FAILED, nothing admitted.
+	// (vi) Allocation failure at the create: SSLM_ALLOCATION_FAILED, nothing admitted. The entry is a greedy decode
+	// (no state), then a damped order-3 verb call with a two-token draft: a pass of three rows, which creates.
 	{
 		Rig rig(f.m1->m);
 		sslm_seq s = rig.NewSeq(kPotion);
-		if (s && rig.PromptOk(s, f.prompt_potion)) {
-			const std::vector<uint8_t> before = rig.Save(s);
+		int32_t t = -100;
+		if (s && rig.PromptOk(s, f.prompt_potion) && rig.Decode1(s, rig.Greedy(), rig.W(), &t) == SSLM_OK) {
 			const sslm_decode_params p = rig.Damped(3);
+			const std::vector<int32_t> draft = OwnNext(rig.m, s, 2, &p);
+			const std::vector<uint8_t> before = rig.Save(s);
 			superslm_test::g_inject_anti_lm_create_alloc_failure = true;
-			const Jump j = JumpForward(rig.m, s, 64, &p, rig.W());
+			const Jump j = JumpDraft(rig.m, s, 64, &p, rig.W(), draft);
 			const bool consumed = !superslm_test::g_inject_anti_lm_create_alloc_failure;
 			superslm_test::g_inject_anti_lm_create_alloc_failure = false;
 			CHECK_MSG(consumed && j.st == SSLM_ALLOCATION_FAILED && rig.Save(s) == before, "[8.6 (vi)] status %d (slot "
@@ -3310,8 +3460,10 @@ void Cell_8_6() {
 	// verb call (a) mid-layer, (b) at h = 0, (c) with invalid params.
 	{
 		for (int arm = 0; arm < 3; ++arm) {
+			// MRX (ruling 23): (b)'s holder has no row past the prompt (Exact keeps no start span), so the decode's
+			// choice is pending at h = 0, where Exact is a no-op: SSLM_OK and nothing changed.
 			Rig rig(f.m1->m);
-			const int32_t budget = static_cast<int32_t>(f.prompt_potion.size() + start.size());
+			const int32_t budget = static_cast<int32_t>(f.prompt_potion.size());
 			sslm_seq s = arm == 1 ? rig.NewBudgeted(budget, kPotion) : rig.NewSeq(kPotion);
 			if (!s || !rig.PromptOk(s, f.prompt_potion)) continue;
 			const sslm_decode_params p3 = rig.Damped(3);
@@ -3334,7 +3486,7 @@ void Cell_8_6() {
 			sslm_decode_params p2 = rig.Damped(2);
 			if (arm == 2) p2.struct_size = 0;
 			const Jump j = JumpForward(rig.m, s, 64, &p2, rig.W());
-			const sslm_status want = arm == 1 ? SSLM_KV_BUDGET_EXCEEDED : SSLM_INVALID_ARGUMENT;
+			const sslm_status want = arm == 1 ? SSLM_OK : SSLM_INVALID_ARGUMENT;
 			CHECK_MSG(j0.st == SSLM_OK && a0.order == 3 && !a0.hist.empty(), "[8.6 (viii) %d] setup: status %d, order %d",
 			          arm, static_cast<int>(j0.st), a0.order);
 			CHECK_MSG(j.st == want && rig.Save(s) == before, "[8.6 (viii) %d] status %d (want %d), blob unchanged %d", arm,
@@ -3345,9 +3497,11 @@ void Cell_8_6() {
 	// never touch the history either. On an order-3 history, a damped order-2 call that (d) admits only the
 	// pending token (h = 1 on a KV-budget holder: the limit status), or (e) is a no-op (choice -> choice at
 	// an unforced state, cell 8.7's construction). Order and history are byte-equal to before.
+	// MRX (ruling 23): (d) at h = 1 the clipped draft is empty, so Exact is a no-op: SSLM_OK, count 0, the pending
+	// token still pending, and nothing changed.
 	{
 		Rig rig(f.m1->m);
-		const int32_t budget = static_cast<int32_t>(f.prompt_potion.size() + start.size()) + 1;
+		const int32_t budget = static_cast<int32_t>(f.prompt_potion.size()) + 1;
 		sslm_seq s = rig.NewBudgeted(budget, kPotion);
 		if (s && rig.PromptOk(s, f.prompt_potion)) {
 			const sslm_decode_params p3 = rig.Damped(3);
@@ -3362,9 +3516,9 @@ void Cell_8_6() {
 			const Blob b1 = rig.State(s);
 			CHECK_MSG(j0.st == SSLM_OK && a0.order == 3 && !a0.hist.empty(), "[8.6 (viii) d] setup: status %d, order %d",
 			          static_cast<int>(j0.st), a0.order);
-			CHECK_MSG(j.st == SSLM_KV_BUDGET_EXCEEDED && j.count == 0 && b1.ctx == b0.ctx + 1 && b1.ready == 1,
-			          "[8.6 (viii) d] h = 1: status %d count %d, context %lld -> %lld, ready %u; want the limit status and "
-			          "the pending token alone admitted", static_cast<int>(j.st), j.count, static_cast<long long>(b0.ctx),
+			CHECK_MSG(j.st == SSLM_OK && j.count == 0 && b1.ctx == b0.ctx && b1.ready == 0 && b1.current == b0.current,
+			          "[8.6 (viii) d] h = 1: status %d count %d, context %lld -> %lld, ready %u; want a no-op with the "
+			          "pending token still pending", static_cast<int>(j.st), j.count, static_cast<long long>(b0.ctx),
 			          static_cast<long long>(b1.ctx), b1.ready);
 			CHECK_MSG(a1.order == a0.order && a1.hist == a0.hist, "[8.6 (viii) d] the pending-only call changed the "
 			          "history: order %d -> %d, %s -> %s", a0.order, a1.order, Str(a0.hist).c_str(), Str(a1.hist).c_str());
@@ -3395,57 +3549,37 @@ void Cell_8_6() {
 		}
 	}
 	// (ix) (rev 1.2.2; audit F-7) The verb's own re-key: a damped decode at order 3 creates a history (the
-	// start span's first token, now pending), then the verb at damped order 2 admits the pending token and
-	// the chain. The state is at order 2 and the history is exactly the verb's forced tokens. Reference:
-	// the same calls with the verb replaced by order-2 decodes, which re-key the same way (main's code).
-	// LSan on the ASan leg catches an old state re-keyed without being destroyed (X23d).
+	// start span's first token, now pending), then the verb at damped order 2 keeps the pending token and a draft
+	// (MRX, ruling 23: the model's own next three tokens at order 2, a pass of four rows, which re-keys). The state is
+	// at order 2 with the history of the same calls with the verb replaced by order-2 decodes, which re-key the same
+	// way (main's code), and after one more decode the whole blob equals theirs. LSan on the ASan leg catches an old
+	// state re-keyed without being destroyed (X23d).
 	{
-		uint32_t walk = r.start;
-		int32_t first = -1;
-		std::vector<int32_t> want;
-		{
-			Rig ref(f.m1->m);
-			sslm_seq s = ref.NewSeq(kPotion);
-			if (s && ref.PromptOk(s, f.prompt_potion)) {
-				ref.Decode1(s, ref.Damped(3), ref.W(), &first);
-				if (first >= 0 && f.Step(kPotion, walk, first, &walk) && walk < r.st.size()) want = r.st[walk].chain;
-			}
-		}
-		std::vector<int32_t> ref_hist;
-		int32_t ref_order = 0;
-		{
-			Rig ref(f.m1->m);
-			sslm_seq s = ref.NewSeq(kPotion);
-			if (s && ref.PromptOk(s, f.prompt_potion)) {
-				int32_t t = -100;
-				ref.Decode1(s, ref.Damped(3), ref.W(), &t);
-				for (size_t i = 0; i < want.size(); ++i) ref.Decode1(s, ref.Damped(2), ref.W(), &t);
-				const AntiLm a = ReadAntiLm(ref, s);
-				ref_hist = a.hist;
-				ref_order = a.order;
-			}
-		}
-		CHECK_MSG(!want.empty() && ref_order == 2 && ref_hist.size() == want.size(), "[8.6 (ix)] reference: chain %s, "
-		          "jump-forward off re-keys to order %d history %s", Str(want).c_str(), ref_order, Str(ref_hist).c_str());
 		Rig rig(f.m1->m);
 		sslm_seq s = rig.NewSeq(kPotion);
-		if (s && rig.PromptOk(s, f.prompt_potion)) {
-			int32_t t = -100;
-			rig.Decode1(s, rig.Damped(3), rig.W(), &t);
+		sslm_seq tw = rig.NewSeq(kPotion);
+		if (s && tw && rig.PromptOk(s, f.prompt_potion) && rig.PromptOk(tw, f.prompt_potion)) {
+			const sslm_decode_params p3 = rig.Damped(3), p2 = rig.Damped(2);
+			int32_t t = -100, tt = -100;
+			rig.Decode1(s, p3, rig.W(), &t);
+			rig.Decode1(tw, p3, rig.W(), &tt);
 			const AntiLm a0 = ReadAntiLm(rig, s);
-			const sslm_decode_params p2 = rig.Damped(2);
-			const Jump j = JumpForward(rig.m, s, 64, &p2, rig.W());
-			const AntiLm a = ReadAntiLm(rig, s);
-			CHECK_MSG(t == first && a0.order == 3 && a0.hist.size() == 1, "[8.6 (ix)] setup: decode@3 gave %d (want %d), "
-			          "order %d history %s", t, first, a0.order, Str(a0.hist).c_str());
-			CHECK_MSG(j.st == SSLM_OK && j.forced == want && a.order == 2 && a.hist == j.forced &&
-			              a.order == ref_order && a.hist.size() == ref_hist.size(),
-			          "[8.6 (ix)] verb@2 after decode@3: status %d forced %s, order %d, history %s; want order 2 and the "
-			          "history = the forced tokens %s", static_cast<int>(j.st), Str(j.forced).c_str(), a.order,
-			          Str(a.hist).c_str(), Str(want).c_str());
+			const std::vector<int32_t> draft = OwnNext(rig.m, s, 3, &p2);
+			const Jump j = JumpDraft(rig.m, s, 64, &p2, rig.W(), draft);
+			for (size_t i = 0; i < draft.size(); ++i) rig.Decode1(tw, p2, rig.W(), &tt);
+			const AntiLm a = ReadAntiLm(rig, s), ref = ReadAntiLm(rig, tw);
+			CHECK_MSG(a0.order == 3 && a0.hist.size() == 1 && ref.order == 2, "[8.6 (ix)] setup: decode@3 order %d history "
+			          "%s; jump-forward off re-keys to order %d", a0.order, Str(a0.hist).c_str(), ref.order);
+			CHECK_MSG(j.st == SSLM_OK && j.forced == draft && draft.size() == 3 && a.order == 2 && a.hist == ref.hist,
+			          "[8.6 (ix)] verb@2 after decode@3: status %d kept %s (draft %s), order %d, history %s; want order 2 "
+			          "and the history %s", static_cast<int>(j.st), Str(j.forced).c_str(), Str(draft).c_str(), a.order,
+			          Str(a.hist).c_str(), Str(ref.hist).c_str());
+			rig.Decode1(s, p2, rig.W(), &t);
+			rig.Decode1(tw, p2, rig.W(), &tt);
+			CHECK_MSG(t == tt && rig.Save(s) == rig.Save(tw), "[8.6 (ix)] after one more decode: token %d vs %d, blob %s",
+			          t, tt, rig.Save(s) == rig.Save(tw) ? "equal" : "differs");
 		}
 	}
-
 }
 
 // 8.7 [J1] Choice followed by choice (POTION 't', forced with S-CHOICE). The verb is a no-op, the pending
@@ -3496,6 +3630,8 @@ void Cell_8_7() {
 // 8.8 [J1] Jump-forward from a ready seed (after the prompt), after a dead end, and after a
 // ParallelForIncomplete. Nothing is embedded twice: context_length and S-LAYERROWS both show it. Rev 1.2.2: the
 // next decode is finish-only (X13 with 10.1 (b)).
+// MRX (ruling 23): none of the three seeds holds a pending token, so Exact is a no-op at each: OK, count 0, no
+// context_length rise and no S-LAYERROWS entry; the next decode is still finish-only.
 void Cell_8_8() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
@@ -3541,15 +3677,13 @@ void Cell_8_8() {
 		sfd::LayerRowsLogReset();
 		const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
 		const Blob after = rig.State(s);
-		const size_t k = r.st[at].chain.size();
+		(void)at;
 		CHECK_MSG(before.ready == 1, "[8.8 arm %d] setup: not resting ready for logits", arm);
-		CHECK_MSG(j.st == SSLM_OK && j.forced == r.st[at].chain && after.ctx == before.ctx + int64_t(k),
-		          "[8.8 arm %d] status %d, admitted %zu, context %lld -> %lld (want +%zu)", arm, static_cast<int>(j.st),
-		          j.forced.size(), static_cast<long long>(before.ctx), static_cast<long long>(after.ctx), k);
-		CHECK_MSG(sfd::LayerRowsLogCount() == 1 && sfd::LayerRowsLogAt(0).kind == sfd::kLayerRowsBatched &&
-		              sfd::LayerRowsLogAt(0).rows == k,
-		          "[8.8 arm %d] S-LAYERROWS: %zu entries, first %llu rows; want one batched pass of %zu", arm,
-		          sfd::LayerRowsLogCount(), static_cast<unsigned long long>(sfd::LayerRowsLogAt(0).rows), k);
+		CHECK_MSG(j.st == SSLM_OK && j.count == 0 && after.ctx == before.ctx, "[8.8 arm %d] status %d, count %d, context "
+		          "%lld -> %lld; want a no-op", arm, static_cast<int>(j.st), j.count, static_cast<long long>(before.ctx),
+		          static_cast<long long>(after.ctx));
+		CHECK_MSG(sfd::LayerRowsLogCount() == 0, "[8.8 arm %d] S-LAYERROWS: %zu entries; want none", arm,
+		          sfd::LayerRowsLogCount());
 		// Rev 1.2.2 (X13's kill): after the admission the sequence rests ready for logits, so the next decode
 		// runs a finish only: no S-LAYERROWS decode entry and no context_length rise.
 		CHECK_MSG(after.ready == 1, "[8.8 arm %d] after the admission: ready_for_logits %u", arm, after.ready);
@@ -3591,23 +3725,30 @@ void Cell_9_1() {
 			const Blob b = rig.State(s);
 			sslm_seq q = rig.Restore(rig.Save(s));
 			if (q) {
+				// MRX (ruling 23): the restore keeps Exact's verified prefix of the chain after its pending token.
+				const std::vector<int32_t> want = ExactKept(rig.m, q, 64);
 				const Jump j = JumpForward(rig.m, q, 64, nullptr, rig.W());
-				CHECK_MSG(b.current == c && b.ready == 0 && j.st == SSLM_OK && j.forced == r.st[b.walk].chain,
-				          "[9.1 pending] status %d forced %s, reference %s", static_cast<int>(j.st), Str(j.forced).c_str(),
-				          Str(r.st[b.walk].chain).c_str());
+				CHECK_MSG(b.current == c && b.ready == 0 && j.st == SSLM_OK && j.forced == want,
+				          "[9.1 pending] status %d kept %s, Exact's %s", static_cast<int>(j.st), Str(j.forced).c_str(),
+				          Str(want).c_str());
 			}
 		}
 	}
-	// (b) Ready for logits at a forced state (a partial explicit prefill).
+	// (b) Ready for logits at a forced state (a partial explicit prefill). MRX (ruling 23): no pending token, so the
+	// verb is a no-op on the restore, and decode continues as without restore.
 	{
 		sslm_seq s = rig.NewSeq(kPotion);
 		if (s && rig.PromptOk(s, f.prompt_potion) && rig.ContentOk(s, {start[0]})) {
-			const Blob b = rig.State(s);
-			sslm_seq q = rig.Restore(rig.Save(s));
+			const std::vector<uint8_t> saved = rig.Save(s);
+			sslm_seq q = rig.Restore(saved);
 			if (q) {
 				const Jump j = JumpForward(rig.m, q, 64, nullptr, rig.W());
-				CHECK_MSG(j.st == SSLM_OK && j.forced == r.st[b.walk].chain, "[9.1 ready, forced] status %d forced %s",
-				          static_cast<int>(j.st), Str(j.forced).c_str());
+				const bool same = rig.Save(q) == saved;
+				int32_t a = -100, b = -100;
+				rig.Decode1(s, rig.Greedy(), rig.W(), &a);
+				rig.Decode1(q, rig.Greedy(), rig.W(), &b);
+				CHECK_MSG(j.st == SSLM_OK && j.count == 0 && same && a == b, "[9.1 ready, forced] status %d count %d, blob "
+				          "unchanged %d, decode %d vs %d", static_cast<int>(j.st), j.count, same, a, b);
 			}
 		}
 	}
@@ -3647,26 +3788,20 @@ void Cell_9_1() {
 		CHECK_MSG(!b.empty() && b.size() == kMainBlobSize && BytesDigest(b) == kMainBlobDigest, "[9.1 main blob] %zu bytes, "
 		          "digest %s; main saved %zu bytes, %s", b.size(), BytesDigest(b).c_str(), kMainBlobSize, kMainBlobDigest);
 	}
-	// (g) A blob saved right after a verb call equals the blob of the same tokens admitted by explicit prefill
-	// (both add to forced_token_count, so the whole blob compares), which main can restore.
-	{
-		sslm_seq a = rig.NewSeq(kPotion);
-		sslm_seq b = rig.NewSeq(kPotion);
-		if (a && b && rig.PromptOk(a, f.prompt_potion) && rig.PromptOk(b, f.prompt_potion) && rig.ContentOk(b, start)) {
-			const Jump j = JumpForward(rig.m, a, 64, nullptr, rig.W());
-			CHECK_MSG(j.st == SSLM_OK && j.forced == start && rig.Save(a) == rig.Save(b), "[9.1 verb blob] status %d forced "
-			          "%s; the blob after the verb differs from explicit prefill's", static_cast<int>(j.st),
-			          Str(j.forced).c_str());
-		}
-		if (a) rig.Release(a);
-		if (b) rig.Release(b);
-	}
+	// (g) Retired by MRX (ruling 23): the verb's blob equal to an explicit prefill of the start chain is Canonical's
+	// (Exact admits no start span and never adds to forced_token_count); 9.X1 and (e) cover a blob saved after a verb.
 	// (e) A blob saved right after a verb call restores and continues by plain decode, as the original does.
+	// MRX (ruling 23): the verb keeps the pending token and a draft of the model's own next three tokens; both
+	// continuations also equal the run that never calls the verb.
 	{
+		const OffRun off = DecodeOnly(f.m1->m, kPotion, f.prompt_potion, nullptr, nullptr, 10);
 		sslm_seq s = rig.NewSeq(kPotion);
-		if (s && rig.PromptOk(s, f.prompt_potion)) {
-			const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
-			CHECK_MSG(j.st == SSLM_OK && j.forced == start, "[9.1 after a verb] status %d", static_cast<int>(j.st));
+		int32_t p = -100;
+		if (s && rig.PromptOk(s, f.prompt_potion) && rig.Decode1(s, rig.Greedy(), rig.W(), &p) == SSLM_OK) {
+			const std::vector<int32_t> draft = OwnNext(rig.m, s, 3);
+			const Jump j = JumpDraft(rig.m, s, 64, nullptr, rig.W(), draft);
+			CHECK_MSG(j.st == SSLM_OK && j.forced == draft && draft.size() == 3, "[9.1 after a verb] status %d kept %s, "
+			          "draft %s", static_cast<int>(j.st), Str(j.forced).c_str(), Str(draft).c_str());
 			sslm_seq q = rig.Restore(rig.Save(s));
 			if (q) {
 				std::vector<int32_t> a, b;
@@ -3677,7 +3812,11 @@ void Cell_9_1() {
 					a.push_back(x);
 					b.push_back(y);
 				}
-				CHECK_MSG(a == b, "[9.1 after a verb] restored %s, original %s", Str(b).c_str(), Str(a).c_str());
+				const std::vector<int32_t> want =
+				    off.stream.size() >= 10 ? std::vector<int32_t>(off.stream.begin() + 4, off.stream.begin() + 10)
+				                            : std::vector<int32_t>{};
+				CHECK_MSG(a == b && a == want, "[9.1 after a verb] restored %s, original %s, decode-only %s",
+				          Str(b).c_str(), Str(a).c_str(), Str(want).c_str());
 			}
 		}
 	}
@@ -3823,48 +3962,56 @@ void Cell_10_2() {
 }
 
 // 11.2 [J1] The pre-scan still rejects an illegal forced token when the table is corrupted through a seam.
+// MRX (ruling 23): Exact's draft (here the forced chain after the pending token) is cut at its first illegal token,
+// so a chain corrupted to begin with one leaves an empty draft: a no-op, SSLM_OK, count 0, nothing changed.
 void Cell_11_2() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
 	std::unique_ptr<Mapped> m = Map(f.raw);  // its own copy: the corruption must not reach other cells
 	if (!m->m) return;
-	const RefSchema& r = f.R(kPotion);
-	const int32_t illegal = f.byte_tok['!'];
-	uint32_t n = 0;
-	CHECK_MSG(!f.Step(kPotion, r.start, illegal, &n), "[11.2] '!' is legal at POTION's start; pick another token");
-	const sslm_status cs = sfd::CorruptForcedTableEntry(m->m, f.Index(kPotion), r.start, illegal);
-	CHECK_MSG(cs == SSLM_OK, "[11.2] the corruption seam == %d", static_cast<int>(cs));
 	Rig rig(m->m);
 	sslm_seq s = rig.NewSeq(kPotion);
-	if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
+	int32_t p = -100;
+	if (!s || !rig.PromptOk(s, f.prompt_potion) || rig.Decode1(s, rig.Greedy(), rig.W(), &p) != SSLM_OK) return;
+	const uint32_t w = rig.State(s).walk;
+	const int32_t illegal = f.byte_tok['!'];
+	uint32_t n = 0;
+	CHECK_MSG(!f.Step(kPotion, w, illegal, &n), "[11.2] '!' is legal at state %u; pick another token", w);
+	const sslm_status cs = sfd::CorruptForcedTableEntry(m->m, f.Index(kPotion), w, illegal);
+	CHECK_MSG(cs == SSLM_OK, "[11.2] the corruption seam == %d", static_cast<int>(cs));
 	const std::vector<uint8_t> before = rig.Save(s);
 	const Jump j = JumpForward(rig.m, s, 64, nullptr, rig.W());
-	CHECK_MSG(j.st == SSLM_SCHEMA_SPAN_UNREACHABLE && j.count == 0 && rig.Save(s) == before,
-	          "[11.2] a corrupted chain: status %d count %d (want SSLM_SCHEMA_SPAN_UNREACHABLE, nothing admitted)",
+	CHECK_MSG(j.st == SSLM_OK && j.count == 0 && rig.Save(s) == before,
+	          "[11.2] a corrupted chain: status %d count %d (want SSLM_OK, nothing kept, nothing changed)",
 	          static_cast<int>(j.st), j.count);
 }
 
 // 11.3 [J1] With prewalked_prefix = 1, S-WALK records zero walk steps for the pending token.
+// MRX (ruling 23): with no pending token the call is a no-op and walks nothing; with one, the pre-scan walks the
+// drafted tokens (the chain after the pending token, clipped to budget - 1) and none for the pending token, and the
+// call keeps Exact's verified prefix.
 void Cell_11_3() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
-	const RefSchema& r = f.R(kPotion);
 	Rig rig(f.m1->m);
 	sslm_seq s = rig.NewSeq(kPotion);
 	if (!s || !rig.PromptOk(s, f.prompt_potion)) return;
 	sfd::WalkCountReset();
 	const Jump j0 = JumpForward(rig.m, s, 64, nullptr, rig.W());
-	CHECK_MSG(j0.st == SSLM_OK && sfd::WalkCount() == r.st[r.start].chain.size(), "[11.3] the start span (no pending): "
-	          "%llu walk steps, want %zu", static_cast<unsigned long long>(sfd::WalkCount()), r.st[r.start].chain.size());
+	CHECK_MSG(j0.st == SSLM_OK && j0.count == 0 && sfd::WalkCount() == 0, "[11.3] no pending: status %d count %d, %llu "
+	          "walk steps, want a no-op and none", static_cast<int>(j0.st), j0.count,
+	          static_cast<unsigned long long>(sfd::WalkCount()));
 	int32_t c = -100;
 	rig.Decode1(s, rig.Greedy(), rig.W(), &c);
-	const uint32_t w = rig.State(s).walk;
+	const Query q = QueryForced(rig.m, s);
+	const uint64_t k = uint64_t(std::min(q.count, 63));
+	const std::vector<int32_t> want = ExactKept(rig.m, s, 64);
 	sfd::WalkCountReset();
 	const Jump j1 = JumpForward(rig.m, s, 64, nullptr, rig.W());
-	CHECK_MSG(j1.st == SSLM_OK && j1.count > 0 && sfd::WalkCount() == uint64_t(j1.count) &&
-	              j1.forced == r.st[w < r.st.size() ? w : 0].chain,
-	          "[11.3] pending + %d forced: %llu walk steps, want %d (none for the pending token)", j1.count,
-	          static_cast<unsigned long long>(sfd::WalkCount()), j1.count);
+	CHECK_MSG(j1.st == SSLM_OK && k > 0 && sfd::WalkCount() == k && j1.forced == want,
+	          "[11.3] pending + a %llu-token draft: %llu walk steps (want %llu, none for the pending token), kept %s "
+	          "(Exact's %s)", static_cast<unsigned long long>(k), static_cast<unsigned long long>(sfd::WalkCount()),
+	          static_cast<unsigned long long>(k), Str(j1.forced).c_str(), Str(want).c_str());
 }
 
 // ===================================================================================================
@@ -3912,17 +4059,20 @@ struct SpanRun {
 	std::vector<uint8_t> blob;
 	std::vector<sfd::LayerRowsEntry> passes;
 	size_t run_calls = 0;
+	std::vector<uint8_t> next_blob;  // MRX (ruling 23): after one more decode (Q6cSpan)
 };
 
-// A LONGKEY sequence resting ready for logits at `state` (the prompt, then the reference path as content,
-// with no workspace and so no hook), then one verb call at `budget` under `arm`. `kv_room` >= 0 makes the
-// holder a budget holder with that many positions past the path; `threads` runs the hook's tasks on their
-// own threads; `max_tasks` and `null_run` shape the hook (Q6C.5).
-SpanRun Q6cSpan(const Sfd& f, uint32_t state, int32_t budget, Q6cArm arm, const sslm_decode_params* params = nullptr,
-                int32_t kv_room = -1, bool threads = false, int32_t max_tasks = 4, bool null_run = false) {
+// MRX (ruling 23): the Q6 C vehicle is an Exact pass. A LONGKEY sequence with a pending token (the prompt, then one
+// decode, both with no workspace and so no hook; under `params` when given, else greedy), then one verb call at
+// `budget` under `arm` with `draft`. A pass is the pending token and the draft clipped to budget - 1 (and to the
+// rows a budget holder leaves), M rows; a draft of the model's own next tokens (Q6cDraft) is kept whole, count M - 1.
+// `kv_room` >= 0 makes the holder a budget holder with that many positions past the prompt; `threads` runs the
+// hook's tasks on their own threads; `max_tasks` and `null_run` shape the hook (Q6C.5). `next_blob` is the blob after
+// one more decode (no hook), when the sequence again rests with a pending token.
+SpanRun Q6cSpan(const Sfd& f, const std::vector<int32_t>& draft, int32_t budget, Q6cArm arm,
+                const sslm_decode_params* params = nullptr, int32_t kv_room = -1, bool threads = false,
+                int32_t max_tasks = 4, bool null_run = false) {
 	SpanRun o;
-	const RefSchema& r = f.R(kLongKey);
-	if (state >= r.st.size()) return o;
 	Rig rig(f.m1->m);
 	CountingHook h;
 	h.max_tasks = max_tasks;
@@ -3936,27 +4086,44 @@ SpanRun Q6cSpan(const Sfd& f, uint32_t state, int32_t budget, Q6cArm arm, const 
 		          null_run ? "null" : "set", static_cast<int>(st));
 		if (st != SSLM_OK) return o;
 	}
-	sslm_seq s = kv_room < 0 ? rig.NewSeq(kLongKey)
-	                         : rig.NewBudgeted(int32_t(f.prompt_potion.size() + r.st[state].path.size()) + kv_room, kLongKey);
-	if (!s || !rig.PromptOk(s, f.prompt_potion) || !rig.ContentOk(s, r.st[state].path)) return o;
+	const sslm_decode_params dp = params ? *params : rig.Greedy();
+	sslm_seq s = kv_room < 0 ? rig.NewSeq(kLongKey) : rig.NewBudgeted(int32_t(f.prompt_potion.size()) + kv_room, kLongKey);
+	int32_t t = -100;
+	if (!s || !rig.PromptOk(s, f.prompt_potion) || rig.Decode1(s, dp, nullptr, &t) != SSLM_OK || t < 0) return o;
 	h.Clear();
 	sfd::LayerRowsLogReset();
-	o.j = JumpForward(rig.m, s, budget, params, rig.W());
+	o.j = JumpDraft(rig.m, s, budget, params, rig.W(), draft);
 	o.passes = Q6cPasses();
 	o.run_calls = h.Counts().size();
 	o.blob = rig.Save(s);
 	o.ok = !o.blob.empty();
+	if (rig.Decode1(s, dp, nullptr, &t) == SSLM_OK) o.next_blob = rig.Save(s);
 	return o;
 }
 
-// The first LONGKEY state whose forced chain has exactly `len` tokens (UINT32_MAX if none), and the state
-// with the longest chain.
-uint32_t Q6cChainState(const Sfd& f, size_t len) {
-	const RefSchema& r = f.R(kLongKey);
-	for (uint32_t s = 0; s < r.st.size(); ++s)
-		if (r.st[s].forced && r.st[s].chain.size() == len) return s;
-	return UINT32_MAX;
+// The model's own next `n` tokens after Q6cSpan's entry (the run that never calls the verb).
+std::vector<int32_t> Q6cDraft(const Sfd& f, int n, const sslm_decode_params* params = nullptr) {
+	Rig rig(f.m1->m);
+	const sslm_decode_params dp = params ? *params : rig.Greedy();
+	sslm_seq s = rig.NewSeq(kLongKey);
+	int32_t t = -100;
+	if (!s || !rig.PromptOk(s, f.prompt_potion) || rig.Decode1(s, dp, nullptr, &t) != SSLM_OK || t < 0) return {};
+	return OwnNext(rig.m, s, n, params);
 }
+
+// The blob of the run that never calls the verb, after `decodes` decodes past the prompt.
+std::vector<uint8_t> Q6cDecodeOnlyBlob(const Sfd& f, int decodes) {
+	Rig rig(f.m1->m);
+	sslm_seq s = rig.NewSeq(kLongKey);
+	if (!s || !rig.PromptOk(s, f.prompt_potion)) return {};
+	for (int i = 0; i < decodes; ++i) {
+		int32_t t = -100;
+		if (rig.Decode1(s, rig.Greedy(), nullptr, &t) != SSLM_OK || t < 0) return {};
+	}
+	return rig.Save(s);
+}
+
+// The LONGKEY state with the longest chain.
 uint32_t Q6cLongestState(const Sfd& f) {
 	const RefSchema& r = f.R(kLongKey);
 	uint32_t best = UINT32_MAX;
@@ -3965,58 +4132,69 @@ uint32_t Q6cLongestState(const Sfd& f) {
 	return best;
 }
 
+// The Q6 C shape of an Exact call with an M-row pass that kept `kept` rows (the pending token and its confirmed
+// tokens): none for M < 2 (a no-op); under bit 1 with 2 <= M <= 7, one-row passes with the check between them, one
+// per kept row; otherwise one batched pass of M rows (rolled back past the first mismatch).
+bool Q6cExactShapeIs(const std::vector<sfd::LayerRowsEntry>& passes, size_t m, size_t kept, bool bit1) {
+	if (m < 2) return passes.empty();
+	if (bit1 && m <= kQ6cSplitMax) return Q6cShapeIs(passes, kept, true) || (kept == 1 && passes.size() == 1 &&
+	                                                                          passes[0].kind == sfd::kLayerRowsBatched &&
+	                                                                          passes[0].rows == 1);
+	return Q6cShapeIs(passes, m, false);
+}
+
 // Q6C.1 [Q6 C] One verb call at M = 1, 2, 7, 8 and 9 rows, both as a whole span (budget 64 at a state whose
 // chain is M) and as a chunk_budget-bounded piece (budget M at the longest chain). Under bit 1 the status,
 // forced ids and whole blob equal the batched pass's (no hook, and bit 0) and the token-by-token reference
 // (the same tokens as explicit content, one per prefill call); 7 splits into seven threaded one-row passes,
 // 8 stays one serial pass of eight. Bit 0 keeps one pass at every M and never calls `run`. The bit-1 arm's
 // hook runs its tasks on real threads, so the cell is also the split path's TSan cell.
+// MRX (ruling 23): re-pointed to Exact passes of M = 2, 7, 8 and 9 rows (the pending token and a draft of the
+// model's own next M - 1 tokens, all kept: count M - 1); M = 1 is dropped (an Exact pass of the pending token alone
+// does not exist: an empty draft is a no-op). "Span" is budget 64 with a draft of M - 1; "piece" is budget M with a
+// 26-token draft, clipped to M - 1. The token-by-token reference is now the decode-only run: after one more decode
+// the blob equals the decode-only blob after M + 1 decodes. `run` is asserted only for the split (bit 1, M <= 7):
+// Exact's checking finishes run inside the call and may call `run` at any M and under any bits, so "never calls run"
+// (bit 0, and bit 1 at M >= 8) is dropped; S-LAYERROWS still tells the split from the one pass.
 void Cell_Q6C_1() {
 	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
-	const RefSchema& r = f.R(kLongKey);
-	const uint32_t longest = Q6cLongestState(f);
-	CHECK_MSG(longest != UINT32_MAX && r.st[longest].chain.size() >= 9, "[Q6C.1] LONGKEY has no chain of 9 or more");
-	if (longest == UINT32_MAX || r.st[longest].chain.size() < 9) return;
-	for (size_t m : {size_t{1}, size_t{2}, size_t{7}, size_t{8}, size_t{9}}) {
+	const std::vector<int32_t> longest = Q6cDraft(f, 26);
+	CHECK_MSG(longest.size() == 26, "[Q6C.1] the model gave %zu next tokens, want 26", longest.size());
+	if (longest.size() != 26) return;
+	for (size_t m : {size_t{2}, size_t{7}, size_t{8}, size_t{9}}) {
+		const std::vector<int32_t> want(longest.begin(), longest.begin() + std::ptrdiff_t(m - 1));
+		const std::vector<uint8_t> ref_next = Q6cDecodeOnlyBlob(f, int(m) + 1);
 		for (int piece = 0; piece < 2; ++piece) {
-			const uint32_t at = piece ? longest : Q6cChainState(f, m);
+			const std::vector<int32_t>& draft = piece ? longest : want;
 			const int32_t budget = piece ? int32_t(m) : 64;
-			CHECK_MSG(at != UINT32_MAX, "[Q6C.1 M %zu] LONGKEY has no chain of exactly %zu", m, m);
-			if (at == UINT32_MAX) continue;
-			const std::vector<int32_t> want(r.st[at].chain.begin(), r.st[at].chain.begin() + std::ptrdiff_t(m));
 			const char* how = piece ? "piece" : "span";
-			const SpanRun bit1 = Q6cSpan(f, at, budget, Q6cArm::kBit1, nullptr, -1, /*threads=*/true);
-			const SpanRun plain = Q6cSpan(f, at, budget, Q6cArm::kNoHook);
-			const SpanRun bit0 = Q6cSpan(f, at, budget, Q6cArm::kBit0);
+			const SpanRun bit1 = Q6cSpan(f, draft, budget, Q6cArm::kBit1, nullptr, -1, /*threads=*/true);
+			const SpanRun plain = Q6cSpan(f, draft, budget, Q6cArm::kNoHook);
+			const SpanRun bit0 = Q6cSpan(f, draft, budget, Q6cArm::kBit0);
 			for (const SpanRun* x : {&bit1, &plain, &bit0}) {
 				const char* arm = x == &bit1 ? "bit 1" : x == &plain ? "no hook" : "bit 0";
-				CHECK_MSG(x->ok && x->j.st == SSLM_OK && x->j.count == int32_t(m) && x->j.forced == want,
-				          "[Q6C.1 M %zu %s, %s] status %d count %d forced %s; want %s", m, how, arm,
+				CHECK_MSG(x->ok && x->j.st == SSLM_OK && x->j.count == int32_t(m) - 1 && x->j.forced == want,
+				          "[Q6C.1 M %zu %s, %s] status %d count %d kept %s; want %s", m, how, arm,
 				          static_cast<int>(x->j.st), x->j.count, Str(x->j.forced).c_str(), Str(want).c_str());
 			}
 			CHECK_MSG(bit1.blob == plain.blob && bit0.blob == plain.blob, "[Q6C.1 M %zu %s] the save blob: bit 1 %s, bit 0 "
 			          "%s the no-hook batched pass's", m, how, bit1.blob == plain.blob ? "equals" : "differs from",
 			          bit0.blob == plain.blob ? "equals" : "differs from");
-			// The token-by-token reference: main's explicit content prefill, one token per call.
-			{
-				Rig rig(f.m1->m);
-				sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
-				if (s && rig.ContentOk(s, want, 1)) {
-					CHECK_MSG(rig.Save(s) == bit1.blob, "[Q6C.1 M %zu %s] bit 1's blob differs from the token-by-token "
-					          "reference", m, how);
-				}
-			}
+			// The reference: the run that never calls the verb, compared after one more decode.
+			CHECK_MSG(!ref_next.empty() && bit1.next_blob == ref_next, "[Q6C.1 M %zu %s] after one more decode bit 1's "
+			          "blob differs from the decode-only run's", m, how);
 			// The boundary.
 			CHECK_MSG(Q6cShapeIs(bit1.passes, m, true), "[Q6C.1 M %zu %s, bit 1] S-LAYERROWS %s; want %s", m, how,
 			          Q6cShape(bit1.passes).c_str(),
 			          (m >= 2 && m <= kQ6cSplitMax) ? "one-row passes, one per row" : "one batched pass of M rows");
-			CHECK_MSG((m <= kQ6cSplitMax) == (bit1.run_calls > 0), "[Q6C.1 M %zu %s, bit 1] %zu run calls; want %s", m,
-			          how, bit1.run_calls, m <= kQ6cSplitMax ? "some (threaded one-row passes)" : "none (one serial pass)");
-			CHECK_MSG(Q6cShapeIs(bit0.passes, m, false) && bit0.run_calls == 0, "[Q6C.1 M %zu %s, bit 0] S-LAYERROWS %s, "
-			          "%zu run calls; want one pass of M rows and none", m, how, Q6cShape(bit0.passes).c_str(),
-			          bit0.run_calls);
+			if (m <= kQ6cSplitMax) {
+				CHECK_MSG(bit1.run_calls > 0, "[Q6C.1 M %zu %s, bit 1] %zu run calls; want some (threaded one-row passes)",
+				          m, how, bit1.run_calls);
+			}
+			CHECK_MSG(Q6cShapeIs(bit0.passes, m, false), "[Q6C.1 M %zu %s, bit 0] S-LAYERROWS %s; want one pass of M rows",
+			          m, how, Q6cShape(bit0.passes).c_str());
 			CHECK_MSG(Q6cShapeIs(plain.passes, m, false), "[Q6C.1 M %zu %s, no hook] S-LAYERROWS %s", m, how,
 			          Q6cShape(plain.passes).c_str());
 		}
@@ -4029,6 +4207,9 @@ void Cell_Q6C_1() {
 // rule's, every verb call's passes have the rule's shape for the rows it admitted, and no call runs more
 // rows than its budget (C11). Then a span cut by the holder's K/V budget (a partial admission, 5 of 9):
 // the limit status, count and blob equal the batched pass's, and the 5 admitted rows ran split.
+// MRX (ruling 23): the shape is Exact's for each call's pass of M rows (read before the call; Q6cExactShapeIs),
+// the stream is the decode-only run's, and the K/V-budget arm is a pending token with a draft of 8 own tokens and
+// room for 5 rows: the draft is clipped to 4, Exact returns SSLM_OK with 4 kept, and the 5 rows ran split.
 void Cell_Q6C_2() {
 	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
@@ -4054,13 +4235,15 @@ void Cell_Q6C_2() {
 			std::string first_bad;
 			o.after = [&](sslm_seq&, const JfStep& st) {
 				if (st.kind == 0 && st.st == SSLM_OK) {
-					const size_t m = st.toks.size() + (st.embedded_pending ? 1 : 0);
+					const size_t m = size_t(st.pass_rows);
+					const size_t kept = st.embedded_pending ? 1 + st.toks.size() : 0;
 					const std::vector<sfd::LayerRowsEntry> passes = Q6cPasses();
 					uint64_t rows = 0;
 					for (const sfd::LayerRowsEntry& e : passes) rows += e.rows;
 					if (rows > uint64_t(budget)) ++over_budget;
-					if (m >= 1 && !Q6cShapeIs(passes, m, true)) {
-						if (bad_shape++ == 0) first_bad = "M " + std::to_string(m) + ": " + Q6cShape(passes);
+					if (!Q6cExactShapeIs(passes, m, kept, true)) {
+						if (bad_shape++ == 0)
+							first_bad = "M " + std::to_string(m) + " kept " + std::to_string(kept) + ": " + Q6cShape(passes);
 					}
 					if (m >= 2 && m <= kQ6cSplitMax) ++split_calls;
 				}
@@ -4070,7 +4253,7 @@ void Cell_Q6C_2() {
 			if (!s || !rig.PromptOk(s, f.prompt_potion)) continue;
 			sfd::LayerRowsLogReset();
 			const JfRun r = RunJf(rig.m, s, o);
-			CheckStreamIsReference("Q6C.2", f, schema, r);
+			CheckStreamIsReference("Q6C.2", f, schema, f.prompt_potion, r);
 			CHECK_MSG(r.stream == plain && !plain.empty() && rig.Save(s) == plain_blob, "[Q6C.2] %s budget %d under bit 1: "
 			          "stream %s, no hook %s; the blob %s", schema, budget, Str(r.stream).c_str(), Str(plain).c_str(),
 			          rig.Save(s) == plain_blob ? "equal" : "differs");
@@ -4079,19 +4262,19 @@ void Cell_Q6C_2() {
 			CHECK_MSG(bad_shape == 0, "[Q6C.2] %s budget %d: %d verb calls do not have the rule's passes (first: %s)",
 			          schema, budget, bad_shape, first_bad.c_str());
 			if (budget >= 2) {
-				CHECK_MSG(split_calls > 0, "[Q6C.2] %s budget %d: no verb call admitted 2..7 rows; the arm shows nothing",
-				          schema, budget);
+				CHECK_MSG(split_calls > 0, "[Q6C.2] %s budget %d: no verb call had a pass of 2..7 rows; the arm shows "
+				          "nothing", schema, budget);
 			}
 		}
 	}
-	// The K/V budget cuts a 9-token span at 5.
-	const uint32_t at = Q6cChainState(f, 9);
-	CHECK_MSG(at != UINT32_MAX, "[Q6C.2] LONGKEY has no chain of exactly 9");
-	if (at == UINT32_MAX) return;
-	const SpanRun bit1 = Q6cSpan(f, at, 64, Q6cArm::kBit1, nullptr, 5);
-	const SpanRun plain = Q6cSpan(f, at, 64, Q6cArm::kNoHook, nullptr, 5);
-	CHECK_MSG(plain.ok && plain.j.st == SSLM_KV_BUDGET_EXCEEDED && plain.j.count == 5, "[Q6C.2 K/V budget] no hook: status "
-	          "%d count %d; want SSLM_KV_BUDGET_EXCEEDED and 5", static_cast<int>(plain.j.st), plain.j.count);
+	// The K/V budget cuts an 8-token draft at 4 (5 rows with the pending token).
+	const std::vector<int32_t> draft = Q6cDraft(f, 8);
+	const std::vector<int32_t> want(draft.begin(), draft.begin() + std::ptrdiff_t(std::min<size_t>(4, draft.size())));
+	const SpanRun bit1 = Q6cSpan(f, draft, 64, Q6cArm::kBit1, nullptr, 5);
+	const SpanRun plain = Q6cSpan(f, draft, 64, Q6cArm::kNoHook, nullptr, 5);
+	CHECK_MSG(draft.size() == 8 && plain.ok && plain.j.st == SSLM_OK && plain.j.count == 4 && plain.j.forced == want,
+	          "[Q6C.2 K/V budget] no hook: status %d count %d kept %s; want SSLM_OK and %s", static_cast<int>(plain.j.st),
+	          plain.j.count, Str(plain.j.forced).c_str(), Str(want).c_str());
 	CHECK_MSG(bit1.ok && bit1.j.st == plain.j.st && bit1.j.count == plain.j.count && bit1.j.forced == plain.j.forced &&
 	              bit1.blob == plain.blob,
 	          "[Q6C.2 K/V budget] bit 1: status %d count %d, the blob %s; want the batched pass's", static_cast<int>(bit1.j.st),
@@ -4105,6 +4288,8 @@ void Cell_Q6C_2() {
 // blob (the anti-LM order and history included) equal the uninterrupted no-hook run's. (b) One 9-token span
 // as three budget-3 calls (three splits), with a save and a restore between them: the blob equals one
 // no-hook call admitting all nine, and its history holds the nine forced tokens in order.
+// MRX (ruling 23): (a) counts the calls whose pass of M rows ran Exact's split; (b) is retired (an Exact span is
+// one call's: a span cannot continue across calls, each call needs its own pending token).
 void Cell_Q6C_3() {
 	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
@@ -4138,8 +4323,9 @@ void Cell_Q6C_3() {
 			int splits = 0;
 			o.after = [&](sslm_seq& q, const JfStep& st) {
 				if (st.kind == 0 && st.st == SSLM_OK) {
-					const size_t m = st.toks.size() + (st.embedded_pending ? 1 : 0);
-					if (m >= 2 && m <= kQ6cSplitMax && Q6cShapeIs(Q6cPasses(), m, true)) ++splits;
+					const size_t m = size_t(st.pass_rows);
+					const size_t kept = st.embedded_pending ? 1 + st.toks.size() : 0;
+					if (m >= 2 && m <= kQ6cSplitMax && kept >= 2 && Q6cExactShapeIs(Q6cPasses(), m, kept, true)) ++splits;
 				}
 				sfd::LayerRowsLogReset();
 				if (st.st != SSLM_OK) return;
@@ -4163,50 +4349,6 @@ void Cell_Q6C_3() {
 			CHECK_MSG(splits > 0, "[Q6C.3 (a)] %s budget %d: no verb call ran split", schema, budget);
 		}
 	}
-	// (b)
-	const uint32_t at = Q6cChainState(f, 9);
-	const RefSchema& r = f.R(kLongKey);
-	CHECK_MSG(at != UINT32_MAX, "[Q6C.3 (b)] LONGKEY has no chain of exactly 9");
-	if (at == UINT32_MAX) return;
-	std::vector<uint8_t> one;
-	{
-		Rig rig(f.m1->m);
-		const sslm_decode_params p = rig.Damped();
-		sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
-		if (!s) return;
-		const Jump j = JumpForward(rig.m, s, 64, &p, rig.W());
-		CHECK_MSG(j.st == SSLM_OK && j.forced == r.st[at].chain, "[Q6C.3 (b)] one no-hook call: status %d, %s",
-		          static_cast<int>(j.st), Str(j.forced).c_str());
-		one = rig.Save(s);
-	}
-	Rig rig(f.m1->m);
-	CountingHook h;
-	h.max_tasks = 4;
-	if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) return;
-	const sslm_decode_params p = rig.Damped();
-	sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
-	if (!s) return;
-	std::vector<int32_t> got;
-	int split_calls = 0;
-	for (int call = 0; call < 3; ++call) {
-		sfd::LayerRowsLogReset();
-		const Jump j = JumpForward(rig.m, s, 3, &p, rig.W());
-		if (j.st == SSLM_OK && j.count == 3 && Q6cShapeIs(Q6cPasses(), 3, true)) ++split_calls;
-		got.insert(got.end(), j.forced.begin(), j.forced.end());
-		if (call < 2) {
-			sslm_seq fresh = rig.Restore(rig.Save(s));
-			if (!fresh) return;
-			rig.Release(s);
-			s = fresh;
-		}
-	}
-	const std::vector<uint8_t> three = rig.Save(s);
-	const Blob b = ParseBlob(three);
-	CHECK_MSG(got == r.st[at].chain && three == one, "[Q6C.3 (b)] three budget-3 calls with save/restore: %s, the blob %s "
-	          "one no-hook call's", Str(got).c_str(), three == one ? "equals" : "differs from");
-	CHECK_MSG(b.ok && b.hist == r.st[at].chain, "[Q6C.3 (b)] the anti-LM history %s; want the nine forced tokens %s",
-	          Str(b.hist).c_str(), Str(r.st[at].chain).c_str());
-	CHECK_MSG(split_calls == 3, "[Q6C.3 (b)] %d of 3 calls ran as three threaded one-row passes", split_calls);
 }
 
 // Q6C.4 [Q6 C] A failure inside a split span. A hostile hook (omit, then duplicate) breaks exactly-once on
@@ -4216,41 +4358,42 @@ void Cell_Q6C_3() {
 // SSLM_INVALID_ARGUMENT with nothing admitted, the anti-LM order and history and the whole save blob are
 // unchanged (the K/V rows past context_length are not in it, the saturation census is restored), and a
 // retry with an honest hook gives the blob of a call that never failed.
+// MRX (ruling 23): the 3-row split is an Exact pass (damped order 2, the pending token and two own drafted tokens,
+// budget 3). Exact's failure rule: a failure before any row is kept returns its status with nothing changed (the
+// first call, row 1: SSLM_INVALID_ARGUMENT, and the retry gives the never-failed blob); a failure after a row is kept
+// returns SSLM_OK with the verified rows kept (the first call of row 3, which a two-row call never makes: count 1 and
+// the blob of a never-failed call with a one-token draft). The middle-of-row-2 and last-call arms are dropped: which
+// calls a row's checking finish makes is not fixed by the contract.
 void Cell_Q6C_4() {
 	const MinWorkScope min_work(kSmallMinWork);
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
-	const uint32_t at = Q6cChainState(f, 9);
-	CHECK_MSG(at != UINT32_MAX, "[Q6C.4] LONGKEY has no chain of exactly 9");
-	if (at == UINT32_MAX) return;
-	// The never-failed call, and the number of run calls it makes.
-	std::vector<uint8_t> ref_after;
-	size_t calls = 0;
+	sslm_decode_params p2{};
 	{
 		Rig rig(f.m1->m);
-		CountingHook h;
-		h.max_tasks = 4;
-		if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) return;
-		const sslm_decode_params p = rig.Damped(2);
-		sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
-		if (!s) return;
-		h.Clear();
-		sfd::LayerRowsLogReset();
-		const Jump j = JumpForward(rig.m, s, 3, &p, rig.W());
-		calls = h.Counts().size();
-		CHECK_MSG(j.st == SSLM_OK && j.count == 3 && Q6cShapeIs(Q6cPasses(), 3, true) && calls >= 3 && calls % 3 == 0,
-		          "[Q6C.4] the never-failed call: status %d count %d, S-LAYERROWS %s, %zu run calls; want three "
-		          "threaded one-row passes with the same run calls each", static_cast<int>(j.st), j.count,
-		          Q6cShape(Q6cPasses()).c_str(), calls);
-		ref_after = rig.Save(s);
+		p2 = rig.Damped(2);
 	}
-	if (calls < 3 || calls % 3 != 0) return;
-	const size_t per_row = calls / 3;
+	const std::vector<int32_t> draft = Q6cDraft(f, 2, &p2);
+	const std::vector<int32_t> draft1(draft.begin(), draft.begin() + std::ptrdiff_t(std::min<size_t>(1, draft.size())));
+	CHECK_MSG(draft.size() == 2, "[Q6C.4] the model gave %zu next tokens, want 2", draft.size());
+	if (draft.size() != 2) return;
+	// The never-failed calls (two and three rows), and the run calls each makes.
+	const SpanRun ref3 = Q6cSpan(f, draft, 3, Q6cArm::kBit1, &p2);
+	const SpanRun ref2 = Q6cSpan(f, draft1, 3, Q6cArm::kBit1, &p2);
+	CHECK_MSG(ref3.ok && ref3.j.st == SSLM_OK && ref3.j.count == 2 && Q6cShapeIs(ref3.passes, 3, true) &&
+	              ref2.ok && ref2.j.st == SSLM_OK && ref2.j.count == 1 && ref3.run_calls > ref2.run_calls &&
+	              ref2.run_calls > 0,
+	          "[Q6C.4] the never-failed calls: status %d count %d, S-LAYERROWS %s, %zu run calls; with a one-token draft "
+	          "status %d count %d, %zu run calls; want three threaded one-row passes, and more run calls than two rows",
+	          static_cast<int>(ref3.j.st), ref3.j.count, Q6cShape(ref3.passes).c_str(), ref3.run_calls,
+	          static_cast<int>(ref2.j.st), ref2.j.count, ref2.run_calls);
+	if (ref3.run_calls <= ref2.run_calls || ref2.run_calls == 0) return;
 	struct Where {
 		const char* name;
 		size_t call;
+		bool kept_one;
 	};
-	const Where wheres[] = {{"first call (row 1)", 0}, {"middle of row 2", per_row + per_row / 2}, {"last call (row 3)", calls - 1}};
+	const Where wheres[] = {{"first call (row 1)", 0, false}, {"first call of row 3", ref2.run_calls, true}};
 	for (Hostile kind : {Hostile::kOmit, Hostile::kDuplicate}) {
 		const char* kname = kind == Hostile::kOmit ? "omit" : "duplicate";
 		for (const Where& w : wheres) {
@@ -4259,26 +4402,35 @@ void Cell_Q6C_4() {
 			h.max_tasks = 4;
 			h.hostile = kind;
 			h.hostile_call = static_cast<int>(w.call);
+			sslm_seq s = rig.NewSeq(kLongKey);
+			int32_t t = -100;
+			if (!s || !rig.PromptOk(s, f.prompt_potion) || rig.Decode1(s, p2, nullptr, &t) != SSLM_OK) continue;
 			if (!rig.ok || !Install(rig.W(), &h, SSLM_PARALLEL_FOR_MATVEC)) continue;
-			const sslm_decode_params p = rig.Damped(2);
-			sslm_seq s = ReachState(rig, f, kLongKey, at, f.prompt_potion);
-			if (!s) continue;
 			const std::vector<uint8_t> before = rig.Save(s);
 			h.Clear();
-			const Jump j = JumpForward(rig.m, s, 3, &p, rig.W());
-			CHECK_MSG(h.Counts().size() > w.call && j.st == SSLM_INVALID_ARGUMENT && j.count == 0, "[Q6C.4 %s, %s] %zu "
-			          "run calls (the hostile one is %zu), status %d count %d; want SSLM_INVALID_ARGUMENT and nothing "
-			          "admitted", kname, w.name, h.Counts().size(), w.call, static_cast<int>(j.st), j.count);
+			const Jump j = JumpDraft(rig.m, s, 3, &p2, rig.W(), draft);
 			const std::vector<uint8_t> after = rig.Save(s);
 			const Blob b0 = ParseBlob(before), b1 = ParseBlob(after);
-			CHECK_MSG(after == before, "[Q6C.4 %s, %s] the failed call changed the save blob (order %d -> %d, history %s "
-			          "-> %s, context %lld -> %lld)", kname, w.name, b0.order, b1.order, Str(b0.hist).c_str(),
-			          Str(b1.hist).c_str(), static_cast<long long>(b0.ctx), static_cast<long long>(b1.ctx));
-			h.hostile = Hostile::kNone;
-			const Jump retry = JumpForward(rig.m, s, 3, &p, rig.W());
-			CHECK_MSG(retry.st == SSLM_OK && retry.count == 3 && rig.Save(s) == ref_after, "[Q6C.4 %s, %s] the retry: "
-			          "status %d count %d, the blob %s the never-failed call's", kname, w.name, static_cast<int>(retry.st),
-			          retry.count, rig.Save(s) == ref_after ? "equals" : "differs from");
+			if (!w.kept_one) {
+				CHECK_MSG(h.Counts().size() > w.call && j.st == SSLM_INVALID_ARGUMENT && j.count == 0, "[Q6C.4 %s, %s] %zu "
+				          "run calls (the hostile one is %zu), status %d count %d; want SSLM_INVALID_ARGUMENT and nothing "
+				          "admitted", kname, w.name, h.Counts().size(), w.call, static_cast<int>(j.st), j.count);
+				CHECK_MSG(after == before, "[Q6C.4 %s, %s] the failed call changed the save blob (order %d -> %d, history "
+				          "%s -> %s, context %lld -> %lld)", kname, w.name, b0.order, b1.order, Str(b0.hist).c_str(),
+				          Str(b1.hist).c_str(), static_cast<long long>(b0.ctx), static_cast<long long>(b1.ctx));
+				h.hostile = Hostile::kNone;
+				const Jump retry = JumpDraft(rig.m, s, 3, &p2, rig.W(), draft);
+				CHECK_MSG(retry.st == SSLM_OK && retry.count == 2 && rig.Save(s) == ref3.blob, "[Q6C.4 %s, %s] the retry: "
+				          "status %d count %d, the blob %s the never-failed call's", kname, w.name,
+				          static_cast<int>(retry.st), retry.count, rig.Save(s) == ref3.blob ? "equals" : "differs from");
+			} else {
+				CHECK_MSG(h.Counts().size() > w.call && j.st == SSLM_OK && j.count == 1 && j.forced == draft1 &&
+				              after == ref2.blob,
+				          "[Q6C.4 %s, %s] %zu run calls (the hostile one is %zu), status %d count %d, the blob %s the "
+				          "one-token-draft call's; want SSLM_OK with the two verified rows kept", kname, w.name,
+				          h.Counts().size(), w.call, static_cast<int>(j.st), j.count,
+				          after == ref2.blob ? "equals" : "differs from");
+			}
 		}
 	}
 }
@@ -4290,6 +4442,9 @@ void Cell_Q6C_4() {
 // minimum work lowered), and max_tasks 4 at the shipped minimum work, below which F-SFD's projections fall.
 // Each gives one pass of M rows, no `run` call, and the no-hook blob. The control (max_tasks 4, minimum work
 // lowered) splits.
+// MRX (ruling 23): the vehicle is an Exact pass of M rows (count M - 1). "No run call" stays for the two hosts
+// whose hook cannot be called (max_tasks 1; max_tasks 0 with a null run); at the shipped minimum work Exact's
+// checking finishes (the vocabulary-wide logits) may still thread, so that host asserts the shape only.
 void Cell_Q6C_5() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
@@ -4299,30 +4454,32 @@ void Cell_Q6C_5() {
 		bool null_run;
 		bool small_min_work;
 		bool splits;
+		bool no_run;
 	};
-	const Host hosts[] = {{"max_tasks 1", 1, false, true, false},
-	                      {"max_tasks 0, run null", 0, true, true, false},
-	                      {"max_tasks 4, shipped minimum work", 4, false, false, false},
-	                      {"max_tasks 4, minimum work lowered (control)", 4, false, true, true}};
+	const Host hosts[] = {{"max_tasks 1", 1, false, true, false, true},
+	                      {"max_tasks 0, run null", 0, true, true, false, true},
+	                      {"max_tasks 4, shipped minimum work", 4, false, false, false, false},
+	                      {"max_tasks 4, minimum work lowered (control)", 4, false, true, true, false}};
+	const std::vector<int32_t> own = Q6cDraft(f, 6);
+	CHECK_MSG(own.size() == 6, "[Q6C.5] the model gave %zu next tokens, want 6", own.size());
+	if (own.size() != 6) return;
 	for (size_t m : {size_t{2}, size_t{7}}) {
-		const uint32_t at = Q6cChainState(f, m);
-		CHECK_MSG(at != UINT32_MAX, "[Q6C.5] LONGKEY has no chain of exactly %zu", m);
-		if (at == UINT32_MAX) continue;
-		const SpanRun plain = Q6cSpan(f, at, 64, Q6cArm::kNoHook);
+		const std::vector<int32_t> draft(own.begin(), own.begin() + std::ptrdiff_t(m - 1));
+		const SpanRun plain = Q6cSpan(f, draft, 64, Q6cArm::kNoHook);
 		for (const Host& h : hosts) {
 			std::unique_ptr<MinWorkScope> min_work;
 			if (h.small_min_work) min_work = std::make_unique<MinWorkScope>(kSmallMinWork);
-			const SpanRun x = Q6cSpan(f, at, 64, Q6cArm::kBit1, nullptr, -1, false, h.max_tasks, h.null_run);
-			CHECK_MSG(x.ok && x.j.st == SSLM_OK && x.j.count == int32_t(m) && x.blob == plain.blob, "[Q6C.5 M %zu, %s] "
+			const SpanRun x = Q6cSpan(f, draft, 64, Q6cArm::kBit1, nullptr, -1, false, h.max_tasks, h.null_run);
+			CHECK_MSG(x.ok && x.j.st == SSLM_OK && x.j.count == int32_t(m) - 1 && x.blob == plain.blob, "[Q6C.5 M %zu, %s] "
 			          "status %d count %d, the blob %s the no-hook pass's", m, h.name, static_cast<int>(x.j.st),
 			          x.j.count, x.blob == plain.blob ? "equals" : "differs from");
 			if (h.splits) {
 				CHECK_MSG(Q6cShapeIs(x.passes, m, true) && x.run_calls > 0, "[Q6C.5 M %zu, %s] S-LAYERROWS %s, %zu run "
 				          "calls; want %zu threaded one-row passes", m, h.name, Q6cShape(x.passes).c_str(), x.run_calls, m);
 			} else {
-				CHECK_MSG(Q6cShapeIs(x.passes, m, false) && x.run_calls == 0, "[Q6C.5 M %zu, %s] S-LAYERROWS %s, %zu run "
-				          "calls; want one batched pass of %zu rows and none", m, h.name, Q6cShape(x.passes).c_str(),
-				          x.run_calls, m);
+				CHECK_MSG(Q6cShapeIs(x.passes, m, false) && (!h.no_run || x.run_calls == 0), "[Q6C.5 M %zu, %s] "
+				          "S-LAYERROWS %s, %zu run calls; want one batched pass of %zu rows%s", m, h.name,
+				          Q6cShape(x.passes).c_str(), x.run_calls, m, h.no_run ? " and none" : "");
 			}
 		}
 	}
@@ -4410,17 +4567,19 @@ void Cell_Q6C_6() {
 // token other than t_N (so the budget-1 verb in (c') admits t_{N-1} and nothing else).
 // ===================================================================================================
 
-enum class TfArm { kLayer, kReady, kCanonSpan, kCanonPending };
+// MRX (ruling 23): arm (c), canonical after a span, is retired (Exact admits no forced span). Arm (c') keeps its
+// shape, the pending token at N embedded alone by the verb, now as Exact's: budget 2 drafts one token, the forced
+// chain's first, which N is chosen to make differ from the model's, so the call keeps the pending token only.
+enum class TfArm { kLayer, kReady, kCanonPending };
 const char* TfArmName(TfArm a) {
 	switch (a) {
 	case TfArm::kLayer: return "(a) layer branch";
 	case TfArm::kReady: return "(b) first token after the prompt";
-	case TfArm::kCanonSpan: return "(c) canonical after a span";
-	case TfArm::kCanonPending: return "(c') canonical pending-only at N";
+	case TfArm::kCanonPending: return "(c') NULL options (exact) pending-only at N";
 	}
 	return "?";
 }
-constexpr TfArm kTfArms[] = {TfArm::kLayer, TfArm::kReady, TfArm::kCanonSpan, TfArm::kCanonPending};
+constexpr TfArm kTfArms[] = {TfArm::kLayer, TfArm::kReady, TfArm::kCanonPending};
 
 struct TfCfg {
 	bool damped = false;
@@ -4442,19 +4601,10 @@ struct TfRig {
 	sslm_workspace W() const { return c.ws ? rig.W() : nullptr; }
 	sslm_decode_params P(int32_t order = 2) const { return c.damped ? rig.Damped(order) : rig.Greedy(); }
 	sslm_status Decode(sslm_seq s, int32_t order, int32_t* out) { return rig.Decode1(s, P(order), W(), out); }
-	// The canonical verb with the decode's own params (NULL under greedy, §5.8).
+	// The verb with NULL options (Exact since MRX) and the decode's own params (NULL under greedy, §5.8).
 	Jump Verb(sslm_seq s, int32_t budget) {
 		const sslm_decode_params p = P(2);
 		return JumpForward(rig.m, s, budget, c.damped ? &p : nullptr, W());
-	}
-	bool Drain(sslm_seq s) {
-		for (int guard = 0; guard < 16; ++guard) {
-			const Query q = QueryForced(rig.m, s, 0);
-			if (q.st != SSLM_OK) return false;
-			if (q.count == 0) return true;
-			if (Verb(s, 64).st != SSLM_OK) return false;
-		}
-		return false;
 	}
 	sslm_seq Fresh() {
 		sslm_seq s = rig.NewSeq(kPotion);
@@ -4477,12 +4627,9 @@ struct TfRig {
 		case TfArm::kCanonPending:
 			for (int i = 0; i < k && good; ++i) good = Decode(s, 2, &t) == SSLM_OK && t >= 0;
 			if (good && arm == TfArm::kCanonPending) {
-				const Jump j = Verb(s, 1);
+				const Jump j = Verb(s, 2);
 				good = j.st == SSLM_OK && j.count == 0 && !ReadShape(rig.m, s).pending;
 			}
-			break;
-		case TfArm::kCanonSpan:
-			good = Drain(s) && Decode(s, 2, &t) == SSLM_OK && t >= 0 && Drain(s);
 			break;
 		}
 		if (!good) {
@@ -4560,6 +4707,7 @@ const char* TfExitName(sfd::FinishExit x) {
 // construction on F-SFD): the final norm's status and a logits row reject in every cfg, damped !ok and
 // damped refused in the damped cfgs, in each arm. The failed decode rests as TF.1 does ((b), (c), (c'):
 // byte-equal to the blob before the call; (a): byte-equal to (c')'s blob before its target decode, the
+// (MRX, ruling 23: arm (c) is retired)
 // layer branch's finish entry); the deterministic refusal returns the same status on two retries with the
 // blob unchanged; S-FINISHEXIT failed all three finishes; and with the exit disarmed the next three decodes
 // equal the never-failed run of the same arm (statuses, tokens, blobs).
@@ -4700,6 +4848,8 @@ void Cell_TF_4b() {
 // loop on POTION and LONGKEY at budget 64, with the workspace and with ws = NULL. Every verb call that admits
 // M >= 1 rows makes exactly one S-LAYERROWS entry, a batched pass of M rows, and the stream is the
 // reference rule's.
+// MRX (ruling 23): every call with an Exact pass of M >= 2 rows (read before the call) makes exactly one batched
+// pass of M rows (rolled back past the first mismatch); a no-op makes none; the stream is the decode-only run's.
 void Cell_Q6C_7() {
 	const Sfd& f = GetSfd();
 	if (!f.ok) return;
@@ -4712,14 +4862,12 @@ void Cell_Q6C_7() {
 			std::string first_bad;
 			o.after = [&](sslm_seq&, const JfStep& st) {
 				if (st.kind == 0 && st.st == SSLM_OK) {
-					const size_t m = st.toks.size() + (st.embedded_pending ? 1 : 0);
+					const size_t m = size_t(st.pass_rows);
 					const std::vector<sfd::LayerRowsEntry> passes = Q6cPasses();
-					if (m >= 1) {
-						++calls;
-						if (m >= 2) ++multi;
-						if (!Q6cShapeIs(passes, m, false) && bad++ == 0)
-							first_bad = "M " + std::to_string(m) + ": " + Q6cShape(passes);
-					}
+					++calls;
+					if (m >= 2) ++multi;
+					if (!Q6cExactShapeIs(passes, m, 0, false) && bad++ == 0)
+						first_bad = "M " + std::to_string(m) + ": " + Q6cShape(passes);
 				}
 				sfd::LayerRowsLogReset();
 			};
@@ -4727,7 +4875,7 @@ void Cell_Q6C_7() {
 			if (!s || !rig.PromptOk(s, f.prompt_potion)) continue;
 			sfd::LayerRowsLogReset();
 			const JfRun r = RunJf(rig.m, s, o);
-			CheckStreamIsReference("Q6C.7", f, schema, r);
+			CheckStreamIsReference("Q6C.7", f, schema, f.prompt_potion, r);
 			CHECK_MSG(calls > 0 && multi > 0 && bad == 0, "[Q6C.7] %s, %s, no hook: %d of %d verb calls (%d of M >= 2) "
 			          "did not make exactly one batched pass of M rows (first: %s)", schema, with_ws ? "workspace" : "ws NULL",
 			          bad, calls, multi, first_bad.c_str());

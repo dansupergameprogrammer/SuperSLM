@@ -2216,8 +2216,9 @@ void Cell_X_8_2() {
 	}
 }
 
-// 8.X3 [J1-X] A decode batch of four: one in exact mode between verb calls, one canonical (drained), one off, one
-// unbound. Each equals its solo run.
+// 8.X3 [J1-X] A decode batch of four: one in exact mode between verb calls, one with NULL options (drained), one
+// off, one unbound. Each equals its solo run. MRX (ruling 23): NULL options select Exact (no caller draft), so the
+// drained member is relabelled from "canonical"; its drain stops at a call that keeps no drafted token.
 void Cell_X_8_3() {
 	if (!XLive("8.X3")) return;
 	const Sfd& f = GetSfd();
@@ -2227,7 +2228,7 @@ void Cell_X_8_3() {
 	sslm_seq s[4] = {rig.NewSeq(kPotion), rig.NewSeq(kPotion), rig.NewSeq(kPotion), rig.NewSeq(nullptr)};
 	for (sslm_seq q : s)
 		if (!q || !rig.PromptOk(q, f.prompt_potion)) return;
-	// the solo runs of the canonical and unbound sequences
+	// the solo runs of the NULL-options and unbound sequences
 	std::vector<int32_t> solo_canon, solo_unbound;
 	{
 		Rig r2(f.m1->m);
@@ -2246,7 +2247,7 @@ void Cell_X_8_3() {
 	bool done[4] = {false, false, false, false};
 	const sslm_decode_params g = rig.Greedy();
 	for (int step = 0; step < 300; ++step) {
-		// canonical: drain before each decode
+		// NULL options (exact): drain before each decode
 		if (!done[1]) {
 			for (int guard = 0; guard < 16; ++guard) {
 				if (QueryForced(rig.m, s[1], 0).count == 0) break;
@@ -2256,6 +2257,7 @@ void Cell_X_8_3() {
 					done[1] = true;
 					break;
 				}
+				if (j.count == 0) break;
 			}
 		}
 		std::vector<sslm_seq> batch;
@@ -2292,7 +2294,7 @@ void Cell_X_8_3() {
 	}
 	CHECK_MSG(got[0] == off.stream, "[8.X3] the exact sequence's stream %s; its solo (off) %s", Str(got[0]).c_str(),
 	          Str(off.stream).c_str());
-	CHECK_MSG(got[1] == solo_canon, "[8.X3] the canonical sequence's stream differs from its solo run");
+	CHECK_MSG(got[1] == solo_canon, "[8.X3] the NULL-options (exact) sequence's stream differs from its solo run");
 	CHECK_MSG(got[2] == off.stream, "[8.X3] the off sequence's stream differs from its solo run");
 	CHECK_MSG(std::vector<int32_t>(got[3].begin(), got[3].begin() + long(std::min(got[3].size(), solo_unbound.size()))) ==
 	              solo_unbound,

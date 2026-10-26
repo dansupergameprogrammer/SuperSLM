@@ -10,14 +10,16 @@
 //        no draft) byte for byte, the comparison g.2 makes; red until MR5, as g.2. And a mode outside the enum (-1,
 //        SSLM_JUMP_EXACT + 1, 99) is refused by sslm_gpu_seq_jump_forward through the malformed-options status
 //        (SSLM_SEQUENCE_KV_BUFFER_MISMATCH), with nothing changed: the count unwritten, out_forced untouched, the save
-//        blob, walk state, context length and ready flag equal, and a fresh bound sequence still bindable.
+//        blob, walk state, context length and ready flag equal, and a fresh bound sequence still bindable. Ruling 22
+//        (21b): so is mode 0 with a draft, with draft_count 2 and no draft, and with both.
 //   g.2  NULL options equal explicit Exact byte for byte: status, count, out_forced, the save blob, then four
 //        decode-bridge tokens and the blob after them. Budgets 1, 4 and 8, after 0 and 2 decodes. Red until MR5
 //        (GPU Exact).
 //   g.3  sslm_gpu_seq_embed_rows refuses kind 1 (the removed SCHEMA_FORCED) as a bad spec
 //        (SSLM_SEQUENCE_KV_BUFFER_MISMATCH), with flags 0 and with 0x1 (FIRST_PREWALKED), the rows being the chain
 //        the schema forces (so the kind is the only thing wrong): out_admitted unwritten, no chunk open, the save blob
-//        equal. Control: kind 2 (EXACT_DRAFT) stays a bad spec; kind 0 (PROMPT) on the same tokens is admitted.
+//        equal. Control: kind 2 (EXACT_DRAFT) stays a bad spec; kind 0 (PROMPT) on the same tokens is admitted. Ruling
+//        22: flag 0x1 (FIRST_PREWALKED, removed) with kind 0 is a bad spec too.
 //   g.4a 1.17's Canonical saves restore: SSLM_OK, the restored handle saves the same bytes, and decode-only it gives
 //        the recorder's own next 8 tokens.
 //   g.4b ...and continue under the mode asked for (E-11 (d)): an explicit Exact jump, then decodes, gives the same 8
@@ -188,13 +190,16 @@ struct Jump {
 	std::vector<int32_t> out;
 	bool operator==(const Jump& o) const { return st == o.st && count == o.count && out == o.out; }
 };
-// mode < -100: NULL options.
-Jump DoJump(const Engine& e, SslmGpuSequenceHandle* s, int32_t pending, int32_t budget, int32_t mode) {
+// mode < -100: NULL options. `draft`, `draft_count`: the options' draft fields (g.1's ruling-22 refusals).
+Jump DoJump(const Engine& e, SslmGpuSequenceHandle* s, int32_t pending, int32_t budget, int32_t mode,
+            const int32_t* draft = nullptr, int32_t draft_count = 0) {
 	Jump j;
 	j.out.assign(16, -7);
 	SslmGpuJumpOptions o{};
 	o.struct_size = sizeof o;
 	o.mode = mode;
+	o.draft = draft;
+	o.draft_count = draft_count;
 	j.st = sslm_gpu_seq_jump_forward(e.ctx, s, pending, budget, mode < -100 ? nullptr : &o, j.out.data(),
 	                                 static_cast<int32_t>(j.out.size()), &j.count);
 	return j;
@@ -213,11 +218,26 @@ std::string Tag(const char* schema, int a, int b) { return F("%s/%d/%d", schema,
 // ------------------------------------------------------------------------------------------------ g.1
 void EqualsExact(Engine& e, int32_t mode, const char* what);
 void CellG1(Engine& e) {
+	// Ruling 22 (21b): mode 0 means exactly what NULL options give, Exact with no caller draft, so mode 0 with a
+	// draft, or with draft_count != 0, is refused the same way (SSLM_SEQUENCE_KV_BUFFER_MISMATCH).
+	static const int32_t kDraft[2] = {0, 0};
+	struct Refused {
+		int32_t mode;
+		const int32_t* draft;
+		int32_t count;
+		std::string what;
+	};
+	std::vector<Refused> refused;
+	for (int32_t mode : kModesOutside) refused.push_back({mode, nullptr, 0, F("mode %d (outside the enum)", mode)});
+	refused.push_back({kModeDefault, kDraft, 1, "mode 0 with a draft"});
+	refused.push_back({kModeDefault, nullptr, 2, "mode 0, draft_count 2"});
+	refused.push_back({kModeDefault, kDraft, 2, "mode 0, draft and count"});
 	int bit = 0;
 	for (const char* schema : kSchemas)
-		for (int32_t mode : kModesOutside)
+		for (const Refused& r : refused)
 			for (int decodes : {0, 2}) {
-				const std::string tag = F("%s mode %d (outside the enum) after %d decodes", schema, mode, decodes);
+				const int32_t mode = r.mode;
+				const std::string tag = F("%s %s after %d decodes", schema, r.what.c_str(), decodes);
 				int32_t pending = -1, last = -1;
 				SslmGpuSequenceHandle* s = e.Pending(schema, 11u, decodes, &pending, &last);
 				if (!s) { Check(false, tag + ": setup"); continue; }
@@ -226,7 +246,7 @@ void CellG1(Engine& e) {
 				const uint32_t walk = SslmGpuSeqWalkStateForG5Bridge(s);
 				const int64_t len = *SslmGpuSeqHandleContextLengthForBench(s);
 				const int32_t ready = e.Ready(s);
-				const Jump j = DoJump(e, s, pending, 4, mode);
+				const Jump j = DoJump(e, s, pending, 4, mode, r.draft, r.count);
 				Check(j.st == S::SSLM_SEQUENCE_KV_BUFFER_MISMATCH,
 				      F("%s: returned %u, want SSLM_SEQUENCE_KV_BUFFER_MISMATCH (%u)%s", tag.c_str(), (unsigned)j.st,
 				        (unsigned)S::SSLM_SEQUENCE_KV_BUFFER_MISMATCH, chain > 0 ? "" : " (no chain here)"));
@@ -244,13 +264,13 @@ void CellG1(Engine& e) {
 				if (sslm_gpu_seq_create(e.ctx, e.model, 240, &f) != S::SSLM_OK) { Check(false, tag + ": fresh"); continue; }
 				const int32_t idx = SslmGpuSchemaLookupForG5Bridge(e.model, schema);
 				S b = SslmGpuSeqSetSchemaForG5Bridge(e.ctx, f, idx);
-				const Jump jf = DoJump(e, f, -1, 4, mode);
+				const Jump jf = DoJump(e, f, -1, 4, mode, r.draft, r.count);
 				if (b == S::SSLM_OK) b = SslmGpuSeqSetSchemaForG5Bridge(e.ctx, f, idx);
 				Check(jf.st == S::SSLM_SEQUENCE_KV_BUFFER_MISMATCH && b == S::SSLM_OK,
 				      F("%s: fresh bound: jump %u, rebind %u (want 7, 0: refused and still bindable)", tag.c_str(), (unsigned)jf.st, (unsigned)b));
 				sslm_gpu_seq_release(e.ctx, f);
 			}
-	Check(bit >= 6, F("only %d mode cases had a forced chain at the call (want 6)", bit));
+	Check(bit >= 12, F("only %d refusal cases had a forced chain at the call (want 12)", bit));
 	EqualsExact(e, kModeDefault, "mode 0 (SSLM_JUMP_DEFAULT)");
 }
 
@@ -309,6 +329,7 @@ void CellG3(Engine& e) {
 			const Case cases[] = {{kRowsSchemaForcedOld, 0, false, "kind 1 (SCHEMA_FORCED)"},
 			                      {kRowsSchemaForcedOld, kRowsFirstPrewalked, false, "kind 1 + FIRST_PREWALKED"},
 			                      {2, 0, false, "kind 2 (EXACT_DRAFT, control)"},
+			                      {0, kRowsFirstPrewalked, false, "kind 0 + 0x1 (FIRST_PREWALKED, removed: ruling 22)"},
 			                      {0, 0, true, "kind 0 (PROMPT, control)"}};
 			for (const Case& c : cases) {
 				const std::string tag = F("%s/%d %s", schema, decodes, c.what);

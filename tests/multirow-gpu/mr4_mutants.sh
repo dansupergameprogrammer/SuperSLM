@@ -6,7 +6,7 @@
 #   MXK1  the table check before the token-range loop (ruling 16 swapped)                                          -> 2.3
 #   MXK2  the walk over the refused row j at a SCHEMA_FORCED chunk's refusal (M >= 2)                              -> s1
 #   MXK2b the same at the M = 1 refusal                                                                            -> s1
-#   MXK3  jump_forward's chunk-open guard removed                                                                  -> 4.6j
+#   MXK3  jump_forward's chunk-open guard removed (the public verb's step (2), ruling 22a)                         -> 4.6j
 #   MXK4  embed_schema_token's chunk-open guard removed                                                            -> 4.6e
 #   MXK5  forced_tokens' chunk-open guard removed                                                                  -> 4.6f
 #   MXK6  the jump no longer restores last_rows_committed                                                         -> n1
@@ -99,7 +99,10 @@ if want MXK2; then host_mutant MXK2 $G 1 '^(\s*)if \(k > 0 && !c\.walk_after\.em
 	'\1if (!c.walk_after.empty()) seq->dfa_walk_state = c.walk_after[f];  // MXK2: the walk over row j' && must_red MXK2 s1; fi
 if want MXK2b; then host_mutant MXK2b $G 1 '^(\s*)(// The refusal: CommitPrefix\(0, 0\)\.[^\n]*\n\s*seq->last_rows_committed = 0;\n\s*RowsDropChunkImpl\(seq\);)' \
 	'\1if (!c.walk_after.empty()) seq->dfa_walk_state = c.walk_after[0];  // MXK2b: the walk over the refused row\n\1\2' && must_red MXK2b s1; fi
-if want MXK3; then host_mutant MXK3 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) return SSLM_BUSY;(  // multi-row plan §4\.6 \(R-17\): a chunk is open\n\s*// \(6\) The entry shape)' \
+# MXK3 (ruling 22a): the public jump verb's chunk-open guard, step (2) after the arguments and the options and before
+# MRX's SSLM_SEQUENCE_REJECTED; removed, 4.6j's call returns SEQUENCE_REJECTED, not BUSY. The 1.17 site in the
+# internal forced-row pass (before "(6) The entry shape") is unreachable from the verb and is not the site.
+if want MXK3; then host_mutant MXK3 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) return SSLM_BUSY;(\n\s*// \(3\) Exact, every mode the verb now has)' \
 	'\1(void)0;  // MXK3: the jump guard removed\2' && must_red MXK3 4.6j; fi
 if want MXK4; then host_mutant MXK4 $G 1 '^(\s*)if \(RowsChunkOpen\(seq\)\) return SSLM_BUSY;(  // multi-row plan §4\.6 \(R-17\): a chunk is open\n\s*SslmGpuModelHandle\* model = seq->model;\n\s*if \(token < 0)' \
 	'\1(void)0;  // MXK4: the embed_schema_token guard removed\2' && must_red MXK4 4.6e; fi
