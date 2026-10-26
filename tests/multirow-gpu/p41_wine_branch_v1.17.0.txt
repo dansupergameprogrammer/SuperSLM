@@ -2,3 +2,6 @@
 # -1770 = the CPU schema-fast-decode suite alone (v1.17.0 192148 -> branch 190378; red-suite-mrx.md ruling-23 table).
 # No FAIL lines: the branch and v1.17.0 both fail nothing under Wine on this host.
 DELTA -1770
+# Ruling 29 (MRX review N3): the delta per suite (p41_count_suites.py: each top-level call of test_main.cpp's main(),
+# branch minus v1.17.0, same session). Every suite not listed here must be equal; the whole -1770 is the SFD suite's.
+SUITE RunSchemaFastDecodeCells -1770

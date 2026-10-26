@@ -28,7 +28,8 @@
 #               parsed from the file, so the cloud build follows the box build), run under Wine. Green when its
 #               FAIL lines are exactly p41_wine_baseline_<base>.txt (the base tag's own under Wine), or, where
 #               p41_wine_branch_<base>.txt exists (ruling 23, MRX), exactly its FAIL lines with the base still
-#               failing exactly its own pin.
+#               failing exactly its own pin. Ruling 29 (N3): the count delta is pinned per suite too (its SUITE lines;
+#               test_main.cpp is compiled from an instrumented copy that prints each top-level call's checks).
 #   pkvg        (opt-in) the paged-KV GPU suite's step-G5 runner (tests/paged-kv-gpu, pkvg_g5) over
 #               tools/gen_paged_kv_fixture.py's fixtures (pkv_def, pkv_qk, ...), real-artifact cells skipped; exit 0.
 #
@@ -80,8 +81,11 @@ E3_FILE=tests/schema-fast-decode-gpu/check_gpu_status_mirrors.py
 # Ruling 23's P4.1 amendment (MRX, as E-2/E-3 were): MRX's listed edits under tests/ outside multirow-gpu. 1.17's CPU
 # schema-fast-decode suite's Canonical cells retired or re-pointed to Exact (the table in red-suite-mrx.md), the
 # 1183-1185 relabel (21b), and the te425 census rows that move with the verb (e66f893b).
+# Ruling 29 (the MRX review's M1, the same precedent): 1.17's SFD-GPU cells G12.6 and G7.1, re-pointed from Canonical's
+# contract and pinned Canonical streams to Exact expectations computed without the jump verb (red-suite-mr5.md).
 MRX_FILES=(tests/test_schema_fast_decode.cpp tests/schema_fast_decode/sfd_cells_x.inc
-	tests/te425-gpu-alloc-status-red-suite/gpu_status_sites.txt)
+	tests/te425-gpu-alloc-status-red-suite/gpu_status_sites.txt
+	tests/schema-fast-decode-gpu/sfdg_cell_g12_6.cpp tests/schema-fast-decode-gpu/sfdg_cell_g7_1.cpp)
 EXCL=(':(exclude)tests/multirow-gpu' ":(exclude)${ORD_CELLS[0]}" ":(exclude)${ORD_CELLS[1]}" ":(exclude)$E3_FILE")
 for f in "${MRX_FILES[@]}"; do EXCL+=(":(exclude)$f"); done
 
@@ -173,6 +177,15 @@ build_tests() {
 	flags="-std=c++20 -O2 $incs $defs -DNOMINMAX -DWIN32_LEAN_AND_MEAN -include d3d12.h -include d3d12sdklayers.h"
 	shaders "$root" "$dir"
 	obj="$dir/obj/tests"; mkdir -p "$obj"
+	# Ruling 29 (MRX review N3): per-suite counts. test_main.cpp is compiled from an instrumented copy whose main()
+	# prints each top-level call's checks (p41_count_suites.py); same calls, same order, same checks. -iquote keeps
+	# its quoted includes resolving from <tree>/tests.
+	if grep -qw "tests/test_main.cpp" <<<"$srcs"; then
+		python3 -I "$HERE/p41_count_suites.py" instrument "$root/tests/test_main.cpp" "$dir/obj/p41_test_main.cpp" >/dev/null \
+			|| { echo "FAIL tests: instrumenting $root/tests/test_main.cpp"; return 1; }
+		srcs="$(sed "s#\btests/test_main.cpp\b#$dir/obj/p41_test_main.cpp#" <<<"$srcs")"
+		flags="$flags -iquote $root/tests"
+	fi
 	# shellcheck disable=SC2086
 	(cd "$root" && printf '%s\n' $srcs | xargs -P "$JOBS" -I{} bash -c \
 		'o="$1/$(echo "$2" | tr / _).o"; [ "$o" -nt "$2" ] && exit 0; '"$CXX $flags"' -w -c "$2" -o "$o" || { echo "COMPILE FAILED: $2"; exit 1; }' _ "$obj" {}) \
@@ -265,6 +278,40 @@ if want tests; then
 			# give or take the pinned delta.
 			if [ "$((N - BN))" != "$DELTA" ]; then
 				echo "FAIL tests: the branch ran $N checks, $BASE ran $BN under the same build and host (pinned delta $DELTA)"; ok=0
+			fi
+			# Ruling 29 (MRX review N3): the delta per suite, so a gain in one suite cannot hide a loss in another.
+			# Every top-level call's count on the branch minus the base's must equal the pin's "SUITE <name> <n>" line
+			# (0 when the name has none), "(unattributed)" included; a name on one side only counts as 0 on the other.
+			python3 -I "$HERE/p41_count_suites.py" tally "$LOG" >"$OUT/suites.branch.txt" || ok=0
+			python3 -I "$HERE/p41_count_suites.py" tally "$BLOG" >"$OUT/suites.base.txt" || ok=0
+			if ! python3 -I - "$OUT/suites.branch.txt" "$OUT/suites.base.txt" "${BRANCH_PIN}" "$OUT/suites.delta.txt" <<'PY'
+import os, sys
+def load(p):
+    d = {}
+    for line in open(p):
+        name, n = line.rsplit(" ", 1)
+        d[name] = int(n)
+    return d
+br, ba = load(sys.argv[1]), load(sys.argv[2])
+pin = {}
+if os.path.exists(sys.argv[3]):
+    for line in open(sys.argv[3]):
+        f = line.split()
+        if len(f) == 3 and f[0] == "SUITE":
+            pin[f[1]] = int(f[2])
+delta = {k: br.get(k, 0) - ba.get(k, 0) for k in set(br) | set(ba)}
+with open(sys.argv[4], "w") as out:
+    for k in sorted(delta):
+        if delta[k]:
+            out.write("SUITE %s %d\n" % (k, delta[k]))
+bad = [(k, delta.get(k, 0), pin.get(k, 0)) for k in sorted(set(delta) | set(pin)) if delta.get(k, 0) != pin.get(k, 0)]
+for k, got, want in bad[:30]:
+    print("    tests: suite %s: branch - base = %d, pinned %d" % (k, got, want))
+print("    tests: %d suites compared, %d with a nonzero delta (%s)" % (len(delta), sum(1 for v in delta.values() if v), ", ".join("%s %+d" % (k, v) for k, v in sorted(delta.items()) if v) or "none"))
+sys.exit(1 if bad else 0)
+PY
+			then
+				echo "FAIL tests: the per-suite deltas differ from the pin's SUITE lines ($OUT/suites.delta.txt has the measured ones)"; ok=0
 			fi
 		fi
 		if [ $ok = 1 ]; then
