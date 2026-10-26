@@ -1948,7 +1948,8 @@ const Model* Aux(const char* file) {
 // over its M rows, and the bytes equal Off's. F-SFD is tied, so a bound handle finishes on the host's legal rows; the
 // stage runs on an UNBOUND handle (any draft is admitted) and on fsfd_untied BOUND. Per close: the stage counter
 // advances by exactly 1 with rows == M; last_rows_committed, rows_produced, the whole observation and the next
-// decode equal the Off twin's. M = 1 (a2c22780: the one-row close runs the stage at one row), 2, 4, 8; every draft
+// decode equal the Off twin's. M = 2, 4, 8 run the stage; M = 1 runs no timed stage (ruling 37, 93ba7e2a, which
+// reverts a2c22780's one-row routing) and its bytes, rows_produced and next decode still equal Off's; every draft
 // right, or the first wrong draft at row 1 or row M - 1
 // (unbound), or a legal wrong draft after 0 or 2 right rows (bound, fsfd_ref.txt's legal tokens); dedicated and pooled.
 struct StageCase {
@@ -1963,9 +1964,13 @@ void StageCheck(World& w, const Model& m, SslmGpuSequenceHandle* a, SslmGpuSeque
 	const superslm_gpu::GpuLogitsStageTiming tm = superslm_gpu::LastLogitsStageTiming();
 	Check(o.embed == S::SSLM_OK && o.adm == M && o.close == S::SSLM_OK && o.prod == S::SSLM_OK,
 	      F("%s: embed %s admitted %d of %d, close %s, rows_produced %s", c.tag.c_str(), N(o.embed), o.adm, M, N(o.close), N(o.prod)));
-	Check(tm.stages == stages0 + 1 && tm.rows == static_cast<uint32_t>(M),
-	      F("%s: the widened logits stage ran %llu times over %u rows, want once over %d", c.tag.c_str(),
-	        (unsigned long long)(tm.stages - stages0), tm.rows, M));
+	if (M == 1)  // ruling 37 (93ba7e2a): a one-row close takes the one-row device-logits call, never the timed stage
+		Check(tm.stages == stages0, F("%s: the widened logits stage ran %llu times at M = 1, want none (ruling 37)", c.tag.c_str(),
+		                              (unsigned long long)(tm.stages - stages0)));
+	else
+		Check(tm.stages == stages0 + 1 && tm.rows == static_cast<uint32_t>(M),
+		      F("%s: the widened logits stage ran %llu times over %u rows, want once over %d", c.tag.c_str(),
+		        (unsigned long long)(tm.stages - stages0), tm.rows, M));
 	Check(LastCommitted(a) == c.want_a, F("%s: last_rows_committed %d, want %d", c.tag.c_str(), LastCommitted(a), c.want_a));
 	const int32_t off_tok = TwinDecodes(w, m, t, ht, c.want_a);
 	Check(o.tok == off_tok, F("%s: rows_produced %d, Off %d", c.tag.c_str(), o.tok, off_tok));
