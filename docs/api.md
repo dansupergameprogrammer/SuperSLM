@@ -472,7 +472,10 @@ do {
   timed on its own (`superslm_gpu::LastLogitsStageTiming()`, `gpu_port.h`),
   for two or more rows; a one-row close keeps the one-row logits call. The
   same record carries the close's host-finish time, measured on the thread
-  that closes the chunk.
+  that closes the chunk. If the close's entry guard refuses (another sequence
+  Submitted), that `sslm_gpu_ready` reports `SSLM_BUSY` and changes nothing:
+  the chunk stays open at full depth, and the next `sslm_gpu_ready` retries
+  the close, or `sslm_gpu_seq_rows_abandon` rolls it back.
 - **No schema-forced kind.** The branch's provisional schema-forced kind and its
   first-prewalked flag were removed with canonical mode before release
   (1.18.0). Kind 1 is reserved and is a bad spec, and so is any flag.

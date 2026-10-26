@@ -232,6 +232,13 @@ struct GpuRowsChunk {
 	uint32_t slice_layers_in_flight = 0;
 	bool slice_in_flight = false;
 	std::vector<uint32_t> slice_ends;  // the layer each finished slice ended at, in order
+	// Exact (MR5, ruling 38): an EXACT_DRAFT close its own entry guard refused. Nothing changed: the chunk stays open
+	// at full depth with its device K/V snapshot, and keeps the last slice's read-back here, so the next
+	// sslm_gpu_ready retries the close (or an abandon rolls back) under a guard.
+	bool close_pending = false;
+	std::vector<GpuRowsRowState> pending_rows;
+	std::vector<size_t> pending_kv_offsets;
+	std::vector<uint8_t> pending_kv_rows;
 	std::unique_ptr<GpuRowSet> row_set;
 };
 

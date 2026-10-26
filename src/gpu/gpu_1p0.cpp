@@ -3434,6 +3434,8 @@ SslmGpuStatus sslm_gpu_readyImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
 	++superslm_test::g_gpu_ready_poll_count_probe;
 #endif
+	// Ruling 38: an EXACT_DRAFT close its own guard refused is retried here (nothing is in flight).
+	if (seq->rows_chunk != nullptr && seq->rows_chunk->close_pending) return RowsReady(seq, block, out_ready, out_status);
 	if (seq->state() != superslm_gpu::SslmSequenceGpuState::Submitted) {
 		// design Sec4.2: "Idle/Completed: *out_ready=1 immediately, *out_status=Ok
 		// (nothing outstanding)."
@@ -4440,6 +4442,7 @@ std::atomic<int32_t> g_mr5_narrow{-1};
 std::atomic<int32_t> g_mr5_readback_pass{-1};
 std::atomic<int32_t> g_mr5_verify_equal{0};
 std::atomic<int32_t> g_mr5_exact_passes{0};
+std::atomic<int32_t> g_mr5_close_guard_refusal{0};
 // S-GSATROW: true (and disarmed) when armed for `row`.
 bool Mr5SatRowTake(int32_t row) {
 	int32_t want = row;
@@ -4466,6 +4469,11 @@ bool Mr5ReadbackFaultFires(int32_t pass) {
 }
 bool Mr5VerifyAlwaysEqual() { return g_mr5_verify_equal.load() != 0; }
 void Mr5CountExactPass() { g_mr5_exact_passes.fetch_add(1); }
+// S-GCLOSEGUARD (ruling 38): true (and disarmed) when the next EXACT_DRAFT close's entry guard is to refuse.
+bool Mr5CloseGuardRefusalTake() {
+	int32_t want = 1;
+	return g_mr5_close_guard_refusal.compare_exchange_strong(want, 0);
+}
 }  // namespace
 extern "C" void ArmGpuSatRowForTest(int32_t row) noexcept { g_mr5_sat_row.store(row < 0 ? -1 : row); }
 extern "C" int32_t GpuSatRowArmedForTest() noexcept { return g_mr5_sat_row.load() >= 0 ? 1 : 0; }
@@ -4477,6 +4485,7 @@ extern "C" void ArmGpuExactReadbackFaultForTest(int32_t pass, int32_t row) noexc
 extern "C" void SetGpuExactVerifyAlwaysEqualForTest(int32_t on) noexcept { g_mr5_verify_equal.store(on ? 1 : 0); }
 extern "C" void GpuExactPassLogResetForTest() noexcept { g_mr5_exact_passes.store(0); }
 extern "C" int32_t GpuExactPassCountForTest() noexcept { return g_mr5_exact_passes.load(); }
+extern "C" void ArmGpuExactCloseGuardRefusalForTest(int32_t on) noexcept { g_mr5_close_guard_refusal.store(on ? 1 : 0); }
 #else
 namespace {
 bool Mr5SatRowTake(int32_t) { return false; }
@@ -4485,6 +4494,7 @@ inline bool Mr5NarrowFires() { return false; }
 inline bool Mr5ReadbackFaultFires(int32_t) { return false; }
 inline bool Mr5VerifyAlwaysEqual() { return false; }
 inline void Mr5CountExactPass() {}
+inline bool Mr5CloseGuardRefusalTake() { return false; }
 }  // namespace
 #endif  // SUPERSLM_GPU_TEST_SEAMS
 
@@ -8423,6 +8433,7 @@ SslmGpuStatus RowsDecodeStep(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, co
 	GpuRowsChunk& c = *seq->rows_chunk;
 	SslmGpuModelHandle* model = seq->model;
 	const uint32_t L = model->num_hidden_layers;
+	if (c.close_pending) return SSLM_BUSY;  // ruling 38: the refused close waits for sslm_gpu_ready (or an abandon)
 	// Plan §4.4: the adapter of the slice that ran layer 0 is fixed for every later slice.
 	if (c.adapter_fixed && adapter != c.adapter) return SSLM_BUSY;
 	// Plan §4.1: every open row advances by floor(budget / DispatchesPerLayer) whole layers, capped at the end.
@@ -8608,9 +8619,21 @@ SslmGpuStatus RowsExactClose(SslmGpuSequenceHandle* seq, const std::vector<GpuRo
 	}
 	// The close submits (the widened logits stage on the context's device, the rejected rows' K/V restore on the
 	// singleton), so it passes the entry guard the decode verbs pass; sslm_gpu_ready itself is unguarded. A refusal
-	// (another handle Submitted, or the ledger) rolls the chunk back with its status: nothing is committed.
-	if (const SslmGpuStatus g = EntrySubmitGuard(ScopeForHolder(seq), GuardDevice::kReachesSingleton); g != SSLM_OK) {
-		RowsRollbackAndClose(seq);
+	// (another handle Submitted, or the ledger) of an EXACT_DRAFT close changes nothing (ruling 38): a rollback here
+	// could not put the device K/V back (it would submit unguarded), so the chunk stays open at full depth with its
+	// snapshot and this read-back, and the next sslm_gpu_ready retries the close (an abandon rolls back) under a
+	// guard. A jump pass runs inside the guarded jump verb, where the rollback can restore: its refusal is a fault.
+	SslmGpuStatus g = pass || !Mr5CloseGuardRefusalTake() ? SSLM_OK : SSLM_BUSY;  // S-GCLOSEGUARD (ruling 38)
+	if (g == SSLM_OK) g = EntrySubmitGuard(ScopeForHolder(seq), GuardDevice::kReachesSingleton);
+	if (g != SSLM_OK) {
+		if (pass) {
+			RowsRollbackAndClose(seq);
+			return g;
+		}
+		c.close_pending = true;
+		c.pending_rows = rows;
+		c.pending_kv_offsets = kv_offsets;
+		c.pending_kv_rows = kv_rows;
 		return g;
 	}
 	const uint32_t full = j < 0 ? M : static_cast<uint32_t>(j);  // rows at full depth
@@ -8698,6 +8721,18 @@ SslmGpuStatus RowsExactClose(SslmGpuSequenceHandle* seq, const std::vector<GpuRo
 
 SslmGpuStatus RowsReady(SslmGpuSequenceHandle* seq, int32_t block, int32_t* out_ready, SslmGpuStatus* out_status) {
 	GpuRowsChunk& c = *seq->rows_chunk;
+	if (c.close_pending) {
+		// Ruling 38: the EXACT_DRAFT close its guard refused, retried on the read-back it kept (a refusal again keeps
+		// it again and changes nothing).
+		std::vector<GpuRowsRowState> rows = std::move(c.pending_rows);
+		std::vector<size_t> kv_offsets = std::move(c.pending_kv_offsets);
+		std::vector<uint8_t> kv_rows = std::move(c.pending_kv_rows);
+		c.close_pending = false;
+		if (out_ready) *out_ready = 1;
+		const SslmGpuStatus closed = RowsExactClose(seq, rows, kv_offsets, kv_rows);
+		if (out_status) *out_status = closed;
+		return SSLM_OK;
+	}
 	if (!c.slice_in_flight || c.row_set == nullptr) {
 		if (out_status) *out_status = SSLM_SEQUENCE_REJECTED;
 		return SSLM_OK;

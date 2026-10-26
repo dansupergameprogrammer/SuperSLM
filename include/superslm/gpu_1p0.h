@@ -654,6 +654,10 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
  * a tokens one at a time: the produced token is walked (or, at a dead end, the walk is kept and ready-for-logits
  * set; at a finish failure ready-for-logits is what the bridge leaves). sslm_gpu_seq_rows_produced reads the
  * produced token. A guard refusal of row j with rows 0..j-1 all agreeing is reported as for PROMPT.
+ * The close submits work, so it passes the decode verbs' entry guard. When that guard refuses (another sequence
+ * Submitted, SSLM_BUSY), the sslm_gpu_ready that would close reports the refusal in `*out_status` and changes
+ * nothing: the chunk stays open at full depth, the decode step returns SSLM_BUSY, and the next sslm_gpu_ready
+ * retries the close (sslm_gpu_seq_rows_abandon rolls it back instead).
  *
  * ADVANCING. sslm_decode_step_gpu advances every row of the open chunk by
  * floor(dispatch_budget / DispatchesPerLayer) whole layers (the per-layer count is the model's, as for
