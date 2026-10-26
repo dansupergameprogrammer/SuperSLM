@@ -33,7 +33,8 @@ thread's 1.18.0 section when that lands.
   and **`sslm_gpu_seq_rows_produced`**, which reads the token the close produced. A model mapped without the device
   logits head refuses the kind with `SSLM_SEQUENCE_REJECTED`.
 - **The widened logits stage** has its own GPU timestamp bracket: `superslm_gpu::LastLogitsStageTiming()`
-  (`gpu_port.h`).
+  (`gpu_port.h`). Every Exact close on the device-head path runs exactly one stage, M = 1 included. The same
+  record carries the close's host-finish time (`host_finish_ms`, `host_rows`, `closes`).
 
 ## [1.17.0] - 2026-10-26
 
