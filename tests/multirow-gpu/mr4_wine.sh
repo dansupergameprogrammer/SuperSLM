@@ -3,12 +3,16 @@
 # vkd3d-proton + lavapipe). The box parts (10.2's measured table, 10.5 Canonical's frames, 8.3 on B2's spans at the
 # 0.5B) are MB4's; see red-suite-mr4.md.
 #
-# Usage: tests/multirow-gpu/mr4_wine.sh [--out=DIR] [--jobs=N] [--base=REV] [--only=LEG[,LEG...]] [--build-only]
+# Usage: tests/multirow-gpu/mr4_wine.sh [--out=DIR] [--jobs=N] [--base=REV] [--only=LEG[,LEG...]] [--build-only] [--fixtures-only]
 #   --out   default <repo>/out/mr4
-#   --base  1.17's revision 8.3 compares against (default MR_BASE_TAG, else the merge base with origin/claude/sfd-gpu-1p17)
+#   --base  1.17's revision 8.3 compares against (default MR_BASE_TAG, else the merge base with origin/claude/sfd-gpu-1p17,
+#           else v1.17.0)
 #   --only  census | contract | cells | c83 | table | sfdg | mutants   (default: census,contract,cells,c83,table,sfdg)
-# Fixtures: F-SFD (tools/gen_schema_fast_decode_fixture.py) and fsfd_refuse (mr4_fixtures.py) in out/mr4/fixtures (or
-# MR4_FIXTURES), made when absent; pkv_def.sslm (the no-table fixture of 2.3) from MR2's fixtures.
+#   --fixtures-only  make the fixtures below and exit (mr4_mutants.sh uses it)
+# Fixtures: all three in <out>/fixtures (MR4_FIXTURES overrides), made when absent, so a fresh clone with no out/ needs
+# nothing: F-SFD (tools/gen_schema_fast_decode_fixture.py), fsfd_refuse (mr4_fixtures.py), and pkv_def.sslm (2.3's
+# no-table fixture: copied from MR_FIXTURES or out/mr1-smoke/fixtures when there, else tools/gen_paged_kv_fixture.py,
+# ~30 min of CPU once).
 #
 # Legs (each printed PASS or FAIL; exit 0 only when every leg run passes):
 #   census    tests/ci/check_gpu_status_site_census.py: every status and catch site in src/gpu is in te425's list.
@@ -47,11 +51,11 @@ for a in "$@"; do
 		--base=*) BASE="${a#--base=}" ;;
 		--only=*) ONLY="${a#--only=}" ;;
 		--build-only) RUN=0 ;;
-		*) sed -n '2,31p' "$0"; exit 2 ;;
+		--fixtures-only) ONLY=fixtures ;;
+		*) sed -n '2,34p' "$0"; exit 2 ;;
 	esac
 done
 cd "$REPO"
-[ -n "$BASE" ] || BASE="$(git merge-base HEAD origin/claude/sfd-gpu-1p17)"
 export WINEPREFIX="${WINEPREFIX_MR4:-$OUT/wineprefix-$$}"
 if [ -z "${WINEPREFIX_MR4:-}" ]; then
 	trap 'for p in "$WINEPREFIX" "$WINEPREFIX"-*; do [ -d "$p" ] && { WINEPREFIX="$p" /usr/lib/wine/wineserver -k 2>/dev/null || true; rm -rf "$p"; }; done; true' EXIT
@@ -67,15 +71,18 @@ fixtures4() {
 	mkdir -p "$F4"
 	[ -f "$F4/fsfd.sslm" ] || python3 tools/gen_schema_fast_decode_fixture.py "$F4" >/dev/null
 	[ -f "$F4/fsfd_refuse.sslm" ] && [ "$F4/fsfd_refuse.sslm" -nt "$HERE/mr4_fixtures.py" ] || python3 "$HERE/mr4_fixtures.py" "$F4" >/dev/null
-	# pkv_def (2.3's no-table fixture): mr_lib's fixtures() into F4 itself -- copied from MR_FIXTURES or the MR1
-	# smoke's directory when there, else generated (tools/gen_paged_kv_fixture.py). It used to copy from out/mr2,
-	# which nothing had built on a fresh clone (MR4 re-check N6).
-	if [ ! -f "$F4/pkv_def.sslm" ]; then
-		FIX="$F4"
-		fixtures
-	fi
+	# pkv_def (2.3's no-table fixture): mr_lib's fixtures() into F4 itself, named as its argument -- copied from
+	# MR_FIXTURES or the MR1 smoke's directory when there, else generated (tools/gen_paged_kv_fixture.py). It used to
+	# copy from out/mr2, which nothing had built on a fresh clone (MR4 re-check N6), and then leaned on mr_lib's FIX,
+	# which mr_lib computed from OUT when it was sourced (the builder's runner nit).
+	[ -f "$F4/pkv_def.sslm" ] || fixtures "$F4"
 	[ -f "$F4/pkv_def.sslm" ] || { echo "FAIL fixtures: no pkv_def.sslm in $F4"; return 1; }
 }
+
+if [ "$ONLY" = fixtures ]; then
+	if fixtures4; then echo "fixtures: $F4 ($(cd "$F4" && ls fsfd.sslm fsfd_refuse.sslm pkv_def.sslm | tr '\n' ' '))"; exit 0; fi
+	exit 1
+fi
 
 # ------------------------------------------------------------------------------------------------ census
 if want census; then
@@ -121,6 +128,13 @@ fi
 # ------------------------------------------------------------------------------------------------ 8.3
 BT="$OUT/base-tree"
 base_tree() {
+	# The base, resolved only by the legs that build from it (c83, sfdg), so census, cells, table and --fixtures-only run
+	# on a clone without that branch. Without origin/claude/sfd-gpu-1p17 (a single-branch clone) it is the v1.17.0 tag
+	# (ruling 20's base).
+	if [ -z "$BASE" ]; then
+		BASE="$(git merge-base HEAD origin/claude/sfd-gpu-1p17 2>/dev/null || true)"
+		[ -n "$BASE" ] || { BASE=v1.17.0; echo "    base: no origin/claude/sfd-gpu-1p17; using $BASE"; }
+	fi
 	if [ ! -d "$BT/src" ] || [ "$(git -C "$BT" rev-parse HEAD 2>/dev/null)" != "$(git rev-parse "$BASE^{commit}")" ]; then
 		git worktree remove --force "$BT" 2>/dev/null || rm -rf "$BT"
 		git worktree add --detach "$BT" "$BASE" >/dev/null

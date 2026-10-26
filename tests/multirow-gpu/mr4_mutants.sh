@@ -36,6 +36,8 @@ cd "$REPO"
 CELLS="$(dirname "$OUT")/cells"
 F4="${MR4_FIXTURES:-$(dirname "$OUT")/fixtures}"
 bash "$HERE/mr4_wine.sh" --out="$(dirname "$OUT")" --only=cells --build-only --jobs="$JOBS" >/dev/null
+# The cells' fixtures, made here when absent (run alone on a fresh clone, nothing else has made them).
+bash "$HERE/mr4_wine.sh" --out="$(dirname "$OUT")" --fixtures-only >/dev/null || { echo "mutants: FAIL (fixtures in $F4)"; exit 1; }
 want() { [ -z "$ONLY" ] && return 0; case ",$ONLY," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 FAILED=()
 mkdir -p "$OUT"
