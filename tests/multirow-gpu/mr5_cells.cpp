@@ -760,7 +760,9 @@ void Cell23x(Fsfd& fx) {
 			const std::string tag = base + ": " + z.name;
 			World w(m);
 			if (!w.ok) { Check(false, tag); continue; }
-			const int32_t cap = z.room < 0 ? 200 : static_cast<int32_t>(prompt.size()) + 1 + z.room;
+			// Ruling 30 (1): after Replay(prompt, 1) the Off token is in hand, not embedded, so the context holds the prompt
+			// alone and `room` rows of headroom need a cap of prompt + room.
+			const int32_t cap = z.room < 0 ? 200 : static_cast<int32_t>(prompt.size()) + z.room;
 			SslmGpuSequenceHandle* s = w.Seq(pooled != 0, cap, kLongKey);
 			Hist h;
 			if (!s || !Replay(w, m, s, prompt, 1, &h)) { Check(false, tag + ": history"); continue; }
@@ -1012,11 +1014,25 @@ void Cell710(Fsfd& fx) {
 		int32_t z = -1;
 		st = st == S::SSLM_OK ? Dec(w, m, t, y, &z) : st;
 		StatusIs(st, S::SSLM_OK, tag + ": the Off twin");
+		// Ruling 30 (2): rows 0 and 2 saturate naturally on F-SFD too, so the want is the armed Off twin's counters
+		// (entry + rows 0..2's deltas, row 1's +1 included), never entry + 1. An unarmed twin (a fourth handle, the same
+		// three tokens) pins the seam's own +1 per counter, so dropping or doubling row 1's delta cannot pass either way.
 		const mr2::Counters cs = mr2::ReadCounters(s), ct = mr2::ReadCounters(t);
-		mr2::Counters want = entry;
-		for (int i = 0; i < 5; ++i) want.v[i] += 1;  // row 1's delta: one per counter; rows 0 and 2 add none on F-SFD
-		Check(cs == want, F("%s: counters %s, want entry + rows 0..2 = %s (MX19)", tag.c_str(), cs.Str().c_str(), want.Str().c_str()));
-		Check(ct == want, F("%s: the Off twin's counters %s, want %s (the seam's own check)", tag.c_str(), ct.Str().c_str(), want.Str().c_str()));
+		SslmGpuSequenceHandle* u = w.Seq(pooled != 0, 200, kLongKey);
+		Hist hu;
+		mr2::Counters cu{};
+		if (u && Replay(w, m, u, p, 2, &hu)) {
+			TwinDecodes(w, m, u, &hu, 3);
+			cu = mr2::ReadCounters(u);
+			mr2::Counters plus = cu;
+			for (int i = 0; i < 5; ++i) plus.v[i] += 1;
+			Check(ct == plus, F("%s: the armed Off twin's counters %s, the unarmed twin's + 1 = %s (the seam's own check)", tag.c_str(),
+			                    ct.Str().c_str(), plus.Str().c_str()));
+		} else {
+			Check(false, tag + ": the unarmed twin");
+		}
+		Check(cs == ct, F("%s: counters %s, want the Off twin's %s (entry %s; rows 0..2, row 1 armed; MX19)", tag.c_str(), cs.Str().c_str(),
+		                  ct.Str().c_str(), entry.Str().c_str()));
 		Check(e.tok == z, F("%s: produced %d, Off's %d", tag.c_str(), e.tok, z));
 		BlobEq(Blob(w, s, tag), Blob(w, t, tag), tag + ": the SLM5/SLM6 blob");
 	}
