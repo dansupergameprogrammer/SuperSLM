@@ -13,7 +13,10 @@
 # Legs (each printed PASS or FAIL; every leg runs and reports whatever an earlier one did; exit 0 only when every leg
 # run passes):
 #   census   tests/ci/check_gpu_status_site_census.py: every status and catch site in src/gpu is in te425's list.
-#   cells    mr3e_cells.exe: sweep (E-7 a) and refusal (E-7 b), each graded in-process against the one-row path.
+#   cells    mr3e_cells.exe: sweep (E-7 a; with ruling 24's layer-sliced budgets and unaligned starts) and refusal
+#            (E-7 b), each graded in-process against the one-row path; height (ruling 24 S2: ruling 19a's H through
+#            the recorder's widened-list count), reuse (S1: a refusal inside a wide pass on a reset handle, its blob
+#            graded by the base leg) and flags (M2: the rows query and the ready flag across a call).
 #   base     the same executable built from --base's tree. Every `obs` line (status, blob, final hidden, context,
 #            ready flag for every sweep and refusal case) must equal the branch's.
 #   abi      E-7 (d): gpu_1p0.h declares the same functions and the same struct bodies as --base's.
@@ -22,6 +25,10 @@
 #            sees a lost tail row.
 #            MXE1, the control: the bridge's pass height pinned at 1. The sweep must stay green, which proves the
 #            sweep compares bytes, not speed.
+#            Ruling 24 (the code review's KE mutants, by site rather than line): KE1 (H > 1 only when the budget buys
+#            full depth in one submission) and KE1b (H = budget / (L dpl), reading (A)) must turn height red; KE5
+#            (the entry flags not restored after the passes) and KE6 (last_rows_committed alone not restored) must
+#            turn flags red.
 #   optout   E-7 (c): with the opt-out set (SSLM_GPU_MULTIROW_PROMPT=0), the sweep is green on the branch AND on
 #            MXE2's binary. The opt-out bypasses the multi-row code, so a broken tail cannot reach it. MXE2 without
 #            the opt-out must be red, or this leg proves nothing.
@@ -228,6 +235,23 @@ if want mutants && [ "$RUN" = 1 ] && [ $CELLS_OK = 1 ]; then
 		rc=0; run_cells "$MUT/MXE1" "$MUT/MXE1.log" -- --cells=sweep --quick || rc=$?
 		if [ $rc = 0 ]; then echo "PASS control MXE1 (H = 1): the sweep stays green"; else echo "FAIL control MXE1: the sweep went red at H = 1 ($MUT/MXE1.log)"; FAILED+=(MXE1); fi
 	else echo "FAIL control MXE1 (no site)"; FAILED+=(MXE1); fi
+	# Ruling 24: the review's KE1, KE1b, KE5, KE6, each red in its cell (by site, not 8019a811's line numbers).
+	ke() {  # ke NAME CELL PATTERN REPLACEMENT
+		local name="$1" cell="$2"
+		if host_mutant "$name" $G 1 "$3" "$4"; then
+			rc=0; run_cells "$MUT/$name" "$MUT/$name.log" -- --cells="$cell" || rc=$?
+			if [ $rc != 0 ]; then echo "PASS mutant $name -> red in $cell ($(grep -m1 '^RED cell' "$MUT/$name.log" || echo crashed))"
+			else echo "FAIL mutant $name survived ($cell green)"; FAILED+=("$name"); fi
+		else echo "FAIL mutant $name (no site)"; FAILED+=("$name"); fi
+	}
+	ke KE1 height '(dispatch_budget < model->dispatches_per_layer)\) return 1u;' \
+		'\1 * model->num_hidden_layers) return 1u;  // KE1: H > 1 only at full depth per submission'
+	ke KE1b height '^(\s*)return std::min<uint32_t>\(static_cast<uint32_t>\(SSLM_GPU_MAX_ROWS\), rows_left\);' \
+		'\1return std::max<uint32_t>(1u, std::min<uint32_t>(std::min<uint32_t>(static_cast<uint32_t>(SSLM_GPU_MAX_ROWS), rows_left), dispatch_budget / (model->dispatches_per_layer * model->num_hidden_layers)));  // KE1b'
+	ke KE5 flags '^(\s*)restore_entry_flags\(\);(\n\s*derived_count = seq->context_length - chunk_open_ctxlen;)' \
+		'\1(void)0;  // KE5: the entry flags not restored\2'
+	ke KE6 flags '^(\s*)seq->last_rows_committed = entry_last_rows_committed;' \
+		'\1(void)entry_last_rows_committed;  // KE6: last_rows_committed not restored'
 fi
 
 # ------------------------------------------------------------------------------------------------ opt-out

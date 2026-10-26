@@ -24,13 +24,31 @@
 //            SSLM_SEQUENCE_REJECTED with rows before r committed and the snapshot empty (at least one r >= 9: a later pass).
 //            Claim rule: the bridge takes no per-handle decode claim (the claim seam never fires inside it), as
 //            today. Every case also prints an `obs` line; the runner diffs those lines against the base binary.
+//   height   Ruling 24 (S2): ruling 19a's pass height, pinned through a count that does not depend on speed: the
+//            recorder's widened lists (one per slice of a multi-row pass, the MR2 submission seam). For n rows at
+//            dispatch budget B: H = min(8, n) when B >= dpl and n >= 2 (else H = 1, the shipped one-row path, which
+//            records no widened list); the passes are floor(n / H) of H rows and one of n mod H; each pass of two
+//            or more rows makes ceil(L / min(L, floor(B / dpl))) slices. With SSLM_GPU_MULTIROW_PROMPT=0, none.
+//            Budgets 1, dpl - 1, dpl, 1.5 dpl, 2 dpl, (L - 1) dpl, L dpl - 1, L dpl and 0xFFFFFFFF, dedicated and
+//            pooled; the sweep checks the same count on every call it makes (not under --quick). KE1 and KE1b
+//            must turn it red.
+//   reuse    Ruling 24 (S1): a guard refusal inside a wide pass on a reused handle: refuse (or a clean prompt),
+//            reset, then a call that guard-refuses at row r inside a pass of 8, dedicated and pooled. Status,
+//            context r, no snapshot in-process; the save blob (stale K/V rows past the context included) is graded
+//            against the shipped bridge by the base leg's obs diff.
+//   flags    Ruling 24 (M2): sslm_gpu_seq_last_rows_committed and the ready flag keep their entry values across
+//            a bridge call (an entry of 3 from a closed PROMPT chunk), clean at budgets 0xFFFFFFFF and dpl and
+//            guard-refused inside a wide pass, dedicated and pooled, equal to the one-row path's. KE5 and KE6 must
+//            turn it red.
 //   (opt-out, the tail-drop mutant MXE2 and the H = 1 control MXE1 are the runner's legs: see mr3e_wine.sh.)
+// The sweep (ruling 24) also runs layer-sliced budgets (dpl, 2 dpl, (L - 1) dpl and 1.5 dpl, one not a multiple)
+// and unaligned, page-straddling starts (N3: a prefix call of k = 3, 5, 12, 13 tokens, then n = 7, 8, 9, 13, 20).
 //
 // --print-obs prints one line per sweep and refusal case. The runner diffs them between the base tree (the head
 // before MR3e) and the branch, so "unchanged" is graded against the shipped bridge's real bytes, not this file's
 // reading of them.
 //
-// Usage: mr3e_cells.exe --fixtures=DIR [--cells=sweep,refusal] [--quick] [--print-obs] [--show=N]
+// Usage: mr3e_cells.exe --fixtures=DIR [--cells=sweep,refusal,height,reuse,flags] [--quick] [--print-obs] [--show=N]
 //   --quick   the sweep at budget 0xFFFFFFFF only, dedicated only (the mutant and opt-out legs)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -50,6 +68,7 @@
 #include <vector>
 
 #include "mr2_common.h"
+#include "mr2_entry.h"  // the MR2 seams: the recorder's widened-list count (cell height)
 
 // The engine's claim seam (SUPERSLM_GPU_ALLOC_FAULT_INJECTION builds; mr3_entry.h describes it).
 void SslmGpuSeqClaimHookForTest(void (*hook)(SslmGpuSequenceHandle* seq, void* user), void* user) noexcept;
@@ -177,6 +196,35 @@ void BlobEq(const std::vector<uint8_t>& got, const std::vector<uint8_t>& want, c
 	                               got.size(), want.size(), d, n));
 }
 
+// ------------------------------------------------------------------------------------------------ pass height
+// Ruling 24 (S2): the recorder's widened lists on the context so far (the MR2 submission seam).
+uint64_t Widened(World& w) {
+	SslmGpuMr2Seams sm{};
+	return sslm_gpu_test_only_mr2_seams(w.ctx, &sm) == S::SSLM_OK ? sm.widened_lists : ~0ull;
+}
+bool OptedOut() {
+	const char* e = std::getenv("SSLM_GPU_MULTIROW_PROMPT");
+	return e && std::string(e) == "0";
+}
+// Ruling 19a, as ruling 24 pins it: the widened lists one bridge call of n admitted rows at budget B records.
+uint64_t ExpectedWidened(const Model& m, int n, uint32_t budget) {
+	const uint32_t dpl = m.dpl(), L = m.layers();
+	if (OptedOut() || n < 2 || dpl == 0 || budget < dpl) return 0;
+	const uint64_t H = std::min<uint64_t>(8, static_cast<uint64_t>(n));
+	const uint64_t passes = static_cast<uint64_t>(n) / H + ((static_cast<uint64_t>(n) % H) >= 2 ? 1 : 0);
+	const uint64_t per = std::min<uint64_t>(L, budget / dpl);
+	return passes * ((L + per - 1) / per);
+}
+// The layer-sliced budgets ruling 24 adds: dpl, 2 dpl, (L - 1) dpl and one not a multiple (1.5 dpl), each below
+// L dpl where the model allows (deduplicated, in order).
+std::vector<uint32_t> SlicedBudgets(const Model& m) {
+	const uint32_t d = m.dpl(), L = m.layers();
+	std::vector<uint32_t> v;
+	for (uint32_t b : {d, 2 * d, (L - 1) * d, d + d / 2})
+		if (b >= 1 && std::find(v.begin(), v.end(), b) == v.end()) v.push_back(b);
+	return v;
+}
+
 // ------------------------------------------------------------------------------------------------ sweep
 const std::vector<int> kSizes = [] {
 	std::vector<int> v;
@@ -224,10 +272,39 @@ void SweepConfig(const Model& m, bool pooled, uint32_t budget, uint32_t stream) 
 		const std::string tag = F("%s %s budget %u n %d", m.base().c_str(), pooled ? "pooled" : "dedicated", budget, n);
 		SslmGpuSequenceHandle* s = make();
 		if (!s) { Check(false, tag + ": handle"); continue; }
+		const uint64_t w0 = Widened(w);
 		const S st = Bridge(w, s, t.data(), n, budget);
+		const uint64_t got = Widened(w) - w0, want = ExpectedWidened(m, n, budget);
 		Compare(w, s, st, ref[n], n, tag);
+		// Ruling 24 (S2): the pass height, through the recorder's slice count (not under --quick: the H = 1 control
+		// MXE1 and the opt-out legs grade bytes only).
+		if (!g_opt.quick) Check(got == want, F("%s: %llu widened lists, ruling 19a's H gives %llu", tag.c_str(), (unsigned long long)got, (unsigned long long)want));
 		w.Release(s);
 	}
+}
+// N3 (ruling 24): a prefix call of k tokens, then a call of n: passes that start at an unaligned context and, on a
+// pooled handle, straddle a page. Against the one-row path (one call per token), as the sweep compares.
+void SweepUnaligned(const Model& m, bool pooled, uint32_t stream) {
+	World w(m);
+	if (!w.ok) { Check(false, "world"); return; }
+	SslmGpuKvPoolHandle* pool = pooled ? w.Pool(2 * (kCap / 16) + 8) : nullptr;
+	auto make = [&]() { return pooled ? w.Pooled(pool, kCap) : w.Dedicated(kCap); };
+	for (int k : {3, 5, 12, 13})
+		for (int n : {7, 8, 9, 13, 20}) {
+			const std::string tag = F("%s %s unaligned k %d n %d", m.base().c_str(), pooled ? "pooled" : "dedicated", k, n);
+			const std::vector<int32_t> t = Stream(k + n, m.vocab(), stream);
+			SslmGpuSequenceHandle* s = make();
+			SslmGpuSequenceHandle* r = make();
+			if (!s || !r) { Check(false, tag + ": handles"); continue; }
+			S st = Bridge(w, s, t.data(), k, kEmbedderBudget);
+			if (st == S::SSLM_OK) st = Bridge(w, s, t.data() + k, n, kEmbedderBudget);
+			Ref ref;
+			for (int i = 0; i < k + n && ref.st == S::SSLM_OK; ++i) ref.st = Bridge(w, r, &t[i], 1, kEmbedderBudget);
+			ref.state = Observe(w, r);
+			Compare(w, s, st, ref, k + n, tag);
+			w.Release(s);
+			w.Release(r);
+		}
 }
 // The embedder's shape: cap exactly n, reset, one call, the read; then a decode-bridge step on both.
 void SweepTight(const Model& m, uint32_t stream) {
@@ -268,6 +345,48 @@ void CellSweep(const Model& def, const Model& qk) {
 	SweepConfig(def, false, 3 * def.full_budget(), 16);
 	SweepConfig(def, true, 3 * def.full_budget(), 17);
 	if (qk.layers()) SweepConfig(qk, false, kEmbedderBudget, 18);  // the QK-norm geometry (25 dispatches per layer)
+	// Ruling 24 (S2): layer-sliced budgets; (N3) unaligned and page-straddling starts.
+	uint32_t stream = 40;
+	for (uint32_t b : SlicedBudgets(def)) {
+		SweepConfig(def, false, b, stream++);
+		SweepConfig(def, true, b, stream++);
+	}
+	if (qk.layers()) SweepConfig(qk, false, qk.dpl(), stream++);
+	SweepUnaligned(def, false, 50);
+	SweepUnaligned(def, true, 51);
+}
+
+// ------------------------------------------------------------------------------------------------ height
+// Ruling 24 (S2): ruling 19a's H at the budget edges, through the recorder's widened-list count alone (fast: the
+// mutant leg's KE1 and KE1b run this cell). Status OK and context n on every call.
+void CellHeight(const Model& def, const Model& qk) {
+	for (const Model* m : {&def, &qk}) {
+		if (!m->layers()) continue;
+		const uint32_t d = m->dpl(), L = m->layers();
+		std::vector<uint32_t> budgets;
+		for (uint32_t b : {1u, d - 1, d, d + d / 2, 2 * d, (L - 1) * d, L * d - 1, L * d, kEmbedderBudget})
+			if (b >= 1 && std::find(budgets.begin(), budgets.end(), b) == budgets.end()) budgets.push_back(b);
+		for (int pooled = 0; pooled < 2; ++pooled) {
+			if (m == &qk && pooled) continue;
+			World w(*m);
+			if (!w.ok) { Check(false, "world"); return; }
+			SslmGpuKvPoolHandle* pool = pooled ? w.Pool(2 * (64 / 16) + 8) : nullptr;
+			for (uint32_t b : budgets)
+				for (int n : {1, 2, 7, 8, 9, 17, 20}) {
+					const std::string tag = F("%s %s budget %u n %d", m->base().c_str(), pooled ? "pooled" : "dedicated", b, n);
+					SslmGpuSequenceHandle* s = pooled ? w.Pooled(pool, 64) : w.Dedicated(64);
+					if (!s) { Check(false, tag + ": handle"); continue; }
+					const std::vector<int32_t> t = Stream(n, m->vocab(), 60 + static_cast<uint32_t>(n));
+					const uint64_t w0 = Widened(w);
+					const S st = Bridge(w, s, t.data(), n, b);
+					const uint64_t got = Widened(w) - w0, want = ExpectedWidened(*m, n, b);
+					StatusIs(st, S::SSLM_OK, tag);
+					Check(CtxLen(s) == n, F("%s: context %lld, want %d", tag.c_str(), (long long)CtxLen(s), n));
+					Check(got == want, F("%s: %llu widened lists, ruling 19a's H gives %llu", tag.c_str(), (unsigned long long)got, (unsigned long long)want));
+					w.Release(s);
+				}
+		}
+	}
 }
 
 // ------------------------------------------------------------------------------------------------ refusal
@@ -458,6 +577,183 @@ void CellRefusal(const Model& m, const Model& rf) {
 	std::printf("\n");
 }
 
+// ------------------------------------------------------------------------------------------------ reuse, flags
+// The guard-refusing streams of `rf` (first refusal row `at` >= 1 on the one-row path from a fresh handle), up to
+// `want` with distinct at mod 8, and a 12-token stream that does not refuse.
+std::vector<std::pair<uint32_t, int>> RefusingStreams(const Model& rf, size_t want, uint32_t* clean) {
+	std::vector<std::pair<uint32_t, int>> out;
+	std::set<int> residues;
+	World x(rf);
+	if (!x.ok) return out;
+	for (uint32_t stream = 0; stream < 192 && out.size() < want; ++stream) {
+		const std::vector<int32_t> p = Stream(48, rf.vocab(), 100 + stream);
+		SslmGpuSequenceHandle* r = x.Dedicated(64);
+		int at = -1;
+		for (int i = 0; i < 44; ++i) {
+			const S st = Bridge(x, r, &p[i], 1, kEmbedderBudget);
+			if (st == S::SSLM_SEQUENCE_REJECTED) { at = i; break; }
+			if (st != S::SSLM_OK) break;
+		}
+		x.Release(r);
+		if (at < 1 || at > 40 || residues.count(at % 8)) continue;
+		residues.insert(at % 8);
+		out.push_back({100 + stream, at});
+	}
+	*clean = 0;
+	for (uint32_t c = 400; c < 2400 && !*clean; ++c) {
+		SslmGpuSequenceHandle* h = x.Dedicated(64);
+		const std::vector<int32_t> q = Stream(12, rf.vocab(), c);
+		if (Bridge(x, h, q.data(), 12, 1) == S::SSLM_OK) *clean = c;
+		x.Release(h);
+	}
+	return out;
+}
+
+// Ruling 24 (S1): refuse (or a clean prompt), reset, then refuse inside a wide pass, dedicated and pooled.
+void CellReuse(const Model& rf) {
+	if (!rf.layers()) { Check(false, "pkv_def_refuse.sslm did not load"); return; }
+	uint32_t clean = 0;
+	const auto refusing = RefusingStreams(rf, 6, &clean);
+	Check(refusing.size() >= 3 && clean != 0, F("reuse: %zu refusing streams, clean stream %u (want 3 and one)", refusing.size(), clean));
+	if (refusing.empty() || !clean) return;
+	auto latest = refusing.front();
+	for (const auto& r : refusing)
+		if (r.second > latest.second) latest = r;
+	for (int pooled = 0; pooled < 2; ++pooled) {
+		World x(rf);
+		if (!x.ok) { Check(false, "world"); return; }
+		SslmGpuKvPoolHandle* pool = pooled ? x.Pool(24) : nullptr;
+		const char* kind = pooled ? "pooled" : "dedicated";
+		for (const auto& [stream, at] : refusing) {
+			const std::vector<int32_t> p = Stream(48, rf.vocab(), stream);
+			const int n = at + 4;
+			for (int setup = 0; setup < 2; ++setup) {
+				SslmGpuSequenceHandle* s = pooled ? x.Pooled(pool, 64) : x.Dedicated(64);
+				if (!s) { Check(false, "reuse: handle"); continue; }
+				std::string what;
+				if (setup == 0) {
+					const std::vector<int32_t> q = Stream(12, rf.vocab(), clean);
+					const S c = Bridge(x, s, q.data(), 12, kEmbedderBudget);
+					Check(c == S::SSLM_OK, F("reuse %s: the clean prompt returned %s", kind, N(c)));
+					what = F("clean prompt %u", clean);
+				} else {
+					const std::vector<int32_t> q = Stream(48, rf.vocab(), latest.first);
+					const S c = Bridge(x, s, q.data(), latest.second + 4, kEmbedderBudget);
+					Check(c == S::SSLM_SEQUENCE_REJECTED, F("reuse %s: the first refusal returned %s", kind, N(c)));
+					what = F("refusal of stream %u at %d", latest.first, latest.second);
+				}
+				sslm_gpu_seq_reset(x.ctx, s);
+				const S st = Bridge(x, s, p.data(), n, kEmbedderBudget);
+				const std::string tag = F("reuse %s: %s, reset, stream %u refusing at %d (n %d)", kind, what.c_str(), stream, at, n);
+				StatusIs(st, S::SSLM_SEQUENCE_REJECTED, tag);
+				const State o = Observe(x, s);
+				Check(o.ctx == at, F("%s: context %lld, want %d", tag.c_str(), (long long)o.ctx, at));
+				Check(o.hidden.st != S::SSLM_OK, tag + ": the snapshot is readable");
+				Obs(F("reuse %s setup%d stream %u at %d st %s %s", kind, setup, stream, at, N(st), o.Str().c_str()));
+				x.Release(s);
+			}
+		}
+	}
+}
+
+// Ruling 24 (M2): the rows query and the ready flag across a bridge call, from an entry of 3 (a closed PROMPT chunk).
+bool FlagsEntry(World& w, const Model& m, SslmGpuSequenceHandle* s, const std::vector<int32_t>& e8, int32_t* lrc) {
+	if (!s || Bridge(w, s, e8.data(), 5, kEmbedderBudget) != S::SSLM_OK) return false;
+	SslmGpuRowsSpec spec{sizeof(SslmGpuRowsSpec), SSLM_GPU_ROWS_PROMPT, e8.data() + 5, 3, 0};
+	int32_t adm = 0;
+	if (sslm_gpu_seq_embed_rows(w.ctx, s, &spec, &adm) != S::SSLM_OK || adm != 3) return false;
+	for (int i = 0; i < 64; ++i) {
+		if (mr2::Slice(w, s, m.dpl()) != S::SSLM_OK) return false;
+		int32_t open = -1;
+		sslm_gpu_seq_rows_open(s, &open);
+		if (open == 0) break;
+	}
+	*lrc = -1;
+	return sslm_gpu_seq_last_rows_committed(s, lrc) == S::SSLM_OK;
+}
+int32_t Lrc(SslmGpuSequenceHandle* s) {
+	int32_t v = -1;
+	return sslm_gpu_seq_last_rows_committed(s, &v) == S::SSLM_OK ? v : -1;
+}
+void CellFlags(const Model& def, const Model& rf) {
+	for (int pooled = 0; pooled < 2; ++pooled) {
+		const char* kind = pooled ? "pooled" : "dedicated";
+		// Clean: 9 rows (a pass of 8 and a one-row tail) at 0xFFFFFFFF and at dpl, against the one-row path.
+		{
+			World w(def);
+			if (!w.ok) { Check(false, "world"); return; }
+			SslmGpuKvPoolHandle* pool = pooled ? w.Pool(24) : nullptr;
+			const std::vector<int32_t> t = Stream(17, def.vocab(), 33);
+			for (uint32_t b : {kEmbedderBudget, def.dpl()}) {
+				const std::string tag = F("flags %s clean budget %u", kind, b);
+				SslmGpuSequenceHandle* s = pooled ? w.Pooled(pool, 64) : w.Dedicated(64);
+				SslmGpuSequenceHandle* r = pooled ? w.Pooled(pool, 64) : w.Dedicated(64);
+				int32_t ls = -1, lr = -1;
+				if (!FlagsEntry(w, def, s, t, &ls) || !FlagsEntry(w, def, r, t, &lr)) { Check(false, tag + ": entry"); continue; }
+				Check(ls == 3 && lr == 3, F("%s: setup: last_rows_committed %d / %d after a 3-row chunk", tag.c_str(), ls, lr));
+				const int32_t ready0 = ReadyFlag(w, s);
+				const S st = Bridge(w, s, t.data() + 8, 9, b);
+				S rs = S::SSLM_OK;
+				for (int i = 0; i < 9 && rs == S::SSLM_OK; ++i) rs = Bridge(w, r, &t[8 + i], 1, b);
+				StatusIs(st, rs, tag);
+				Check(Lrc(s) == ls, F("%s: last_rows_committed %d after the call, %d at its entry", tag.c_str(), Lrc(s), ls));
+				Check(Lrc(s) == Lrc(r) && ReadyFlag(w, s) == ReadyFlag(w, r),
+				      F("%s: last_rows_committed %d ready %d; the one-row path %d / %d", tag.c_str(), Lrc(s), ReadyFlag(w, s), Lrc(r), ReadyFlag(w, r)));
+				Obs(F("flags %s clean budget %u st %s lrc %d -> %d ready %d -> %d", kind, b, N(st), ls, Lrc(s), ready0, ReadyFlag(w, s)));
+				w.Release(s);
+				w.Release(r);
+			}
+		}
+		// Guard-refused inside a wide pass, from the same kind of entry on pkv_def_refuse.
+		if (!rf.layers()) { Check(false, "pkv_def_refuse.sslm did not load"); return; }
+		World x(rf);
+		if (!x.ok) { Check(false, "world"); return; }
+		SslmGpuKvPoolHandle* pool = pooled ? x.Pool(48) : nullptr;
+		uint32_t clean = 0;
+		for (uint32_t c = 400; c < 2400 && !clean; ++c) {
+			SslmGpuSequenceHandle* h = x.Dedicated(64);
+			int32_t l = -1;
+			if (FlagsEntry(x, rf, h, Stream(8, rf.vocab(), c), &l) && l == 3) clean = c;
+			x.Release(h);
+		}
+		Check(clean != 0, F("flags %s: no 8-token entry on pkv_def_refuse that does not refuse", kind));
+		if (!clean) continue;
+		const std::vector<int32_t> e8 = Stream(8, rf.vocab(), clean);
+		int found = 0;
+		for (uint32_t stream = 0; stream < 192 && found < 3; ++stream) {
+			const std::vector<int32_t> p = Stream(40, rf.vocab(), 100 + stream);
+			SslmGpuSequenceHandle* r = pooled ? x.Pooled(pool, 64) : x.Dedicated(64);
+			int32_t lr = -1;
+			if (!FlagsEntry(x, rf, r, e8, &lr)) { x.Release(r); continue; }
+			int at = -1;
+			S rs = S::SSLM_OK;
+			for (int i = 0; i < 36; ++i) {
+				rs = Bridge(x, r, &p[i], 1, kEmbedderBudget);
+				if (rs != S::SSLM_OK) { at = i; break; }
+			}
+			if (rs != S::SSLM_SEQUENCE_REJECTED || at < 2) { x.Release(r); continue; }
+			++found;
+			const std::string tag = F("flags %s refused at row %d (stream %u)", kind, at, 100 + stream);
+			SslmGpuSequenceHandle* s = pooled ? x.Pooled(pool, 64) : x.Dedicated(64);
+			int32_t ls = -1;
+			if (!FlagsEntry(x, rf, s, e8, &ls)) { Check(false, tag + ": entry"); x.Release(r); x.Release(s); continue; }
+			const int32_t ready0 = ReadyFlag(x, s);
+			const S st = Bridge(x, s, p.data(), at + 4, kEmbedderBudget);
+			StatusIs(st, S::SSLM_SEQUENCE_REJECTED, tag);
+			Check(CtxLen(s) == 8 + at, F("%s: context %lld, want %d", tag.c_str(), (long long)CtxLen(s), 8 + at));
+			Check(Lrc(s) == ls && ls == 3, F("%s: last_rows_committed %d after the call, %d at its entry", tag.c_str(), Lrc(s), ls));
+			// A refusal leaves the ready flag as the call found it (docs/api.md; the shipped bridge never sets it on a
+			// short count), and the rows query as the one-row path leaves it.
+			Check(Lrc(s) == Lrc(r) && ReadyFlag(x, s) == ready0,
+			      F("%s: last_rows_committed %d (the one-row path %d), ready %d (at entry %d)", tag.c_str(), Lrc(s), Lrc(r), ReadyFlag(x, s), ready0));
+			Obs(F("flags %s refused stream %u at %d st %s lrc %d -> %d ready %d -> %d", kind, 100 + stream, at, N(st), ls, Lrc(s), ready0, ReadyFlag(x, s)));
+			x.Release(r);
+			x.Release(s);
+		}
+		Check(found >= 1, F("flags %s: no stream refuses at row >= 2 after the entry", kind));
+	}
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -484,7 +780,10 @@ int main(int argc, char** argv) {
 	std::printf("mr3e: SSLM_GPU_MULTIROW_PROMPT=%s\n", env ? env : "(unset)");
 	const std::vector<std::pair<const char*, std::function<void()>>> cells = {
 	    {"sweep", [&] { CellSweep(def, qk); }},
-	    {"refusal", [&] { if (!rf.Load(g_opt.fixtures + "/pkv_def_refuse.sslm")) rf = Model{}; CellRefusal(def, rf); }},
+	    {"refusal", [&] { if (!rf.layers() && !rf.Load(g_opt.fixtures + "/pkv_def_refuse.sslm")) rf = Model{}; CellRefusal(def, rf); }},
+	    {"height", [&] { CellHeight(def, qk); }},
+	    {"reuse", [&] { if (!rf.layers() && !rf.Load(g_opt.fixtures + "/pkv_def_refuse.sslm")) rf = Model{}; CellReuse(rf); }},
+	    {"flags", [&] { if (!rf.layers() && !rf.Load(g_opt.fixtures + "/pkv_def_refuse.sslm")) rf = Model{}; CellFlags(def, rf); }},
 	};
 	bool all = true;
 	for (auto& c : cells) {
