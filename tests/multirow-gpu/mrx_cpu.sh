@@ -8,12 +8,16 @@
 # Fixtures: F-SFD (MRX_FIXTURES, default out/mrx/fixtures; tools/gen_schema_fast_decode_fixture.py when absent).
 #
 # Legs (each PASS or FAIL; every leg runs whatever an earlier one did; exit 0 only when every leg run passes):
-#   header     E-11 (a), (c): no public header (include/superslm/*.h, *.inc) names SSLM_JUMP_CANONICAL or
-#              SSLM_GPU_ROWS_SCHEMA_FORCED; SSLM_JUMP_EXACT is still 1; no jump-mode enumerator takes the old value 0
-#              (reserved, never reused).
-#   changelog  E-11 (f): CHANGELOG.md's 1.18.0 section has a "Removed" heading whose text says "requests for canonical are
-#              refused, and NULL options select Exact".
-#   cells      mrx_cpu x.1 (mode 0 refused, nothing changed) and x.3 (NULL equals explicit Exact, saves included).
+#   header     E-11 (a), (c) as ruling 21 amends them: no public header (include/superslm/*.h, *.inc) names
+#              SSLM_JUMP_CANONICAL or SSLM_GPU_ROWS_SCHEMA_FORCED; sslm_jump_mode has SSLM_JUMP_DEFAULT = 0 and an
+#              SSLM_JUMP_EXACT that is not 0, every enumerator with an explicit value; and the GPU side has its DEFAULT
+#              too: an enum in gpu_1p0.h with a *_JUMP_DEFAULT = 0 enumerator, or, where SslmGpuJumpOptions' mode takes
+#              the CPU enum's values (no GPU enum), gpu_1p0.h names SSLM_JUMP_DEFAULT.
+#   changelog  E-11 (f), ruling 21: CHANGELOG.md's 1.18.0 section has a "Removed" heading whose text says "Canonical is
+#              removed; mode 0 is now SSLM_JUMP_DEFAULT, which selects Exact, as do NULL options." (case, whitespace,
+#              backticks and asterisks ignored).
+#   cells      mrx_cpu x.1 (mode 0 = explicit Exact; a mode outside the enum refused, nothing changed) and x.3 (NULL
+#              equals explicit Exact, saves included).
 #   legacy     x.5: the recorder, built from v1.15.0, v1.16.0 and v1.17.0, saves under each release's Canonical jump;
 #              the branch restores every blob and continues under the mode asked for.
 set -euo pipefail
@@ -78,17 +82,22 @@ m = re.search(r"typedef enum sslm_jump_mode\s*\{(.*?)\}", abi, re.S)
 if not m: bad.append("sslm_abi.h: no sslm_jump_mode enum")
 else:
     vals = dict((k, int(v, 0)) for k, v in re.findall(r"(\w+)\s*=\s*(-?\w+)", m.group(1)))
-    if vals.get("SSLM_JUMP_EXACT") != 1: bad.append("SSLM_JUMP_EXACT is not 1 (%r)" % vals.get("SSLM_JUMP_EXACT"))
-    for k, v in vals.items():
-        if v == 0: bad.append("sslm_jump_mode reuses the old Canonical value 0: %s" % k)
+    if vals.get("SSLM_JUMP_DEFAULT") != 0: bad.append("sslm_jump_mode: SSLM_JUMP_DEFAULT is not 0 (%r)" % vals.get("SSLM_JUMP_DEFAULT"))
+    if vals.get("SSLM_JUMP_EXACT") in (None, 0): bad.append("sslm_jump_mode: SSLM_JUMP_EXACT missing or 0 (%r)" % vals.get("SSLM_JUMP_EXACT"))
     names = re.findall(r"\b(SSLM_JUMP_\w+)\b", m.group(1))
     implicit = [n for n in names if n not in vals]
     if implicit: bad.append("sslm_jump_mode has enumerators without an explicit value: %s" % implicit)
+gpu = open(os.path.join(sys.argv[1], "gpu_1p0.h")).read()
+genums = [b for b in re.findall(r"typedef enum\s*\w*\s*\{(.*?)\}", gpu, re.S) if "JUMP" in b]
+if genums:
+    if not any(re.search(r"\b\w*_JUMP_DEFAULT\s*=\s*0\b", b) for b in genums): bad.append("gpu_1p0.h: its jump-mode enum has no *_JUMP_DEFAULT = 0")
+elif "SSLM_JUMP_DEFAULT" not in gpu:
+    bad.append("gpu_1p0.h: SslmGpuJumpOptions' mode is not given SSLM_JUMP_DEFAULT (no GPU enum, and the header never names it)")
 for b in bad[:20]: print("    header: " + b)
 if len(bad) > 20: print("    header: ... %d more" % (len(bad) - 20))
 sys.exit(1 if bad else 0)
 PY
-	then echo "PASS header (no SSLM_JUMP_CANONICAL or SSLM_GPU_ROWS_SCHEMA_FORCED; EXACT = 1; 0 not reused)"; else echo "FAIL header"; FAILED+=(header); fi
+	then echo "PASS header (no SSLM_JUMP_CANONICAL or SSLM_GPU_ROWS_SCHEMA_FORCED; SSLM_JUMP_DEFAULT = 0, CPU and GPU)"; else echo "FAIL header"; FAILED+=(header); fi
 fi
 
 # ------------------------------------------------------------------------------------------------ changelog
@@ -101,11 +110,12 @@ if not m: print("    changelog: no 1.18.0 section"); sys.exit(1)
 sec = m.group(1)
 r = re.search(r"^###\s*Removed\s*$(.*?)(?=^###|\Z)", sec, re.M | re.S)
 if not r: print("    changelog: the 1.18.0 section has no \"### Removed\""); sys.exit(1)
-text = re.sub(r"\s+", " ", r.group(1)).lower()
-if "requests for canonical are refused, and null options select exact" not in text:
-    print("    changelog: 1.18.0's Removed does not say \"requests for canonical are refused, and NULL options select Exact\""); sys.exit(1)
+text = re.sub(r"\s+", " ", re.sub(r"[`*]", "", r.group(1))).lower()
+want = "Canonical is removed; mode 0 is now SSLM_JUMP_DEFAULT, which selects Exact, as do NULL options."
+if want.lower() not in text:
+    print("    changelog: 1.18.0's Removed does not say \"%s\"" % want); sys.exit(1)
 PY
-	then echo "PASS changelog (1.18.0 Removed: canonical refused, NULL selects Exact)"; else echo "FAIL changelog"; FAILED+=(changelog); fi
+	then echo "PASS changelog (1.18.0 Removed: Canonical removed, mode 0 is SSLM_JUMP_DEFAULT = Exact, as NULL)"; else echo "FAIL changelog"; FAILED+=(changelog); fi
 fi
 
 # ------------------------------------------------------------------------------------------------ cells

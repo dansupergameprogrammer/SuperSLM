@@ -4,18 +4,20 @@
 // made under that release's Canonical jump (opts NULL), with the decode-only stream that follows each.
 //
 // Cells (on F-SFD, tools/gen_schema_fast_decode_fixture.py's fsfd.sslm):
-//   x.1  The old Canonical value (mode 0) is refused by sslm_seq_jump_forward through the malformed-options status
-//        (SSLM_INVALID_ARGUMENT) with nothing changed: the count unwritten, out_forced untouched, the save blob
-//        equal, and a fresh bound sequence still bindable. Controls: mode 2 and -1 stay refused.
-//   x.3  NULL options equal explicit Exact (mode 1, no draft) byte for byte: status, out_forced, count, the save blob,
-//        then six decode steps (tokens and blob). Three schemas, budgets 1, 4 and 8.
+//   x.1  (ruling 21) Mode 0, Canonical's old value renamed SSLM_JUMP_DEFAULT, equals explicit Exact (SSLM_JUMP_EXACT,
+//        no draft) byte for byte: status, out_forced, count, the save blob, then six decode steps (tokens and blob).
+//        Three schemas, budgets 1, 4 and 8. And a mode outside the enum (-1, SSLM_JUMP_EXACT + 1, 99) is refused
+//        through the malformed-options status (SSLM_INVALID_ARGUMENT) with nothing changed: the count unwritten,
+//        out_forced untouched, the save blob equal, and a fresh bound sequence still bindable.
+//   x.3  NULL options equal explicit Exact byte for byte, the same comparison as x.1's.
 //   x.5  Saves made by 1.15, 1.16 and 1.17 under Canonical restore: SSLM_OK, and the resumed sequence continues under
 //        the mode the caller asks for. Decode-only, it gives the recorder's own next 8 tokens. One decode then an Exact
-//        jump (explicit mode 1), then decodes, gives the same 8. NULL options give the same as explicit Exact.
+//        jump (explicit), then decodes, gives the same 8. NULL options and mode 0 give the same as explicit Exact.
 //   (x.2 header and x.6 CHANGELOG are mrx_cpu.sh's static legs.)
 //
-// The literal mode values are used, never SSLM_JUMP_CANONICAL: the name leaves the headers at MRX, and this file
-// still has to compile there and in the 1.15-1.17 trees.
+// Mode 0 is the literal, never SSLM_JUMP_CANONICAL or SSLM_JUMP_DEFAULT: the first name leaves the headers at MRX and
+// the second does not exist in the 1.15-1.17 trees, and this file compiles in both. Exact is named (SSLM_JUMP_EXACT,
+// declared in every tree), so the cells do not depend on its value.
 //
 // Usage: mrx_cpu --fixtures=DIR [--legacy=DIR] [--cells=x.1,x.3,x.5]   |   mrx_cpu --fixtures=DIR --record=DIR
 #include <cstdarg>
@@ -32,8 +34,9 @@
 #include "superslm/sslm_abi.h"
 
 namespace {
-constexpr int32_t kModeCanonicalOld = 0;  // SSLM_JUMP_CANONICAL before MRX; reserved, never reused (E-11 (a))
-constexpr int32_t kModeExact = 1;         // SSLM_JUMP_EXACT
+constexpr int32_t kModeDefault = 0;  // SSLM_JUMP_DEFAULT at MRX (ruling 21): Exact, as NULL; SSLM_JUMP_CANONICAL before
+constexpr int32_t kModeExact = SSLM_JUMP_EXACT;
+const int32_t kModesOutside[] = {-1, SSLM_JUMP_EXACT + 1, 99};  // outside the enum: refused
 
 std::string g_fixtures, g_legacy, g_record, g_cell;
 std::set<std::string> g_cells;
@@ -167,11 +170,41 @@ Jump DoJump(Engine& e, sslm_seq s, int32_t budget, const sslm_jump_options* opts
 }
 sslm_jump_options Opts(int32_t mode) { return sslm_jump_options{sizeof(sslm_jump_options), mode, nullptr, 0}; }
 
+// ------------------------------------------------------------------------------------------------ x.3 (and x.1's mode 0)
+// `opts` (NULL, or mode 0) against explicit Exact, byte for byte.
+void EqualsExact(Engine& e, const sslm_jump_options* opts, const char* what) {
+	int compared = 0;
+	for (const char* schema : kSchemas)
+		for (int32_t budget : {1, 4, 8})
+			for (int decodes = 1; decodes <= 4; ++decodes) {
+				const std::string tag = F("%s budget %d after %d decodes", schema, budget, decodes);
+				sslm_seq a = e.Pending(schema, 5, decodes), b = e.Pending(schema, 5, decodes);
+				if (!a || !b) { Check(false, tag + ": setup"); if (a) sslm_seq_release(a); if (b) sslm_seq_release(b); continue; }
+				const bool chain = e.Chain(a) > 0;
+				const sslm_jump_options ex = Opts(kModeExact);
+				const Jump ja = DoJump(e, a, budget, opts), jb = DoJump(e, b, budget, &ex);
+				Check(ja == jb, F("%s: %s returned %d count %d, explicit Exact %d count %d", tag.c_str(), what, ja.st, ja.count, jb.st, jb.count));
+				Check(e.Save(a) == e.Save(b), tag + ": the save blob after " + what + " differs from explicit Exact's");
+				std::vector<int32_t> ta, tb;
+				for (int i = 0; i < 6; ++i) {
+					int32_t x = -1, y = -1;
+					e.Decode(a, &x), e.Decode(b, &y);
+					ta.push_back(x), tb.push_back(y);
+				}
+				Check(ta == tb && e.Save(a) == e.Save(b), tag + ": the continuation after " + what + " differs from explicit Exact's");
+				compared += chain;
+				sslm_seq_release(a);
+				sslm_seq_release(b);
+			}
+	Check(compared >= 6, F("only %d cases had a forced chain at the jump (want 6)", compared));
+}
+void CellX3(Engine& e) { EqualsExact(e, nullptr, "NULL options"); }
+
 // ------------------------------------------------------------------------------------------------ x.1
 void CellX1(Engine& e) {
 	for (const char* schema : kSchemas)
-		for (int32_t mode : {kModeCanonicalOld, 2, -1}) {
-			const std::string tag = F("%s mode %d", schema, mode);
+		for (int32_t mode : kModesOutside) {
+			const std::string tag = F("%s mode %d (outside the enum)", schema, mode);
 			sslm_seq s = e.Pending(schema, 3, 1);
 			if (!s) { Check(false, tag + ": setup"); continue; }
 			const std::vector<uint8_t> before = e.Save(s);
@@ -194,34 +227,8 @@ void CellX1(Engine& e) {
 			      F("%s on a fresh sequence: returned %d; the sequence must stay bindable", tag.c_str(), jf.st));
 			sslm_seq_release(f);
 		}
-}
-
-// ------------------------------------------------------------------------------------------------ x.3
-void CellX3(Engine& e) {
-	int compared = 0;
-	for (const char* schema : kSchemas)
-		for (int32_t budget : {1, 4, 8})
-			for (int decodes = 1; decodes <= 4; ++decodes) {
-				const std::string tag = F("%s budget %d after %d decodes", schema, budget, decodes);
-				sslm_seq a = e.Pending(schema, 5, decodes), b = e.Pending(schema, 5, decodes);
-				if (!a || !b) { Check(false, tag + ": setup"); if (a) sslm_seq_release(a); if (b) sslm_seq_release(b); continue; }
-				const bool chain = e.Chain(a) > 0;
-				const sslm_jump_options ex = Opts(kModeExact);
-				const Jump ja = DoJump(e, a, budget, nullptr), jb = DoJump(e, b, budget, &ex);
-				Check(ja == jb, F("%s: NULL options returned %d count %d, explicit Exact %d count %d", tag.c_str(), ja.st, ja.count, jb.st, jb.count));
-				Check(e.Save(a) == e.Save(b), tag + ": the save blob after NULL differs from explicit Exact's");
-				std::vector<int32_t> ta, tb;
-				for (int i = 0; i < 6; ++i) {
-					int32_t x = -1, y = -1;
-					e.Decode(a, &x), e.Decode(b, &y);
-					ta.push_back(x), tb.push_back(y);
-				}
-				Check(ta == tb && e.Save(a) == e.Save(b), tag + ": the continuation after NULL differs from explicit Exact's");
-				compared += chain;
-				sslm_seq_release(a);
-				sslm_seq_release(b);
-			}
-	Check(compared >= 6, F("only %d cases had a forced chain at the jump (want 6)", compared));
+	const sslm_jump_options zero = Opts(kModeDefault);
+	EqualsExact(e, &zero, "mode 0 (SSLM_JUMP_DEFAULT)");
 }
 
 // ------------------------------------------------------------------------------------------------ record / x.5
@@ -281,18 +288,19 @@ void CellX5(Engine& e) {
 				Check(got == want, F("%s: the decode-only continuation differs from %s's own (first %d vs %d)", tag.c_str(), release, got[0], want[0]));
 				sslm_seq_release(s);
 			}
-			// One decode, then a jump under the mode asked for (explicit Exact; and NULL, which is Exact), then decodes.
-			std::vector<int32_t> by_mode[2];
-			std::vector<uint8_t> blob_mode[2];
-			for (int k = 0; k < 2; ++k) {
+			// One decode, then a jump under the mode asked for (explicit Exact; NULL and mode 0, which are Exact), then decodes.
+			std::vector<int32_t> by_mode[3];
+			std::vector<uint8_t> blob_mode[3];
+			const char* names[3] = {"Exact", "NULL", "mode 0"};
+			for (int k = 0; k < 3; ++k) {
 				sslm_seq s = restore();
 				if (!s) continue;
 				int32_t t = -1;
 				e.Decode(s, &t);
 				by_mode[k].push_back(t);
-				const sslm_jump_options ex = Opts(kModeExact);
-				const Jump j = DoJump(e, s, 4, k == 0 ? &ex : nullptr);
-				Check(j.st == SSLM_OK, F("%s: the %s jump after the restore returned %d", tag.c_str(), k ? "NULL" : "Exact", j.st));
+				const sslm_jump_options ex = Opts(kModeExact), zero = Opts(kModeDefault);
+				const Jump j = DoJump(e, s, 4, k == 0 ? &ex : k == 1 ? nullptr : &zero);
+				Check(j.st == SSLM_OK, F("%s: the %s jump after the restore returned %d", tag.c_str(), names[k], j.st));
 				for (int32_t i = 0; j.st == SSLM_OK && i < j.count && by_mode[k].size() < 8; ++i) by_mode[k].push_back(j.out[i]);
 				while (by_mode[k].size() < 8) { e.Decode(s, &t); by_mode[k].push_back(t); }
 				blob_mode[k] = e.Save(s);
@@ -300,6 +308,7 @@ void CellX5(Engine& e) {
 			}
 			Check(by_mode[0] == want, F("%s: decode + explicit Exact jump + decodes differs from %s's decode-only stream", tag.c_str(), release));
 			Check(by_mode[1] == by_mode[0] && blob_mode[1] == blob_mode[0], tag + ": NULL options after the restore differ from explicit Exact");
+			Check(by_mode[2] == by_mode[0] && blob_mode[2] == blob_mode[0], tag + ": mode 0 after the restore differs from explicit Exact");
 		}
 	Check(found == 9, F("%d of 9 recorded blobs found under %s", found, g_legacy.c_str()));
 }

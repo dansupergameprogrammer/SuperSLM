@@ -6,13 +6,14 @@
 // shipped in 1.17.0, so 1.17 is the only release with GPU Canonical saves (the CPU's 1.15-1.17 are mrx_cpu's x.5).
 //
 // Cells (on F-SFD, tools/gen_schema_fast_decode_fixture.py's fsfd.sslm; three schemas):
-//   g.1  The old Canonical value (mode 0) is refused by sslm_gpu_seq_jump_forward through the malformed-options status
+//   g.1  (ruling 21) Mode 0, Canonical's old value renamed SSLM_JUMP_DEFAULT, equals explicit Exact (SSLM_JUMP_EXACT,
+//        no draft) byte for byte, the comparison g.2 makes; red until MR5, as g.2. And a mode outside the enum (-1,
+//        SSLM_JUMP_EXACT + 1, 99) is refused by sslm_gpu_seq_jump_forward through the malformed-options status
 //        (SSLM_SEQUENCE_KV_BUFFER_MISMATCH), with nothing changed: the count unwritten, out_forced untouched, the save
-//        blob, walk state, context length and ready flag equal, and a fresh bound sequence still bindable. Controls:
-//        mode 2 and -1 stay refused the same way.
-//   g.2  NULL options equal explicit Exact (mode 1, no draft) byte for byte: status, count, out_forced, the save blob,
-//        then four decode-bridge tokens and the blob after them. Budgets 1, 4 and 8, after 0 and 2 decodes. Red until
-//        MR5 (GPU Exact).
+//        blob, walk state, context length and ready flag equal, and a fresh bound sequence still bindable.
+//   g.2  NULL options equal explicit Exact byte for byte: status, count, out_forced, the save blob, then four
+//        decode-bridge tokens and the blob after them. Budgets 1, 4 and 8, after 0 and 2 decodes. Red until MR5
+//        (GPU Exact).
 //   g.3  sslm_gpu_seq_embed_rows refuses kind 1 (the removed SCHEMA_FORCED) as a bad spec
 //        (SSLM_SEQUENCE_KV_BUFFER_MISMATCH), with flags 0 and with 0x1 (FIRST_PREWALKED), the rows being the chain
 //        the schema forces (so the kind is the only thing wrong): out_admitted unwritten, no chunk open, the save blob
@@ -20,10 +21,11 @@
 //   g.4a 1.17's Canonical saves restore: SSLM_OK, the restored handle saves the same bytes, and decode-only it gives
 //        the recorder's own next 8 tokens.
 //   g.4b ...and continue under the mode asked for (E-11 (d)): an explicit Exact jump, then decodes, gives the same 8
-//        tokens, and NULL options give what explicit Exact gives (tokens and blob). Red until MR5.
+//        tokens, and NULL options and mode 0 give what explicit Exact gives (tokens and blob). Red until MR5.
 //
-// The literal values are used, never SSLM_JUMP_CANONICAL or SSLM_GPU_ROWS_SCHEMA_FORCED: both names leave the
-// headers at MRX, and this file has to compile there and in 1.17's tree.
+// Mode 0 and kind 1 are literals, never SSLM_JUMP_CANONICAL, SSLM_JUMP_DEFAULT or SSLM_GPU_ROWS_SCHEMA_FORCED: the
+// removed names leave the headers at MRX and SSLM_JUMP_DEFAULT does not exist in 1.17's tree, and this file compiles
+// in both. Exact is named (SSLM_JUMP_EXACT, sslm_abi.h), so the cells do not depend on its value.
 //
 // Usage: mrx_gpu.exe --fixtures=DIR [--legacy=DIR] [--cells=g.1,g.2,g.3,g.4]   |   mrx_gpu.exe --fixtures=DIR --record=DIR
 #ifndef WIN32_LEAN_AND_MEAN
@@ -46,11 +48,13 @@
 #include "superslm/gpu_1p0_bench_bridge.h"
 #include "superslm/gpu_port.h"
 #include "superslm/model.h"
+#include "superslm/sslm_abi.h"  // sslm_jump_mode: the GPU options take the CPU enum's values
 
 namespace {
 using S = SslmGpuStatus;
-constexpr int32_t kModeCanonicalOld = 0;  // SSLM_JUMP_CANONICAL before MRX; reserved, never reused (E-11 (a))
-constexpr int32_t kModeExact = 1;         // SSLM_JUMP_EXACT
+constexpr int32_t kModeDefault = 0;  // SSLM_JUMP_DEFAULT at MRX (ruling 21): Exact, as NULL; SSLM_JUMP_CANONICAL before
+constexpr int32_t kModeExact = SSLM_JUMP_EXACT;
+const int32_t kModesOutside[] = {-1, SSLM_JUMP_EXACT + 1, 99};  // outside the enum: refused
 constexpr int32_t kRowsSchemaForcedOld = 1;  // SSLM_GPU_ROWS_SCHEMA_FORCED before MRX (E-11 (c))
 constexpr uint32_t kRowsFirstPrewalked = 0x1u;
 constexpr int kNext = 8;
@@ -207,12 +211,13 @@ void AfterJump(const Engine& e, SslmGpuSequenceHandle* s, const Jump& j, int32_t
 std::string Tag(const char* schema, int a, int b) { return F("%s/%d/%d", schema, a, b); }
 
 // ------------------------------------------------------------------------------------------------ g.1
+void EqualsExact(Engine& e, int32_t mode, const char* what);
 void CellG1(Engine& e) {
 	int bit = 0;
 	for (const char* schema : kSchemas)
-		for (int32_t mode : {kModeCanonicalOld, 2, -1})
+		for (int32_t mode : kModesOutside)
 			for (int decodes : {0, 2}) {
-				const std::string tag = F("%s mode %d after %d decodes", schema, mode, decodes);
+				const std::string tag = F("%s mode %d (outside the enum) after %d decodes", schema, mode, decodes);
 				int32_t pending = -1, last = -1;
 				SslmGpuSequenceHandle* s = e.Pending(schema, 11u, decodes, &pending, &last);
 				if (!s) { Check(false, tag + ": setup"); continue; }
@@ -246,10 +251,12 @@ void CellG1(Engine& e) {
 				sslm_gpu_seq_release(e.ctx, f);
 			}
 	Check(bit >= 6, F("only %d mode cases had a forced chain at the call (want 6)", bit));
+	EqualsExact(e, kModeDefault, "mode 0 (SSLM_JUMP_DEFAULT)");
 }
 
-// ------------------------------------------------------------------------------------------------ g.2
-void CellG2(Engine& e) {
+// ------------------------------------------------------------------------------------------------ g.2 (and g.1's mode 0)
+// `mode` (kNull, or 0) against explicit Exact, byte for byte.
+void EqualsExact(Engine& e, int32_t mode, const char* what) {
 	int compared = 0;
 	for (const char* schema : kSchemas)
 		for (int32_t budget : {1, 4, 8})
@@ -265,10 +272,10 @@ void CellG2(Engine& e) {
 					continue;
 				}
 				if (e.Chain(a) > 0) ++compared;
-				const Jump ja = DoJump(e, a, pa, budget, kNull), jb = DoJump(e, b, pb, budget, kModeExact);
-				Check(ja == jb, F("%s: NULL options returned %u count %d, explicit Exact %u count %d", tag.c_str(), (unsigned)ja.st, ja.count,
+				const Jump ja = DoJump(e, a, pa, budget, mode), jb = DoJump(e, b, pb, budget, kModeExact);
+				Check(ja == jb, F("%s: %s returned %u count %d, explicit Exact %u count %d", tag.c_str(), what, (unsigned)ja.st, ja.count,
 				                  (unsigned)jb.st, jb.count));
-				Check(e.Save(a) == e.Save(b), tag + ": the save blob after NULL differs from explicit Exact's");
+				Check(e.Save(a) == e.Save(b), tag + ": the save blob after " + what + " differs from explicit Exact's");
 				AfterJump(e, a, ja, &pa, &la);
 				AfterJump(e, b, jb, &pb, &lb);
 				std::vector<int32_t> ta, tb;
@@ -277,12 +284,13 @@ void CellG2(Engine& e) {
 					if (e.Decode(a, &pa, &la, &x) == S::SSLM_OK) ta.push_back(x);
 					if (e.Decode(b, &pb, &lb, &y) == S::SSLM_OK) tb.push_back(y);
 				}
-				Check(ta == tb && e.Save(a) == e.Save(b), tag + ": the continuation after NULL differs from explicit Exact's");
+				Check(ta == tb && e.Save(a) == e.Save(b), tag + ": the continuation after " + what + " differs from explicit Exact's");
 				sslm_gpu_seq_release(e.ctx, a);
 				sslm_gpu_seq_release(e.ctx, b);
 			}
 	Check(compared >= 6, F("only %d cases had a forced chain at the jump (want 6)", compared));
 }
+void CellG2(Engine& e) { EqualsExact(e, kNull, "NULL options"); }
 
 // ------------------------------------------------------------------------------------------------ g.3
 #ifndef MRX_V117
@@ -422,15 +430,17 @@ void CellG4(Engine& e, bool continue_part) {
 			sslm_gpu_seq_release(e.ctx, s);
 			continue;
 		}
-		// g.4b: restore, then a jump under the mode asked for (explicit Exact, then NULL), then decodes to kNext tokens.
-		std::vector<int32_t> by_mode[2];
-		std::vector<uint8_t> blob_mode[2];
-		for (int k = 0; k < 2; ++k) {
+		// g.4b: restore, then a jump under the mode asked for (explicit Exact, NULL, mode 0), then decodes to kNext tokens.
+		std::vector<int32_t> by_mode[3];
+		std::vector<uint8_t> blob_mode[3];
+		const char* names[3] = {"Exact", "NULL", "mode 0"};
+		const int32_t modes[3] = {kModeExact, kNull, kModeDefault};
+		for (int k = 0; k < 3; ++k) {
 			SslmGpuSequenceHandle* s = nullptr;
 			if (sslm_gpu_seq_restore(e.ctx, e.model, r.blob.data(), r.blob.size(), &s) != S::SSLM_OK || !s) { Check(false, tag + ": restore"); continue; }
 			int32_t pending = r.pending, last = r.last;
-			const Jump j = DoJump(e, s, pending, 8, k ? kNull : kModeExact);
-			Check(j.st == S::SSLM_OK, F("%s: the %s jump after the restore returned %u", tag.c_str(), k ? "NULL" : "Exact", (unsigned)j.st));
+			const Jump j = DoJump(e, s, pending, 8, modes[k]);
+			Check(j.st == S::SSLM_OK, F("%s: the %s jump after the restore returned %u", tag.c_str(), names[k], (unsigned)j.st));
 			std::vector<int32_t>& got = by_mode[k];
 			if (j.st == S::SSLM_OK) {
 				got.assign(j.out.begin(), j.out.begin() + j.count);
@@ -448,6 +458,7 @@ void CellG4(Engine& e, bool continue_part) {
 		}
 		Check(by_mode[0] == r.next, F("%s: explicit Exact jump + decodes differs from 1.17's decode-only stream", tag.c_str()));
 		Check(by_mode[1] == by_mode[0] && blob_mode[1] == blob_mode[0], tag + ": NULL options after the restore differ from explicit Exact");
+		Check(by_mode[2] == by_mode[0] && blob_mode[2] == blob_mode[0], tag + ": mode 0 after the restore differs from explicit Exact");
 	}
 	Check(found == 3, F("%d of 3 recorded blobs found under %s", found, g_legacy.c_str()));
 }
