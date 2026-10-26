@@ -7,14 +7,16 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 - **Threaded batched passes on the CPU (tiled-matmul plan, slice 2).** A new opt-in bit,
   `SSLM_PARALLEL_FOR_PREFILL` (bit 0 of `sslm_parallel_for.reserved`), splits every projection of a pass of two or
   more rows across the host's parallel-for hook: prompt prefill, prefix prefill, and `sslm_seq_jump_forward`'s
-  passes, the exact mode's check pass included. The tiled kernel still reads each weight panel once for all the
+  passes of 8 rows or more in the exact mode's check. The tiled kernel still reads each weight panel once for all the
   pass's rows; the split is by output columns, in blocks of 32, capped by a minimum of 4 Mi multiply-adds per task
   (`docs/api.md` gives the rule). Tokens and saved state are byte-identical with the bit on or off, on every tier.
   All scratch is allocated on the calling thread before `run`, and no task allocates. A `run` that breaks its
   exactly-once contract fails the call with `SSLM_INVALID_ARGUMENT`, nothing of that pass admitted and the
   saturation counts as they were.
-- With bit 0 set, the jump-forward no longer splits a 2-to-7-row admission into one-row passes when the batched
-  pass itself splits.
+- With bit 0 set, the canonical jump-forward no longer splits a 2-to-7-row admission into one-row passes when the
+  batched pass itself splits. The exact mode keeps that split: its check stops at the first mismatch, so one-row
+  passes compute no rejected row (measured on a 16-core CPU: with the batched pass threaded, Exact with its default
+  draft ran at 0.86x of plain decoding, against 0.98x with the split).
 - Both setters now accept bit 0 (and bits 0 and 1 together); bit 2 and above are still refused. The GPU setter
   accepts and ignores it.
 - No symbol, struct layout, status or save format changes.

@@ -203,8 +203,11 @@ against 1.6.0 is in the
   `SSLM_PARALLEL_FOR_PREFILL` (bit 0) in `reserved` also splits every
   projection of a pass that runs two or more rows at once: a prefill or
   prefix-prefill call admitting two or more tokens, and every
-  `sslm_seq_jump_forward` pass of two or more rows, the exact mode's check
-  pass included. Each of the seven projections (q, k, v, o, gate, up, down)
+  `sslm_seq_jump_forward` pass of two or more rows. The exact mode's check
+  is the exception: at 2 to 7 rows it still runs one-row passes when bit 1
+  threads them, since its check stops at the first mismatch and one-row
+  passes compute no rejected row; at 8 rows or more it runs the threaded
+  batched pass. Each of the seven projections (q, k, v, o, gate, up, down)
   splits alone, by output columns. For M rows, input width K and N output
   columns, the task count is the smallest of `max_tasks`, ceil(N / 32) and
   floor(M·K·N / 4 Mi), and at least 1. Each task then takes ceil(N / count)

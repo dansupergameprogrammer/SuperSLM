@@ -2154,12 +2154,14 @@ void Cell_X_8_1() {
 }
 
 // 8.X1b [tiled-matmul plan slice 2] Under bits 0 and 1, with every batched projection above the (lowered)
-// minimum multiply-adds, the exact verb's check pass threads as one batched pass of M rows at every M >= 2
-// (Q6 C's split no longer engages), `run` is called from it, and the run equals off and the one-thread run.
+// minimum multiply-adds, the exact verb keeps Q6 C's split: for M <= 7, exactly j + 1 one-row passes (no row past
+// the first mismatch, box 2026-10-26); for M >= 8, one batched pass of M rows, which threads (`run` is called from
+// it). The run equals off and the one-thread run.
 void Cell_X_8_1b() {
 	if (!XLive("8.X1b")) return;
 	const Sfd& f = GetSfd();
 	superslm::test::SetMinMacsPerTask(1);
+	bool any_split = false, any_batched = false;
 	for (const char* schema : {kPotion, kLongKey}) {
 		for (int32_t budget : {2, 4, 7, 9}) {
 			for (XDraft kind : {XDraft::kPerfect, XDraft::kWrongAt}) {
@@ -2177,20 +2179,31 @@ void Cell_X_8_1b() {
 				X_EQUALS_OFF("8.X1b bits 0 and 1", rb, both, plan);
 				CHECK_MSG(r1.stream == rb.stream, "[8.X1b %s] the threaded run's stream differs from one thread's",
 				          XWhat(both, plan).c_str());
-				bool any = false;
+				bool big = false;
 				for (const XVerbRec& v : rb.verbs) {
 					const size_t m = 1 + v.draft.size();
 					if (v.draft.empty()) continue;
-					any = true;
-					const bool shape = v.passes.size() == 1 && v.passes[0].rows == m;
-					CHECK_MSG(shape, "[8.X1b %s] the call at %zu (M %zu, j %d): S-LAYERROWS %s; want one pass of M rows",
-					          XWhat(both, plan).c_str(), v.pos, m, v.j.count, Q6cShape(v.passes).c_str());
+					const size_t j1 = size_t(std::max(v.j.count, 0)) + 1;
+					bool shape = true;
+					if (m <= kQ6cSplitMax) {
+						any_split = true;
+						shape = v.passes.size() == j1;
+						for (const sfd::LayerRowsEntry& e : v.passes) shape = shape && e.kind == sfd::kLayerRowsBatched && e.rows == 1;
+					} else {
+						big = any_batched = true;
+						shape = v.passes.size() == 1 && v.passes[0].rows == m;
+					}
+					CHECK_MSG(shape, "[8.X1b %s] the call at %zu (M %zu, j %d): S-LAYERROWS %s; want %s",
+					          XWhat(both, plan).c_str(), v.pos, m, v.j.count, Q6cShape(v.passes).c_str(),
+					          m <= kQ6cSplitMax ? "j + 1 one-row passes" : "one pass of M rows");
 				}
-				CHECK_MSG(any && batched_runs > 0, "[8.X1b %s] %s", XWhat(both, plan).c_str(),
-				          any ? "no batched run call" : "no verb call carried a draft (the cell would test nothing)");
+				CHECK_MSG(!big || batched_runs > 0, "[8.X1b %s] a pass of 8 or more rows made no batched run call",
+				          XWhat(both, plan).c_str());
 			}
 		}
 	}
+	CHECK_MSG(any_split && any_batched, "[8.X1b] no verb call of %s rows carried a draft (the cell would test nothing)",
+	          any_split ? "8 or more" : "2 to 7");
 	superslm::test::ResetMinMacsPerTask();
 }
 

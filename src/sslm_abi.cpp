@@ -2607,12 +2607,16 @@ using PrefillPrePassFn = sslm_status (*)(void* ctx, int32_t admit_count);
 // slower than the batched pass, so it keeps the batched pass. The cheap tests come first, so a
 // prefill (split_max_rows 0) reads nothing else. Tiled-matmul plan slice 2: when the batched pass
 // itself threads (bit 0 set, and the same largest projection splits at admit_count rows under
-// BatchedGemmSplit's rule), the batched pass is kept: it keeps the weight reuse and the threads.
+// BatchedGemmSplit's rule), the canonical verb keeps the batched pass: it keeps the weight reuse and
+// the threads, and every admitted row is kept. The exact verb (`exact`) keeps the split: its check
+// stops at the first mismatch, so the split computes no rejected row, and at 2..7 rows the threaded
+// batched pass is too little faster to pay for those rows (box 2026-10-26: Exact with its default
+// draft went from 0.98x to 0.86x of off under bits 0 and 1).
 bool JumpSplitEngages(const superslm::SslmModelConfig& c, const sslm_workspace_s* ws, int32_t admit_count,
-                      int32_t split_max_rows) {
+                      int32_t split_max_rows, bool exact = false) {
 	if (split_max_rows < 2 || admit_count < 2 || admit_count > split_max_rows) return false;
 	const superslm::GemmThreading threading = MatvecThreading(ws);
-	if (threading.batched != nullptr &&
+	if (!exact && threading.batched != nullptr &&
 	    superslm::BatchedGemmSplit(threading.batched, static_cast<size_t>(admit_count), c.hidden_size,
 	                               c.intermediate_size)
 	            .task_count >= 2) {
@@ -4794,7 +4798,7 @@ sslm_status RunExactPasses(const sslm_model_s* model, superslm::SequenceLayerSta
 
 	const superslm::GemmThreading threading = MatvecThreading(ws);
 	int32_t jj = 0;
-	if (JumpSplitEngages(c, ws, h, x->split_max_rows)) {
+	if (JumpSplitEngages(c, ws, h, x->split_max_rows, /*exact=*/true)) {
 		// §5.10.6: the check runs between the one-row passes, so no rejected row is computed.
 		for (int32_t r = 0; r < h; ++r) {
 			SfdLogLayerRows(/*kLayerRowsBatched=*/0, 1);
