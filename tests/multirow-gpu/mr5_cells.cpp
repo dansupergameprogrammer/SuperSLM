@@ -58,7 +58,8 @@
 //         Ruling 33 S2: the accepted case's bytes equal Off's after a decode; a legal wrong draft on the first pass's
 //         last row (kept 7, 1 pass; KM5) and on the second pass's row 1 (kept 9, 2 passes), each equal to Off after.
 //   gx.14 Ruling 33 M1: an Exact close that takes the device head (unbound on F-SFD; fsfd_untied bound) runs the
-//         widened logits stage once over its M rows (LastLogitsStageTiming); its bytes equal Off's (KM3, KM18, KM22).
+//         widened logits stage once over its M rows (M = 1, 2, 4, 8; LastLogitsStageTiming); its bytes equal Off's
+//         (KM3, KM18, KM22).
 //   gx.15 Ruling 33 S3: the jump at budgets 9, 10 and 17 (the trailing one-row pass), every draft kept, equals Off (KM9).
 //   gx.16 Ruling 33 S1: decision (b): the device K/V, read whole, equals an Off twin world's after an Exact close that
 //         rejects rows and after a jump's second pass is rolled back (S-GREADBACK), on a canary background (KM1, KM2,
@@ -1947,7 +1948,8 @@ const Model* Aux(const char* file) {
 // over its M rows, and the bytes equal Off's. F-SFD is tied, so a bound handle finishes on the host's legal rows; the
 // stage runs on an UNBOUND handle (any draft is admitted) and on fsfd_untied BOUND. Per close: the stage counter
 // advances by exactly 1 with rows == M; last_rows_committed, rows_produced, the whole observation and the next
-// decode equal the Off twin's. M = 2, 4, 8; every draft right, or the first wrong draft at row 1 or row M - 1
+// decode equal the Off twin's. M = 1 (a2c22780: the one-row close runs the stage at one row), 2, 4, 8; every draft
+// right, or the first wrong draft at row 1 or row M - 1
 // (unbound), or a legal wrong draft after 0 or 2 right rows (bound, fsfd_ref.txt's legal tokens); dedicated and pooled.
 struct StageCase {
 	std::string tag;
@@ -1987,8 +1989,9 @@ void CellGx14(Fsfd& fx) {
 	// Unbound, F-SFD: the drafts are Off's next tokens (the twin's), one replaced by an ordinary wrong id.
 	const Model& m = fx.m;
 	for (int pooled = 0; pooled < 2; ++pooled)
-		for (int M : {2, 4, 8})
+		for (int M : {1, 2, 4, 8})
 			for (int wrong : {-1, 1, M - 1}) {
+				if (M == 1 && wrong != -1) continue;  // one row: no draft to be wrong
 				if (wrong == 1 && M == 2) continue;  // the same as M - 1
 				StageCase c;
 				c.tag = F("unbound %s M=%d %s", pooled ? "pooled" : "dedicated", M, wrong < 0 ? "every draft right" : F("row %d wrong", wrong).c_str());
@@ -2019,8 +2022,9 @@ void CellGx14(Fsfd& fx) {
 	std::printf("    gx.14: fsfd_untied choice %s index %d: Off %d, legal wrong %d, tail %zu\n", ch.schema, ch.c,
 	            ch.off.toks[static_cast<size_t>(ch.c) + 1], ch.x, ch.tail.size());
 	for (int pooled = 0; pooled < 2; ++pooled)
-		for (int M : {2, 4, 8})
+		for (int M : {1, 2, 4, 8})
 			for (int legal_wrong = 0; legal_wrong <= 1; ++legal_wrong) {
+				if (M == 1 && legal_wrong) continue;  // one row: no draft to be wrong
 				StageCase c;
 				// The right rows before X: none at M = 2, two otherwise (the pending token is Off's o_(c - k)).
 				const int k = M == 2 ? 0 : 2;
