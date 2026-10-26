@@ -498,52 +498,76 @@ int TfRestore(const std::vector<uint8_t>& bytes, const std::string& schema, cons
 
 namespace {
 
-// GPU decode timing with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE, at the slice size
-// ARRAY_S2_GPU_LAYERS_PER_SLICE sets (the box script runs it at one slice per token). Times run
-// from the first decode call to the dead end and exclude the prompt prefill. Every stream must
-// equal the plain GPU run in the gen file (default residency).
+// GPU decode timing at the slice size ARRAY_S2_GPU_LAYERS_PER_SLICE sets (the box script runs it at
+// one slice per token), in two sessions: the output head on the host (default residency) and on the
+// device (SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE). Per decode step it records wall time and gpu_busy_ms,
+// the GPU timestamp window of the step's last layer-loop submission (superslm_gpu::LastCallTiming):
+// at one slice per token that is the token's whole layer loop on the GPU's clock. The token finish
+// (host logits, or the device logits submission) carries no timestamps in the engine, so it is in
+// wall time only. Times exclude the prompt prefill. Every stream must equal the plain GPU run.
+// Output: one `PASS|FAIL gputime` line per prompt, one `steps` line per prompt (wall and gpu_busy ms
+// for each step, in token-position order, from position prompt_len), and one `total` line per head.
 int GpuTime(const std::vector<uint8_t>& bytes, const std::string& schema, const std::vector<Record>& recs,
             const char* gen_path, const std::vector<std::string>& rows) {
 	const auto refs = ReadGen(gen_path, "gpu");
 	const char* env = std::getenv("ARRAY_S2_GPU_LAYERS_PER_SLICE");
 	const std::string layers = env ? env : "1";
-	GpuOptions opt;
-	opt.head_on_device = true;
-	MapResult m;
-	GpuSession* g = GpuOpen(bytes.data(), bytes.size(), schema, &m, opt);
-	if (!m.ok) {
-		std::printf("# setup failed (head on device): %s\n", m.error.c_str());
-		return 2;
-	}
 	int failures = 0;
-	size_t tokens = 0;
-	double ms = 0.0;
-	int checked = 0;
-	for (const auto& r : recs) {
-		if (r.kind != "prompt" || !Wanted(rows, r.name)) continue;
-		++checked;
-		const GenResult res = GpuGen(g, r.ids, kMaxTokens);
-		const bool have_ref = refs.count(r.name) != 0;
-		const bool same = have_ref && res.ids == refs.at(r.name);
-		const bool pass = same && res.end == "dead_end" && res.accepting == 1;
-		failures += !pass;
-		tokens += res.ids.size();
-		ms += res.ms;
-		std::printf("%s gputime head_on_device layers_per_slice=%s %s tokens=%zu ms=%.0f ms_per_token=%.1f end=%s "
-		            "same_as_plain_gpu=%s\n",
-		            pass ? "PASS" : "FAIL", layers.c_str(), r.name.c_str(), res.ids.size(), res.ms,
-		            res.ids.empty() ? 0.0 : res.ms / static_cast<double>(res.ids.size()), res.end.c_str(),
-		            !have_ref ? "no_reference" : (same ? "yes" : "no"));
-		std::fflush(stdout);
+	for (const bool device_head : {false, true}) {
+		const char* head = device_head ? "head_on_device" : "head_on_host";
+		GpuOptions opt;
+		opt.head_on_device = device_head;
+		MapResult m;
+		GpuSession* g = GpuOpen(bytes.data(), bytes.size(), schema, &m, opt);
+		if (!m.ok) {
+			std::printf("# setup failed (%s): %s\n", head, m.error.c_str());
+			return 2;
+		}
+		size_t tokens = 0, steps = 0;
+		double ms = 0.0, step_wall = 0.0, step_gpu = 0.0;
+		int checked = 0;
+		for (const auto& r : recs) {
+			if (r.kind != "prompt" || !Wanted(rows, r.name)) continue;
+			++checked;
+			const GenResult res = GpuGen(g, r.ids, kMaxTokens);
+			const bool have_ref = refs.count(r.name) != 0;
+			const bool same = have_ref && res.ids == refs.at(r.name);
+			const bool pass = same && res.end == "dead_end" && res.accepting == 1;
+			failures += !pass;
+			double w = 0.0, gb = 0.0;
+			for (size_t k = 0; k < res.step_ms.size(); ++k) {
+				w += res.step_ms[k];
+				gb += res.step_gpu_busy_ms[k];
+			}
+			tokens += res.ids.size();
+			steps += res.step_ms.size();
+			ms += res.ms;
+			step_wall += w;
+			step_gpu += gb;
+			const double n = res.step_ms.empty() ? 1.0 : static_cast<double>(res.step_ms.size());
+			std::printf("%s gputime %s layers_per_slice=%s %s tokens=%zu steps=%zu ms=%.0f ms_per_token=%.1f "
+			            "step_wall_ms=%.2f gpu_busy_ms=%.2f gap_ms=%.2f end=%s same_as_plain_gpu=%s\n",
+			            pass ? "PASS" : "FAIL", head, layers.c_str(), r.name.c_str(), res.ids.size(), res.step_ms.size(),
+			            res.ms, res.ids.empty() ? 0.0 : res.ms / static_cast<double>(res.ids.size()), w / n, gb / n,
+			            (w - gb) / n, res.end.c_str(), !have_ref ? "no_reference" : (same ? "yes" : "no"));
+			std::printf("steps %s %s prompt_len=%zu wall_ms", head, r.name.c_str(), r.ids.size());
+			for (double v : res.step_ms) std::printf(" %.2f", v);
+			std::printf(" gpu_busy_ms");
+			for (double v : res.step_gpu_busy_ms) std::printf(" %.3f", v);
+			std::printf("\n");
+			std::fflush(stdout);
+		}
+		if (checked == 0) {
+			++failures;
+			std::printf("FAIL gputime %s no prompt was timed\n", head);
+		}
+		const double n = steps ? static_cast<double>(steps) : 1.0;
+		std::printf("total gputime %s layers_per_slice=%s prompts=%d tokens=%zu ms=%.0f ms_per_token=%.1f tok_s=%.2f "
+		            "per_step: wall_ms=%.2f gpu_busy_ms=%.2f gap_ms=%.2f\n", head, layers.c_str(), checked, tokens, ms,
+		            tokens ? ms / static_cast<double>(tokens) : 0.0, ms > 0 ? 1000.0 * static_cast<double>(tokens) / ms : 0.0,
+		            step_wall / n, step_gpu / n, (step_wall - step_gpu) / n);
+		GpuClose(g);
 	}
-	if (checked == 0) {
-		++failures;
-		std::printf("FAIL gputime no prompt was timed\n");
-	}
-	std::printf("total gputime head_on_device layers_per_slice=%s prompts=%d tokens=%zu ms=%.0f ms_per_token=%.1f "
-	            "tok_s=%.2f\n", layers.c_str(), checked, tokens, ms, tokens ? ms / static_cast<double>(tokens) : 0.0,
-	            ms > 0 ? 1000.0 * static_cast<double>(tokens) / ms : 0.0);
-	GpuClose(g);
 	return failures ? 1 : 0;
 }
 

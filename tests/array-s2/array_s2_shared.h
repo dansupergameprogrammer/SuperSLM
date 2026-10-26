@@ -30,6 +30,12 @@ struct GenResult {
 	int64_t forced = 0;          // forced_token_count (canonical jump-forward) at the end
 	int64_t jump_calls = 0;      // jump-forward calls that admitted at least one token
 	double ms = 0.0;             // wall time from the first decode call to the end
+	// GPU only, one entry per decode-step call (the last is the call that found the dead end):
+	// its wall time, and superslm_gpu::LastCallTiming().gpu_busy_ms after it -- the GPU timestamp
+	// window of the step's last layer-loop submission, so the whole step's layer loop only at one
+	// slice per token, and never the token finish (host or device logits).
+	std::vector<double> step_ms;
+	std::vector<double> step_gpu_busy_ms;
 };
 
 // What a sequence did, token by token: the tokens it decoded (or was teacher-forced), and the

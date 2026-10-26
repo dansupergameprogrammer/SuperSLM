@@ -231,7 +231,10 @@ GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_
 	r.end = "max_tokens";
 	while (static_cast<int32_t>(r.ids.size()) < max_tokens) {
 		int32_t t = -1;
+		const auto ts = std::chrono::steady_clock::now();
 		st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, s->budget, &t);
+		r.step_ms.push_back(MsSince(ts));
+		r.step_gpu_busy_ms.push_back(superslm_gpu::LastCallTiming().gpu_busy_ms);
 		if (st != SSLM_OK) {
 			r.end = Err("SslmGpuSeqDecodeStepForG5Bridge", st);
 			break;

@@ -362,7 +362,8 @@ class Box:
         st.append(("mutants", False, (0,), lambda L: self.concat(RES / "mutants.txt", [
             BOX / "mutant_artifacts.log"] + [BOX / f"mutant_{m}_{b}.log" for b in ("cpu", "gpu") for m in
                                             ("accept_shift_walks", "accept_shift_gen", "offset_swap_walks")])))
-        # GPU decode with the output head on the device, at one slice per token.
+        # GPU decode at one slice per token, head on the host and on the device: wall and GPU-busy
+        # (layer-loop timestamps) ms per step, and per prompt against token position.
         st.append(("gputime", True, (0,), lambda L: self.harness(
             L, "gputime", A, S, F, RES / "gen.txt", env_extra={"ARRAY_S2_GPU_LAYERS_PER_SLICE": "24"})))
         st.append(("gputime_copy", False, (0,), lambda L: self.concat(RES / "gputime.txt", [BOX / "gputime.log"])))

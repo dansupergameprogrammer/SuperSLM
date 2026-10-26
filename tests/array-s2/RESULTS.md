@@ -113,8 +113,8 @@ The GPU model also keeps a host copy of the section.
   ms/token in (d) is the 24-slice setting. At one slice per token the GPU is 1.41× faster than the CPU.
 - **Determinism.** Every slice setting produced the same tokens ([slices.txt](results/slices.txt)). A second run of
   each variant produced the same tokens *(not recorded in raw output)*.
-- **Output head on the device** (`SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`, one slice per token): not yet measured; the
-  `gputime` step of `box_run.py` measures it and checks its tokens against the plain GPU run.
+- **GPU busy against wall** (one slice per token, head on the host and on the device): not yet measured; the
+  `gputime` step of `box_run.py` records both per token. 27.1 ms/token above is wall time.
 
 ## Step 4: the runtime harness
 
@@ -236,7 +236,12 @@ Each item, the code-review finding or audit gap it answers, and what ran in the 
 - **Raw output for every figure** (review 4). `box_run.py` writes each step's log under `results/box/` and the raw
   files under `results/`. Figures without a log are marked above.
 - **Rejection inside `conditions`**: a trailing comma after the last condition, refused at token 54 (`],"`).
-- **Head-on-device timing**: `array_s2 gputime`, at one slice per token, tokens checked against the plain GPU run.
+- **GPU timing split**: `array_s2 gputime`, at one slice per token, with the output head on the host and on the
+  device, tokens checked against the plain GPU run. Per decode step it logs wall ms and `gpu_busy_ms`, the engine's
+  own GPU timestamp window (`superslm_gpu::LastCallTiming`) around the step's layer-loop submission, so wall minus
+  busy is the per-token gap, and a `steps` line per prompt gives both against token position. The token finish
+  (host logits, or the device logits submission) has no timestamps in the engine and is in wall time only;
+  measuring it on the GPU's clock would need a `src/` change.
 - **Not done:** review finding 2 (isolating the canonical jump-forward cause). Canonical mode may be removed in
   engine 1.18, a choice on hold with the user. Finding 2 below states its cause as a hypothesis.
 
