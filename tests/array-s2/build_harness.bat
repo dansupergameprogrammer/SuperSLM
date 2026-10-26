@@ -4,7 +4,8 @@ rem compiled shaders, which build.bat writes): out\array_s2.exe, the production 
 rem out\array_s2_seam.exe, the same sources with the schema fast-decode test seams compiled in,
 rem used only to run the full-vocabulary finish for the masked-finish comparison.
 setlocal
-set VSDEVCMD="C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat"
+rem VSDEVCMD may be set by the caller (quoted path), for an install outside VS 2022 Community.
+if not defined VSDEVCMD set VSDEVCMD="C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat"
 call %VSDEVCMD% -arch=x64 -no_logo
 pushd %~dp0..\..
 set SRCS=src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^

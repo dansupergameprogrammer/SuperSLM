@@ -2,7 +2,8 @@
 rem Build the sslm_verify independent converter verifier with MSVC (mirrors CMakeLists.txt's
 rem sslm_verify target -- no cmake binary is assumed present in this environment).
 setlocal
-set VSDEVCMD="C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat"
+rem VSDEVCMD may be set by the caller (quoted path), for an install outside VS 2022 Community.
+if not defined VSDEVCMD set VSDEVCMD="C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat"
 if not exist %VSDEVCMD% (echo VsDevCmd.bat not found & exit /b 1)
 call %VSDEVCMD% -arch=x64 -no_logo
 pushd %~dp0\..

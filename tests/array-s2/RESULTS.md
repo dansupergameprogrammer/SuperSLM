@@ -7,6 +7,15 @@ Every step passed. No engine or converter defect was found. Three findings are r
 coverage gap, a canonical jump-forward interaction with arrays, and a stale `build.bat` tripwire. Pre-existing red cells
 in the 1.16.0 suites are listed under **Build**.
 
+**S2 fix round (2026-10-26, cloud), pending the box rerun.** The code review (FIX FIRST) and the coverage audit (REFUSE)
+found that step 4e's save points mostly sit past the array bytes the brief lists, that no save sits inside a string,
+that the restore check compares only tokens and the final dead end, and that some figures below have no raw output.
+The harness now has teacher-forced save points exactly at every listed byte and inside two free-text values, a restore
+check that compares the accepting flag after every token (and on GPU the walk state), the restore-at-state-zero
+mutant, a rejection inside `conditions`, a hardened verifier check, and `box_run.py`, which reruns every step and
+writes the logs behind each figure. Until that rerun replaces them, every figure below is the 2026-10-25 run's; those
+marked "not recorded in raw output" have no committed log behind them. Fix-round detail: **Fix round** below.
+
 | Step | Result |
 |---|---|
 | 1 Build | Release CPU and GPU engine, `sslm_verify`, the test targets and this harness built. The test run is red on 8 pre-existing cells, none of them in array code (see Build). |
@@ -16,7 +25,7 @@ in the 1.16.0 suites are listed under **Build**.
 | 4b Walks | 3/3 pass on CPU, 3/3 on GPU |
 | 4c Rejections | 3/3 refused at the first bad token on CPU, 3/3 on GPU |
 | 4d Generation | 10/10 valid IntentDoc v2 documents; CPU and GPU streams identical 10/10 (and at every GPU slice size tested) |
-| 4e Save/restore | 54/54 on CPU, 54/54 on GPU |
+| 4e Save/restore | 54/54 on CPU, 54/54 on GPU at generated save points; most sit past the array byte, not at it (see (e)). Teacher-forced exact points: not yet run on the box |
 | 4f Engine features | exact jump-forward identical 10/10; full finish identical 10/10; canonical jump-forward valid 10/10 but different 10/10 (cause below) |
 | 5 Mutants | 2/2 killed. The verifier at `e9d73750` caught neither: one was caught by (b) and (d), the other at map time. The verifier at `d7ebeaee` refuses offset_swap |
 
@@ -48,20 +57,22 @@ in the 1.16.0 suites are listed under **Build**.
 |---|---|---|
 | Base | `D:\hf_cache\superslm_artifacts\qwen2.5-0.5b-instruct-combined.sslm` (518,177,048 B) | `3b48b25b90127b46f2ac038c23362ae38d4450e9ca3a7ab9a4d294180d75db8f` |
 | Attached | `D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm` (577,791,538 B) | `6c2d8378f8054bd04c44a99651d8110d3d3f63237239a2f7545c88580c23b178` |
-| Mutant accept_shift | `D:\_scratch\array-s2\mutants\accept_shift.sslm` | integrity fingerprint `8dc2ff7f…` |
-| Mutant offset_swap | `D:\_scratch\array-s2\mutants\offset_swap.sslm` | integrity fingerprint `5a50bac6…` |
+| Mutant accept_shift | `D:\_scratch\array-s2\mutants\accept_shift.sslm` | integrity fingerprint `8dc2ff7f…` *(not recorded in raw output)* |
+| Mutant offset_swap | `D:\_scratch\array-s2\mutants\offset_swap.sslm` | integrity fingerprint `5a50bac6…` *(not recorded in raw output)* |
 
 - **Tokenizer checkpoint:** `D:\hf_cache\hub\models--Qwen--Qwen2.5-0.5B-Instruct\snapshots\7ae557604adf67be50417f59c2c2f167def9a775`.
   The attach command found its tokenizer tables byte-equal to the base's.
 - **Attached artifact:** integrity fingerprint `b75950bb9713fe9544b0b6565a7849e50fee43272eea3fc07882ad7ef40ddc55`; SCM1
-  section 59,614,386 B. Re-attaching on an idle box wrote a byte-identical file (same SHA-256).
+  section 59,614,386 B. Re-attaching on an idle box wrote a byte-identical file (same SHA-256) *(not recorded in raw output)*; the
+  committed [attach_retime.log](results/attach_retime.log) shows the same integrity fingerprint on both re-attaches.
 
 ## Measurements
 
 **Attach** (`measure.py`, sampled every 50 ms; [attach_retime.log](results/attach_retime.log)):
-- Wall time: 28.91 s and 28.72 s on an idle box. The first run, 30.43 s, overlapped the build.
+- Wall time: 28.91 s and 28.72 s on an idle box. The first run, 30.43 s, overlapped the build. Its
+  [attach.log](results/attach.log) `peak_bytes=3896426496` line came from a `measure.py` that is not the committed one.
 - Converter (Python) peak working set: 2,146,209,792 B. Verifier child peak: 1,749,508,096 B.
-- With the `intents` schema alone: 23.04 s, converter peak 2,003,795,968 B.
+- With the `intents` schema alone: 23.04 s, converter peak 2,003,795,968 B *(not recorded in raw output)*.
 
 | Schema | DFA states | NFA states | Token transitions | Section bytes | Tracked temporary bytes | Recursion depth |
 |---|---:|---:|---:|---:|---:|---:|
@@ -100,7 +111,10 @@ The GPU model also keeps a host copy of the section.
 
 - **Per-slice cost.** Each extra slice costs about 5.3 ms, (148.7 − 27.1) / 23, measured in this cell. The 146.5
   ms/token in (d) is the 24-slice setting. At one slice per token the GPU is 1.41× faster than the CPU.
-- **Determinism.** A second run of each variant, and every slice setting, produced the same tokens.
+- **Determinism.** Every slice setting produced the same tokens ([slices.txt](results/slices.txt)). A second run of
+  each variant produced the same tokens *(not recorded in raw output)*.
+- **Output head on the device** (`SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`, one slice per token): not yet measured; the
+  `gputime` step of `box_run.py` measures it and checks its tokens against the plain GPU run.
 
 ## Step 4: the runtime harness
 
@@ -147,12 +161,23 @@ On GPU, every walk state after each token is in [walks_gpu.txt](results/walks_gp
 **(e) Save and restore.**
 - **Save points.** A save follows every token that contains an array `[` or `]`, or a comma whose innermost
   container is an array. That gives 54 save points across the 10 CPU streams ([saveplan.txt](results/saveplan.txt)):
-  - after `[` of `intents`: 10;
-  - after `,` between intents: 9;
-  - after `[` of `conditions`: 3, plus 16 tokens spelled `[]`;
-  - after `,` between conditions: 3;
-  - after `]` of `conditions`: 3, plus the same 16 `[]` tokens;
-  - after `]` of `intents`: 10.
+  - The counts by array byte, relabelled in the fix round from the same committed streams (`fixtures.py saves` on
+    [gen.txt](results/gen.txt)). *Exact* means the token ends with that byte, so the save sits exactly after it.
+    *Bundled* means later bytes of the same token follow it, so the save sits past it. *Crossed* is an `[` closed by
+    its `]` in the same token (`[]`): the save is never at the after-`[` state, and it is no longer counted there.
+
+    | After | Exact | Bundled | Crossed |
+    |---|---:|---:|---:|
+    | `[` of `intents` | 10 | 0 | 0 |
+    | `,` between intents | 1 | 8 (`},{"`) | 0 |
+    | `[` of `conditions` | 1 | 2 (`":[{"`) | 16 (`[]`) |
+    | `,` inside `conditions` | **0** | 3 (`"},{"`) | 0 |
+    | `]` of `conditions` | 16 (`[]`) | 3 (`],"`) | 0 |
+    | `]` of `intents` | 9 | 1 (`]}`) | 0 |
+
+  - The 2026-10-25 text counted the 16 `[]` tokens as "after `[` of `conditions`" and the bundled tokens as the
+    positions themselves. The brief's positions after `,` and inside `conditions` were reached exactly 1, 0 and 1
+    times. The fix round's teacher-forced points cover them (see **Fix round**).
 - **Method.** At each point the unbroken run (checked token by token against the reference) was saved. Each blob was
   restored into a fresh sequence and decoded to the dead end.
 - **Result.** CPU 54/54 (`sslm_seq_save` and `sslm_seq_restore`, 201,327,648 B blobs) and GPU 54/54
@@ -167,18 +192,68 @@ On GPU, every walk state after each token is in [walks_gpu.txt](results/walks_gp
   full finish and masks on the host, is a third independent witness and is also identical 10/10.
 - **Canonical jump-forward** (the documented host loop): 10/10 documents are valid, but 10/10 differ from plain
   decode, first at token 3. Plain emits `":[` (8899), or `":` (788) on ex041 and ex042; canonical admits `":[{"`
-  (66582). The cause is Finding 2.
+  (66582). Finding 2 states a hypothesis for the cause; it has not been measured.
 
 ## Step 5: mutants
 
 - **Construction.** `make_mutants.py` writes scratch copies of `tools/sslm_attach_schema.py`, patched to rewrite the
   `intents` schema's SCM1 bytes after `serialize_scm1`. Both runs used the attach command's own verifier gate.
-- **Results.**
+- **Results.** Every figure in this table is *(not recorded in raw output)*: no log of either mutant run, or of the
+  box re-check of `d7ebeaee`, was committed. The fix round's `mutant_*` and `state_zero_*` steps record them.
 
 | Mutant | Mutation | `sslm_verify` | Step (b) | Step (d) | Caught by |
 |---|---|---|---|---|---|
 | accept_shift | accepting state 213 → 214 (of 635; the only accepting id) | accepted | 3/3 walks end non-accepting, CPU and GPU | runs end at a dead end, `accepting=0` | (b) and (d) |
 | offset_swap | CSR `state_offsets[1]=2` and `[2]=4` swapped | **accepted** by the verifier at `e9d73750`; refused by the verifier at `d7ebeaee` | `sslm_model_map` refused it (status 4) and `sslm_gpu_model_map` refused it (status 8) | the same map refusal | (b) and (d), at map |
+
+## Fix round (2026-10-26, cloud; box rerun pending)
+
+Each item, the code-review finding or audit gap it answers, and what ran in the cloud. Nothing here has run on a GPU.
+
+- **Exact save points** (review 1, audit gap 1). `fixtures.py build` re-tokenizes the three walk documents so a token
+  boundary falls exactly after each listed byte: after `[` of `intents`, after each `,` between intents, after `[`
+  and after each `,` inside `conditions` (the `"},` boundary included), and after each `]`. That is 19 points: `[` of
+  `intents` 3, `,` between intents 2, `[` of `conditions` 5, `,` inside `conditions` 1, `]` of `conditions` 5, `]` of
+  `intents` 3. Generated-stream saves are reported as exact, bundled or crossed (table in (e)).
+- **Saves inside strings** (audit gap 2): 2 more points, after `"the` in intent 2's target and after `"be` in intent
+  3's condition entity. 21 teacher-forced points in all.
+- **A restore check that can fail** (audit gap 3). `array_s2 tfrestore` prefills a prompt (ex041), teacher-forces the
+  document to each point, saves, decodes 64 greedy tokens, then restores the blob twice: once to decode the same 64
+  tokens, once to teacher-force the rest of the document. It requires the accepting flag (and on GPU the walk state)
+  at the save and right after restore to equal the one-token-per-call walk's, the restored decode to equal the
+  unbroken one token by token (ids, accepting, and on GPU walk state), and the rest of the document to walk exactly
+  as the unbroken walk did. `restore` (generated streams) now records the unbroken run's accepting flag and walk state
+  through its dead end and checks every continuation token against them. Walks require the accepting flag to be 0
+  after every token but the last. `--state-zero` is the restore-at-state-zero mutant: the harness writes 0 over the
+  walk state the save blob records (CPU `SSB5` byte 48, GPU `SLM5` byte 124) before restoring. The CPU ABI has no
+  walk-state query, so on CPU the check reads the accepting flag and the tokens only.
+- **Verifier check** (review 3). `verify_schema_masks_check.py` attaches IntentDoc v2 with `--verifier <binary
+  under test>` and checks the exit status, then requires the clean artifact and accept_shift to be accepted, and
+  offset_swap and an SCM1 header word to be refused with `reject_status` SchemaMasksRejected and the expected
+  reason. pytest collects it as `converter-v2/test_cv2_verify_schema_masks.py`.
+- **No pass without checks** (review 5). Every mode fails on a planned row with no reference or no prompt, on a
+  result count that differs from the plan, and on zero records checked.
+- **Raw output for every figure** (review 4). `box_run.py` writes each step's log under `results/box/` and the raw
+  files under `results/`. Figures without a log are marked above.
+- **Rejection inside `conditions`**: a trailing comma after the last condition, refused at token 54 (`],"`).
+- **Head-on-device timing**: `array_s2 gputime`, at one slice per token, tokens checked against the plain GPU run.
+- **Not done:** review finding 2 (isolating the canonical jump-forward cause). Canonical mode may be removed in
+  engine 1.18, a choice on hold with the user. Finding 2 below states its cause as a hypothesis.
+
+**Executed in the cloud (Linux, no GPU):**
+
+| Run | Result |
+|---|---|
+| `fixtures.py build`, pinned tokenizer | 44 records; the 10 prompt, 3 walk and 3 reject records equal the committed `fixtures.txt`; 21 teacher-forced points, each exactly at its byte |
+| `fixtures.py precheck` (IntentDoc v2 compiled by the repository converter) | 31/31: every walk admitted with accepting only at its last token, every rejection refused at its expected token |
+| `fixtures.py saves` on the committed `gen.txt` | the same 54 save indices; the exact, bundled and crossed counts in (e), equal to the code review's table |
+| CPU harness, gcc `-Wall -Wextra`, linked against `build/libsuperslm.a` with `array_s2_gpu_none.cpp` | builds with no warnings; the GPU TU passes a syntax-only clang check with stand-in DXGI headers |
+| CPU harness on a synthetic random-weight artifact (the converter-v2 base at context 1024, both schemas attached) | walks and rejections 10/10; `tfrestore` 21/21; `--state-zero` fails 21/21; accept_shift fails every walk at the per-token accepting check; offset_swap refused at `sslm_model_map` |
+| `verify_schema_masks_check.py` | 5/5 with the verifier at the tip; with a verifier built from `e9d73750` both must-reject cases fail |
+| pytest, `test_cv2_verify_schema_masks.py` with `test_cv2_attach.py` | 44 passed |
+
+The synthetic model never reaches a dead end in generation (it runs to the token cap inside a string), so the
+generated-stream `restore` passing path, the GPU, and every timing run only on the box.
 
 ## Findings
 
@@ -197,8 +272,10 @@ On GPU, every walk state after each token is in [walks_gpu.txt](results/walks_gp
 2. **Canonical jump-forward closes arrays early.**
    - Canonical mode admits a forced span on its own: `}` after `false`, and `":[` after `"conditions"`. It then
      leaves the array's continue-or-close choice to a fresh decode step.
-   - The model's own tokens bundle the forced byte with that choice (`},{"`, `[]`, `[` then `{"`). When the model is
-     given the bare forced token, it closes the array.
+   - **Hypothesis, not measured:** the model's own tokens bundle the forced byte with that choice (`},{"`, `[]`, `[`
+     then `{"`), and when the model is given the bare forced token, it closes the array. No run isolates this:
+     canonical decode leaves the plain stream at token 3, so every later array decision is made on a different
+     prefix, and plain ex041 decodes a bare `[` and then continues with `{"` instead of closing.
    - Across the 10 prompts, canonical produced exactly one intent with `conditions: []` every time. Plain decode
      produced up to 4 intents and 4 conditions.
    - The output stays schema-valid, and the documented contract promises plain-identical output only in exact mode.
@@ -221,7 +298,11 @@ On GPU, every walk state after each token is in [walks_gpu.txt](results/walks_gp
 
 ## Files
 
-- `fixtures.py`: fixture builder, save-plan builder and output checker.
+- `box_run.py`: the whole box run, resumable, one step at a time (`--list` shows the steps).
+- `fixtures.py`: fixture builder, table precheck, save-plan builder and output checker.
+- `scm1_mutants.py`: the two SCM1 mutations, and a writer that applies one to an attached artifact.
+- `array_s2_gpu_none.cpp`: the GPU side for a CPU-only build (Linux).
+- `verify_schema_masks_check.py`: the verifier's SchemaMasks check (also collected by pytest).
 - `array_s2_*.cpp` and `array_s2_shared.h`: the harness.
 - `build_harness.bat`: builds the harness.
 - `measure.py`: wall time and peak memory.
