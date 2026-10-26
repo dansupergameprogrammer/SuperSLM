@@ -1,103 +1,32 @@
+54c54
+< FAIL tests/schema-fast-decode-gpu/sfdg_helpers.h:255: false -- [G6] cannot read /home/user/SuperSLM-r17/out/mr4/fixtures/fsfd_untied.sslm
+---
+> FAIL tests/schema-fast-decode-gpu/sfdg_helpers.h:262: false -- [G6] cannot read /home/user/SuperSLM-r17/out/mr4/fixtures/fsfd_untied.sslm
 66c66
 < sfdg_cell_g7_1: checks=31 failures=0 skips=0 -> PASS
 ---
-> sfdg_cell_g7_1: checks=37 failures=0 skips=0 -> PASS
-69a70,75
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g9_1.cpp:85: HexDigest(got.stream) == g.digest -- [G9.1 (a) SLM5] potion_shop_order: digest 7953dd212aa523bc1800991ac79268947b1c51df48e20ee91c0075e817244bed, pinned 5498cef23900bfbfad790d7174b6badc04bddc58afdca629daf8e2d0b48488bd
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g9_1.cpp:85: HexDigest(got.stream) == g.digest -- [G9.1 (a) SLM5] prompt_result: digest 674e41c93d082d38d189b1a55466bb03570fc760bdc76911c80e1d9584ec236c, pinned 16072100850158b6b6314415875d694601b47c80de8335be6d276230c65b08fb
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g9_1.cpp:85: HexDigest(got.stream) == g.digest -- [G9.1 (b) SLM6] potion_shop_order: digest 7953dd212aa523bc1800991ac79268947b1c51df48e20ee91c0075e817244bed, pinned 5498cef23900bfbfad790d7174b6badc04bddc58afdca629daf8e2d0b48488bd
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g9_1.cpp:85: HexDigest(got.stream) == g.digest -- [G9.1 (b) SLM6] prompt_result: digest 674e41c93d082d38d189b1a55466bb03570fc760bdc76911c80e1d9584ec236c, pinned 16072100850158b6b6314415875d694601b47c80de8335be6d276230c65b08fb
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g9_1.cpp:99: first.st == GS::SSLM_OK && first.count == 4 && QueryGpu(rig.ctx(), s.h, 0).count > 0 -- [G9.1 (c)] the first call: SSLM_OK, 0 forced, and the chain must go on
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g9_1.cpp:105: next.st == GS::SSLM_OK && next.count == 4 -- [G9.1 (c)] the -1 call after the restore: SSLM_OK, 0
-71,72c77,78
+> sfdg_cell_g7_1: checks=39 failures=0 skips=0 -> PASS
+71c71
 < sfdg_cell_g9_1: checks=384 failures=0 skips=0 -> PASS
-< exit 0
 ---
-> sfdg_cell_g9_1: checks=161280 failures=6 skips=0 -> FAIL
-> exit 1
-74a81,92
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:29: j0.st == GS::SSLM_OK && j0.forced == q0.ids && CtxLen(a.h) == int64_t(prompt.size() + q0.ids.size()) -- [G11.1 (b)] potion_shop_order: SSLM_OK, forced {} (query {4913,56431,3252}), context 15
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:32: Observe(rig, a.h) == Observe(rig, b.h) -- [G11.1 (b)] potion_shop_order: the verb's sequence differs from the schema-content bridge's
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:38: t1 >= 0 && t1 == t1b -- [G11.1 (a)] potion_shop_order: the choice 4913 and 75
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:47: j1.st == GS::SSLM_OK && j1.forced == q1.ids -- [G11.1 (a)] potion_shop_order: SSLM_OK, forced {}, the chain from state 2 is {56431,3252}
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:49: CtxLen(a.h) == ctx0 + 1 + int64_t(q1.ids.size()) -- [G11.1 (a)] potion_shop_order: context 16, want 18
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:52: oa == ob -- [G11.1 (a)] potion_shop_order: the verb's walk 2 context 16, the composition's walk 16 context 19 (blobs differ)
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:29: j0.st == GS::SSLM_OK && j0.forced == q0.ids && CtxLen(a.h) == int64_t(prompt.size() + q0.ids.size()) -- [G11.1 (b)] utf8enum: SSLM_OK, forced {} (query {4913,86,3252}), context 15
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:32: Observe(rig, a.h) == Observe(rig, b.h) -- [G11.1 (b)] utf8enum: the verb's sequence differs from the schema-content bridge's
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:38: t1 >= 0 && t1 == t1b -- [G11.1 (a)] utf8enum: the choice 4913 and 64
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:47: j1.st == GS::SSLM_OK && j1.forced == q1.ids -- [G11.1 (a)] utf8enum: SSLM_OK, forced {86}, the chain from state 2 is {86,3252}
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:49: CtxLen(a.h) == ctx0 + 1 + int64_t(q1.ids.size()) -- [G11.1 (a)] utf8enum: context 17, want 18
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g11_1.cpp:52: oa == ob -- [G11.1 (a)] utf8enum: the verb's walk 3 context 17, the composition's walk 7 context 19 (blobs differ)
-76,77c94,95
+> sfdg_cell_g9_1: checks=1444 failures=0 skips=0 -> PASS
+76c76
 < sfdg_cell_g11_1: checks=45 failures=0 skips=0 -> PASS
-< exit 0
 ---
-> sfdg_cell_g11_1: checks=45 failures=12 skips=0 -> FAIL
-> exit 1
-79a98,122
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:105: j.st == GS::SSLM_OK && cs == GS::SSLM_OK && j.forced == q.ids -- [G12.1 SLM5] verb SSLM_OK forced {}, composition SSLM_OK
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:107: verb_subs == (R + 3) / 4 -- [G12.1 SLM5] R = 3 rows: the verb made 3 submissions, want ceil(R/4) = 1
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:112: Observe(rig, a.h) == Observe(rig, b.h) -- [G12.1 SLM5] the verb's sequence (blob, walk, flags) differs from the composition's
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:114: ReadSnapshot(rig.ctx(), a.h) == ReadSnapshot(rig.ctx(), b.h) && ReadSnapshot(rig.ctx(), a.h).st == GS::SSLM_OK -- [G12.1 SLM5] the prefill snapshot after the verb differs from the composition's (SSLM_OK, SSLM_OK)
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:120: na == nb && na != -1 -- [G12.1 SLM5] the next tokens 72 and 75
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:121: rig.Blob(a.h) == rig.Blob(b.h) -- [G12.1 SLM5] the blobs differ after the next decode
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:105: j.st == GS::SSLM_OK && cs == GS::SSLM_OK && j.forced == q.ids -- [G12.1 SLM6] verb SSLM_OK forced {}, composition SSLM_OK
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:107: verb_subs == (R + 3) / 4 -- [G12.1 SLM6] R = 3 rows: the verb made 3 submissions, want ceil(R/4) = 1
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:112: Observe(rig, a.h) == Observe(rig, b.h) -- [G12.1 SLM6] the verb's sequence (blob, walk, flags) differs from the composition's
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:114: ReadSnapshot(rig.ctx(), a.h) == ReadSnapshot(rig.ctx(), b.h) && ReadSnapshot(rig.ctx(), a.h).st == GS::SSLM_OK -- [G12.1 SLM6] the prefill snapshot after the verb differs from the composition's (SSLM_OK, SSLM_OK)
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:120: na == nb && na != -1 -- [G12.1 SLM6] the next tokens 72 and 75
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:121: rig.Blob(a.h) == rig.Blob(b.h) -- [G12.1 SLM6] the blobs differ after the next decode
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:148: st == GS::SSLM_OK && next_sliced == next_verb -- [G12.2] sliced SSLM_OK token 75, verb 72
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:150: SslmGpuSeqWalkStateForG5Bridge(a.h) == SslmGpuSeqWalkStateForG5Bridge(b.h) && rig.Blob(a.h) == rig.Blob(b.h) -- [G12.2] after the next token the walks are 4 and 16, blobs differ
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:188: tr == tv && tr != -1 -- [G12.2 Ready] the decode after the walked embed gave 72; the verb's one row 4913
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:218: j.st == GS::SSLM_OK && j.forced == q.ids && CtxLen(f.h) == int64_t(q.ids.size()) && (g.h == nullptr || Observe(rig, f.h) == Observe(rig, g.h)) -- [G12.3] fresh, -1: SSLM_OK, forced {} (start chain {4913,56431,3252})
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:249: jp.st == GS::SSLM_OK && jp.forced == jr.forced && rig.Blob(p.h) == rig.Blob(r.h) -- [G12.3] primed, -1: SSLM_OK forced {}; ready {}
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:269: jw.st == GS::SSLM_OK && Observe(rig, b.h) == Observe(rig, bw.h) -- [G12.3] a wrong pending token (12792, not 4913) is not embedded as given: SSLM_OK
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:361: j.st == GS::SSLM_SEQUENCE_REJECTED && Observe(rig, s.h) == before && Submissions(rig.ctx()) == n0 -- [G12.9] token in hand, exact NULL: SSLM_OK, sequence changed, 3 submissions
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:368: a.st == b.st && a.forced == b.forced && Observe(rig, s.h) == Observe(rig, twin.h) -- [G12.9] token in hand: the canonical call after the refusals differs from a fresh one's
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:361: j.st == GS::SSLM_SEQUENCE_REJECTED && Observe(rig, s.h) == before && Submissions(rig.ctx()) == n0 -- [G12.9] ready, exact NULL: SSLM_OK, sequence unchanged, 0 submissions
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:361: j.st == GS::SSLM_SEQUENCE_REJECTED && Observe(rig, s.h) == before && Submissions(rig.ctx()) == n0 -- [G12.9] ready, exact with a draft: SSLM_OK, sequence unchanged, 0 submissions
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:361: j.st == GS::SSLM_SEQUENCE_REJECTED && Observe(rig, s.h) == before && Submissions(rig.ctx()) == n0 -- [G12.9] fresh, exact NULL: SSLM_OK, sequence unchanged, 0 submissions
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:361: j.st == GS::SSLM_SEQUENCE_REJECTED && Observe(rig, s.h) == before && Submissions(rig.ctx()) == n0 -- [G12.9] fresh, exact with a draft: SSLM_OK, sequence unchanged, 0 submissions
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_verb.cpp:366: rig.Bindable(s.h, kPotion) -- [G12.9] fresh: not bindable after the refusals
-81,82c124,125
+> sfdg_cell_g11_1: checks=51 failures=0 skips=0 -> PASS
+81c81
 < sfdg_cell_g12_verb: checks=247 failures=0 skips=0 -> PASS
-< exit 0
 ---
-> sfdg_cell_g12_verb: checks=237 failures=25 skips=0 -> FAIL
-> exit 1
-86c129
+> sfdg_cell_g12_verb: checks=249 failures=0 skips=0 -> PASS
+86c86
 < sfdg_cell_g12_6: checks=381 failures=0 skips=0 -> PASS
 ---
 > sfdg_cell_g12_6: checks=567 failures=0 skips=0 -> PASS
-89a133,140
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_7.cpp:56: j.st == fault && j.count == 0 -- [G12.7 dedicated, SSLM_GPU_ALLOCATION_FAILED at sub-chunk 0] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_7.cpp:56: j.st == fault && j.count == 0 -- [G12.7 dedicated, SSLM_GPU_ALLOCATION_FAILED at sub-chunk 1] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_7.cpp:56: j.st == fault && j.count == 0 -- [G12.7 dedicated, SSLM_DEVICE_LOST at sub-chunk 0] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_7.cpp:56: j.st == fault && j.count == 0 -- [G12.7 dedicated, SSLM_DEVICE_LOST at sub-chunk 1] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_7.cpp:56: j.st == fault && j.count == 0 -- [G12.7 pooled, SSLM_GPU_ALLOCATION_FAILED at sub-chunk 0] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_7.cpp:56: j.st == fault && j.count == 0 -- [G12.7 pooled, SSLM_GPU_ALLOCATION_FAILED at sub-chunk 1] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_7.cpp:56: j.st == fault && j.count == 0 -- [G12.7 pooled, SSLM_DEVICE_LOST at sub-chunk 0] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_7.cpp:56: j.st == fault && j.count == 0 -- [G12.7 pooled, SSLM_DEVICE_LOST at sub-chunk 1] the verb returned SSLM_OK with 0 forced
-91,92c142,143
+91c91
 < sfdg_cell_g12_7: checks=176 failures=0 skips=0 -> PASS
-< exit 0
 ---
-> sfdg_cell_g12_7: checks=176 failures=8 skips=0 -> FAIL
-> exit 1
-94a146,154
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp:70: j.st == GS::SSLM_GPU_ALLOCATION_FAILED && j.count == 0 -- [G12.10 dedicated, site 0] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp:70: j.st == GS::SSLM_GPU_ALLOCATION_FAILED && j.count == 0 -- [G12.10 dedicated, site 1] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp:70: j.st == GS::SSLM_GPU_ALLOCATION_FAILED && j.count == 0 -- [G12.10 dedicated, site 2] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp:59: tj.st == GS::SSLM_OK && Observe(rig, twin.h).mapped > t0.mapped -- [G12.10 pooled, site 0] precondition: the call maps a page (SSLM_OK, mapped 3 -> 3)
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp:70: j.st == GS::SSLM_GPU_ALLOCATION_FAILED && j.count == 0 -- [G12.10 pooled, site 0] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp:59: tj.st == GS::SSLM_OK && Observe(rig, twin.h).mapped > t0.mapped -- [G12.10 pooled, site 1] precondition: the call maps a page (SSLM_OK, mapped 3 -> 3)
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp:70: j.st == GS::SSLM_GPU_ALLOCATION_FAILED && j.count == 0 -- [G12.10 pooled, site 1] the verb returned SSLM_OK with 0 forced
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp:59: tj.st == GS::SSLM_OK && Observe(rig, twin.h).mapped > t0.mapped -- [G12.10 pooled, site 2] precondition: the call maps a page (SSLM_OK, mapped 3 -> 3)
-> FAIL tests/schema-fast-decode-gpu/sfdg_cell_g12_10.cpp:70: j.st == GS::SSLM_GPU_ALLOCATION_FAILED && j.count == 0 -- [G12.10 pooled, site 2] the verb returned SSLM_OK with 0 forced
-96,97c156,157
+> sfdg_cell_g12_7: checks=194 failures=0 skips=0 -> PASS
+96c96
 < sfdg_cell_g12_10: checks=110 failures=0 skips=0 -> PASS
-< exit 0
 ---
-> sfdg_cell_g12_10: checks=113 failures=9 skips=0 -> FAIL
-> exit 1
+> sfdg_cell_g12_10: checks=137 failures=0 skips=0 -> PASS
