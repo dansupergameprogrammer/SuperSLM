@@ -373,15 +373,14 @@ writes the size it needs to `*out_blob_size` and returns the status the
 - 1.12.0 and earlier refuse `SLM6` on its magic with
   `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`. GPU and CPU blobs are separate
   formats; neither backend restores the other's.
-- `sslm_gpu_prefix_save(ctx, prefix, blob, &size)` (1.16.0, unreleased) writes a frozen
+- `sslm_gpu_prefix_save(ctx, prefix, blob, &size)` (1.16.0) writes a frozen
   prefix as an `SPX1` blob, the CPU's precached-prefix layout with backend 1
   and the adapter's vendor and device IDs as producer. It reads the pool's
   host mirror and submits nothing. An unfrozen prefix, or one not at rest
   after a whole token, is `SSLM_GPU_PREFIX_REJECTED`; a short buffer is
-  `SSLM_OUTPUT_BUFFER_TOO_SMALL` with the size written. Exported, and
-  unreleased until 1.16.0.
+  `SSLM_OUTPUT_BUFFER_TOO_SMALL` with the size written. Released in 1.16.0.
 - `sslm_gpu_prefix_restore(ctx, model, pool, blob, size, parent_or_null,
-  &prefix, &shared)` (1.16.0, unreleased) validates the whole blob first (arguments,
+  &prefix, &shared)` (1.16.0) validates the whole blob first (arguments,
   Busy, size and magic, digest, backend, producer
   (`SSLM_RESTORE_PRODUCER_MISMATCH`), model (`SSLM_RESTORE_MODEL_MISMATCH`),
   then kv precision, schema and field domains, each
@@ -389,8 +388,7 @@ writes the size it needs to `*out_blob_size` and returns the status the
   (`SSLM_GPU_KV_POOL_EXHAUSTED`, nothing drawn) and shares the parent's `s`
   leading pages when it is a frozen prefix of this pool holding exactly the
   blob's origin with equal rows; otherwise `s = 0`. A blob restores only on
-  the engine version and adapter that wrote it. Exported, and unreleased
-  until 1.16.0.
+  the engine version and adapter that wrote it. Released in 1.16.0.
 
 **In flight.** `sslm_gpu_kv_pool_create`, `sslm_gpu_prefix_prefill`,
 `sslm_gpu_prefix_begin_from`, `sslm_gpu_seq_adopt_prefix`,
@@ -400,8 +398,7 @@ nothing, while any sequence in the process is Submitted. Every guarded call
 on a pooled sequence has the same any-sequence scope, and a guarded call on
 a dedicated sequence, a model or an adapter returns `SSLM_BUSY` while a
 pooled sequence is Submitted. The other paged calls submit nothing and are
-never refused Busy. (`sslm_gpu_prefix_restore` is exported, and unreleased
-until 1.16.0.)
+never refused Busy. (`sslm_gpu_prefix_restore` is new in 1.16.0.)
 
 **Speed.** On the NVIDIA RTX 2080 SUPER (one card, one driver),
 single-sequence decode through a pooled sequence's page table was no more
@@ -641,14 +638,14 @@ freeze, a schema bind it can no longer take); and
 `SSLM_GPU_PREFIX_SCHEMA_MISMATCH`, an adopt whose schema binding does not
 match the prefix's.
 
-One covers precached prefixes (1.16.0, unreleased; ordinal 30):
+One covers precached prefixes (1.16.0; ordinal 30):
 `SSLM_RESTORE_PRODUCER_MISMATCH`, an `SPX1` blob given to
 `sslm_gpu_prefix_restore` that another engine version wrote, or that was
 written on another adapter (its vendor or device ID differs from the
-context's). Nothing is drawn. The status is exported, and unreleased until
-1.16.0, with the GPU twins.
+context's). Nothing is drawn. The status was released in 1.16.0, with the
+GPU twins.
 
-Two cover schema skip-ahead on the GPU (1.17.0, unreleased; see
+Two cover schema skip-ahead on the GPU (1.17.0; see
 [Schema skip-ahead on the GPU](#schema-skip-ahead-on-the-gpu-1170)).
 `SSLM_GPU_FORCED_TABLE_ABSENT` (ordinal 31): `sslm_gpu_seq_forced_tokens` or
 `sslm_gpu_seq_jump_forward` on a model mapped without a forced-next table (its
@@ -1524,10 +1521,16 @@ bit-identical between the CPU and GPU paths at real scale (see
 
 ## Schema skip-ahead on the GPU (1.17.0)
 
-*Unreleased.* The GPU twins of the CPU's schema fast-decode verbs (1.15.0). Every name below is an addition; no
-save format (`SLM5`, `SLM6`, `SPX1`) changes. To be certified on the NVIDIA RTX 2080 SUPER and the AMD Radeon RX 7900 XTX
-only; no GPU run has certified it yet. Known issue: the RTX 50-series (Blackwell) currently fails parts of the GPU suite (59 of 326,323 checks on an
-RTX 5060, mostly at `softmax_site.hlsl:150`), and no GPU support is claimed for it.
+The GPU twins of the CPU's schema fast-decode verbs (1.15.0), released in 1.17.0. Every name below is an addition;
+no save format (`SLM5`, `SLM6`, `SPX1`) changes. Stream equality with the CPU, per mode, is certified on the NVIDIA
+RTX 5060 and the AMD Radeon RX 7900 XT only. 1.17.0 also fixes the RTX 50-series (Blackwell) GPU results that 1.16.0
+listed as a known issue.
+
+**Canonical mode changes answers, and is deprecated.** It writes the forced text with the tokenizer's split, so the
+model continues from tokens it would not have chosen. On a schema-heavy workload it changed 8 of 44 answers and
+lowered accuracy, where exact mode kept every answer and was nearly as fast, and on array schemas it closes an array
+after its first item. 1.18.0 removes it on the CPU and the GPU. Use exact mode (CPU) where answers matter; on the GPU,
+1.17.0 offers canonical only, and exact runs as off until 1.18.0.
 
 **The forced-text query.** `sslm_gpu_seq_forced_tokens(ctx, seq, out_ids, cap, out_count, out_accepting)` returns
 the text the bound schema forces from the sequence's current walk state, as token ids: the CPU's

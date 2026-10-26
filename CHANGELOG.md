@@ -2,13 +2,12 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
-## [1.17.0] - unreleased
+## [1.17.0] - 2026-10-26
 
-Schema skip-ahead on the GPU (schema fast-decode plan rev 1.4.4, slices G1-F, G1-M and G1-J). Three GPU verbs, the
-ready getter, one struct and two appended GPU statuses are added; no save format (`SLM5`, `SLM6`, `SPX1`) changes, and
-the GPU masked finish changes no GPU token. To be certified on the NVIDIA RTX 2080 SUPER and the AMD Radeon RX 7900 XTX
-only; no GPU run has certified it yet.
-The release waits for the box's exactness rules on both cards and for 1.16.0.
+Schema skip-ahead on the GPU, and the RTX 50-series fix. `docs/releases/1.17.0.md` is the release note. Three GPU
+verbs, the ready getter, one struct and two appended GPU statuses are added; no save format (`SLM5`, `SLM6`, `SPX1`)
+changes, and the GPU masked finish changes no GPU token. Stream equality with the CPU, per mode, is certified on the
+NVIDIA RTX 5060 and the AMD Radeon RX 7900 XT only.
 
 - **Forced-text query.** `sslm_gpu_model_map` builds the forced-next table with the CPU map's builder, and
   `sslm_gpu_seq_forced_tokens` returns the CPU's ids for the same walk state. A model without a table returns the
@@ -26,12 +25,53 @@ The release waits for the box's exactness rules on both cards and for 1.16.0.
   `SSLM_GPU_ALLOCATION_FAILED` for an allocation failure (device or host) and `SSLM_DEVICE_LOST` for any other
   fault. The walked embed refuses a mid-token sequence. **The GPU verb refuses `SSLM_JUMP_EXACT` in 1.17.0 with
   `SSLM_SEQUENCE_REJECTED`.**
+- **Canonical mode changes answers, not only tokens. Use exact mode where answers matter.** Canonical writes the
+  forced text with the tokenizer's own split instead of the model's, and the model then continues from tokens it
+  would not have chosen. On a user's schema-heavy workload of 44 lines on the CPU (1.16.0), exact mode was 0.46 s a line
+  with all 44 answers identical to off (0.63 s), and canonical was 0.44 s but changed 8 of the 44 answers and lowered
+  accuracy. On array schemas (not convertible before 1.19.0) canonical closes an array after its first item. On the
+  GPU, 1.17.0 has canonical only: exact runs as off there until multi-row GPU dispatch (1.18.0). Nothing jumps unless
+  the host calls a jump-forward verb, and on the CPU verb NULL options select canonical, so pass `SSLM_JUMP_EXACT`.
+  **Canonical mode is deprecated: 1.18.0 removes it on the CPU and the GPU.**
 - **CPU C ABI:** the two status names are appended to `SSLM_STATUS_ENUM_LIST`, so the CPU and GPU enums keep one
   ordinal space. No CPU call returns either.
 - **Two claims, kept apart.** Stream equality per mode is claimed on the GPUs where the box's exactness rules ran. The
   plugin README's "GPU determinism is not claimed" stays as it is.
-- **Known issue:** the RTX 50-series (Blackwell) currently fails parts of the GPU suite (59 of 326,323 checks on an
-  RTX 5060, mostly at `softmax_site.hlsl:150`). No GPU support is claimed for 50-series cards.
+- **Fixed: wrong GPU results on NVIDIA RTX 50-series (Blackwell).** On Blackwell, the driver's shader backend drops
+  the carry from the low 32 bits into the high 32 bits of a native 64-bit integer add in some kernels. The same DXIL
+  is correct on the RTX 2080 SUPER. It hit `SaturatingAdd64Gpu_`, which derives the softmax site's i-exp scale
+  constants, so every GPU forward diverged from the CPU at the first attention layer. The open-time witness refused
+  the device, and 59 checks of the GPU suite failed. `SaturatingAdd64Gpu_` now forms the sum from two 32-bit halves
+  with an explicit carry. It is bit-identical to the native add wherever that add is computed correctly. On an
+  RTX 5060 (drivers 32.0.16.1088 and 32.0.16.2101) the full suite passes (326,326 checks with the fix on 1.15.0;
+  326,327 on 1.17.0, 0 failures) and the witness accepts the device. Results on the RTX 2080 SUPER are unchanged.
+
+## [1.16.0] - 2026-10-25
+
+Frozen-prefix save and restore on the GPU. `docs/releases/1.16.0.md` is the release note, and
+`docs/releases/1.16.0-verification.md` summarizes the test results. The two GPU verbs have been declared and
+exported since 1.14.0, labelled unreleased; 1.16.0 releases them with no change to their code, declarations or
+`SslmGpuStatus` ordinals. No CPU verb, struct layout, status ordinal or sequence save format changes, and no model
+artifact needs reconversion.
+
+- **Precached prefixes on the GPU: save and restore.** `sslm_gpu_prefix_save` writes a frozen GPU prefix as an
+  `SPX1` blob, the CPU's layout with backend 1 and the adapter's PCI vendor and device IDs as producer, read from
+  the pool's host mirror; it submits nothing and is never refused Busy. `sslm_gpu_prefix_restore` validates the
+  whole blob before it draws or shares any page (arguments, Busy, size and magic, digest, backend, producer, model,
+  KV precision, schema and field domains, in that order), draws `ceil(L/B) - s` pages, shares a frozen parent's `s`
+  leading pages when the parent holds exactly the blob's origin with equal rows, and uploads only the drawn pages.
+  Every refusal leaves the out-handle null and returns every drawn page, and changes nothing else unless it is
+  `SSLM_DEVICE_LOST`.
+- **`SSLM_RESTORE_PRODUCER_MISMATCH` on the GPU.** A GPU blob restores only on the engine version and the adapter
+  (vendor and device) that wrote it; any other is refused with this status, appended last in `SslmGpuStatus`.
+- **A blob is bound to the engine version that wrote it**, so `SPX1` blobs written by 1.14.0 or 1.15.0 are refused
+  by 1.16.0 with `SSLM_RESTORE_PRODUCER_MISMATCH`, on the CPU as on the GPU, and any later version, patch releases
+  included, refuses 1.16.0's. Rebuild cached prefixes after upgrading.
+- **Tested GPUs.** The GPU twins were tested on the NVIDIA GeForce RTX 2080 SUPER, the AMD Radeon RX 7900 XTX and the
+  AMD Radeon RX 7900 XT only (the XT and XTX share a PCI device ID). On the RTX 2080 SUPER and the RX 7900 XT, with
+  the 0.5B and 1.5B models, a prefix restore took 1.4–3.0 ms against 1,046–1,866 ms of prefill at 128 tokens, and
+  6.4–15.7 ms against 10,530–20,321 ms at 1,000 tokens.
+- **Known issue.** RTX 50-series (Blackwell) GPUs fail parts of the GPU test suite; under investigation; use the CPU backend there.
 
 ## [1.15.0] - 2026-10-23
 

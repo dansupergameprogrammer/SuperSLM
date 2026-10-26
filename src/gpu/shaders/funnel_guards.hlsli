@@ -49,11 +49,24 @@ bool CarriedScaleMantissaFitsInt32Gpu(int64_t m)
 }
 
 // intmath.cpp SaturatingAdd64 (also checked_chain_funnel.cpp:93-105, identical body).
+//
+// The sum is formed from two 32-bit halves with an explicit carry, not as one native 64-bit add. On NVIDIA
+// Blackwell (RTX 50-series: an RTX 5060 on drivers 32.0.16.1088 and 32.0.16.2101), the driver's shader backend
+// drops the carry from the low 32 bits into the high 32 bits of a native 64-bit add in some kernels: (-7) + 31
+// came out as 0xFFFFFFFF00000018 instead of 24. The same DXIL is correct on the RTX 2080 SUPER (Turing). The result
+// is bit-identical to the native add wherever the native add is computed correctly; with this form, the full GPU
+// test suite and the open-time witness pass on the RTX 5060. IExpScaleConstantsGpu and CombineCarriedScaleGpu_ (the softmax site's
+// scale derivation) are this helper's callers.
 int64_t SaturatingAdd64Gpu_(int64_t a, int64_t b)
 {
     uint64_t ua = (uint64_t)a;
     uint64_t ub = (uint64_t)b;
-    int64_t out_val = (int64_t)(ua + ub);
+    uint alo = (uint)(ua & 0xFFFFFFFFULL), ahi = (uint)(ua >> 32);
+    uint blo = (uint)(ub & 0xFFFFFFFFULL), bhi = (uint)(ub >> 32);
+    uint lo = alo + blo;
+    uint carry = (lo < alo) ? 1u : 0u;
+    uint hi = ahi + bhi + carry;
+    int64_t out_val = (int64_t)(((uint64_t)hi << 32) | (uint64_t)lo);
     bool overflow = ((a >= 0) == (b >= 0)) && ((out_val >= 0) != (a >= 0));
     if (!overflow) return out_val;
     return (a >= 0) ? 0x7FFFFFFFFFFFFFFFLL : (int64_t)0x8000000000000000ULL;

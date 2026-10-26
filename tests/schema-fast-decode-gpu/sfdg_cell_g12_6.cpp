@@ -29,6 +29,8 @@ constexpr int32_t kBudgetLimit = 200;  // the pooled arm's limit: origin 0 + bud
 struct Outcome {
 	GS st = GS::SSLM_OK;
 	std::vector<int32_t> forced;
+	int32_t k = 0;               // the rows this run's verb call asks for: the pending row, if any, plus the chain
+	std::vector<int32_t> chain;  // the chain's first k - pending ids, read by the query before the call
 	int32_t ready = -1;
 	uint32_t layer = 0, walk = 0;
 	int64_t ctx = -1;
@@ -63,6 +65,13 @@ Outcome RunGpu(GRig& rig, const std::vector<int32_t>& base, int32_t limit, int32
 		t = Token(rig.env, s, &st);
 		CHECK_MSG(st == GS::SSLM_OK && t >= 0, "[G12.6] the choice: %s %d", Name(st), t);
 	}
+	// The chain the verb will be asked for, from this run's own walk state. With a pending token it follows this run's
+	// choice, which the prompt's length can change, so a run at one h cannot supply another's expectations.
+	const GQuery q = QueryGpu(rig.ctx(), s.h);
+	const int32_t pend = pending ? 1 : 0;
+	const int32_t take = std::min<int32_t>(static_cast<int32_t>(q.ids.size()), budget - pend);
+	o.chain.assign(q.ids.begin(), q.ids.begin() + take);
+	o.k = take + pend;
 	const SeqObs before = Observe(rig, s.h);
 	if (call_verb) {
 		const JumpOut j = Jump(rig, s, t, budget);
@@ -126,20 +135,23 @@ int main(int argc, char** argv) {
 			const GS limit_status = pooled ? GS::SSLM_GPU_KV_BUDGET_EXCEEDED : kContextCapExceeded;
 			const char* arm = pooled ? "pooled" : "dedicated";
 			for (const bool pending : {false, true}) {
-				// k, from a run with room to spare: the rows the verb admits when nothing limits it.
+				// k, from a run with room to spare: the rows the verb admits when nothing limits it. It picks the h values
+				// below; each run's expectations use its own k, since a pending run's choice can differ with the prompt's
+				// length (7 false fails on the RX 7900 XT, 2026-10-26, before this).
 				const Outcome full = RunGpu(rig, base, limit, 64 + 2, pending, pooled);
 				const int32_t k = static_cast<int32_t>(full.forced.size()) + (pending ? 1 : 0);
-				CHECK_MSG(full.st == GS::SSLM_OK && k >= 3, "[G12.6 %s] precondition: k = %d (%s)", arm, k, Name(full.st));
+				CHECK_MSG(full.st == GS::SSLM_OK && k >= 3 && full.k == k && full.chain == full.forced,
+				          "[G12.6 %s] precondition: k = %d, queried %d (%s)", arm, k, full.k, Name(full.st));
 				const Outcome off = RunGpu(rig, base, limit, 0, pending, pooled, /*call_verb=*/false);
 				for (const int32_t h : {0, 1, 2, k - 1, k, k + 1}) {
 					if (h < 0 || h > 64) continue;
 					const Outcome g = RunGpu(rig, base, limit, h, pending, pooled);
-					const int32_t admitted = std::min(h, k);
+					const int32_t admitted = std::min(h, g.k);
 					const int32_t forced = admitted - (pending && admitted > 0 ? 1 : 0);
-					const GS want_st = h < k ? limit_status : GS::SSLM_OK;
-					std::vector<int32_t> want_forced(full.forced.begin(), full.forced.begin() + forced);
+					const GS want_st = h < g.k ? limit_status : GS::SSLM_OK;
+					std::vector<int32_t> want_forced(g.chain.begin(), g.chain.begin() + forced);
 					CHECK_MSG(g.st == want_st && g.forced == want_forced,
-					          "[G12.6 %s%s h=%d k=%d] %s forced %s; want %s forced %s", arm, pending ? " pending" : "", h, k,
+					          "[G12.6 %s%s h=%d k=%d] %s forced %s; want %s forced %s", arm, pending ? " pending" : "", h, g.k,
 					          Name(g.st), Str(g.forced).c_str(), Name(want_st), Str(want_forced).c_str());
 					if (h > 0) {
 						CHECK_MSG(g.ready == 1 && g.layer == rig.env.fx.layers && g.ctx == limit - h + admitted,
@@ -160,7 +172,7 @@ int main(int argc, char** argv) {
 					if (!pooled) {
 						const CpuOutcome cpu = RunCpu(c, base, limit, h, pending);
 						const bool cpu_limit = cpu.st == SSLM_CONTEXT_CAP_EXCEEDED;
-						CHECK_MSG((h < k) == cpu_limit && (cpu.st == SSLM_OK || cpu_limit) && cpu.forced == g.forced,
+						CHECK_MSG((h < g.k) == cpu_limit && (cpu.st == SSLM_OK || cpu_limit) && cpu.forced == g.forced,
 						          "[G12.6 dedicated h=%d] the CPU verb %d forced %s; the GPU %s forced %s", h,
 						          static_cast<int>(cpu.st), Str(cpu.forced).c_str(), Name(g.st), Str(g.forced).c_str());
 						if (h > 0)

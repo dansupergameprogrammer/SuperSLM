@@ -14,11 +14,21 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **[1.15.0](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.15.0)**. Schema-bound
-decode is faster on the CPU. When a schema is bound, each token's last step scores only the tokens the schema allows,
-with the same tokens as before (1.37x on a 28-token order with a 0.5B model at one thread). Opt-in jump-forward writes the text a schema
-forces in one batched pass: its exact mode keeps the model's own tokens and gains only with a good draft, and its
-canonical mode changes the tokens. See the [1.15.0 release note](docs/releases/1.15.0.md).
+Current release: **[1.17.0](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.17.0)**. Schema
+skip-ahead comes to the GPU (the masked finish and canonical jump-forward), and GPU results on NVIDIA RTX 50-series
+cards are fixed. Canonical mode changes answers and is deprecated (1.18.0 removes it); use exact mode on the CPU.
+See the [1.17.0 release note](docs/releases/1.17.0.md).
+
+In 1.16.0 the GPU backend got the CPU's frozen-prefix save and restore: a host can save a frozen GPU prefix as an
+`SPX1` blob (`sslm_gpu_prefix_save`) and restore it instead of prefilling it again (`sslm_gpu_prefix_restore`). A GPU
+blob is bound to the engine version and the GPU (vendor and device) that wrote it. See the
+[1.16.0 release note](docs/releases/1.16.0.md).
+
+In 1.15.0 schema-bound decode got faster on the CPU. When a schema is bound, each token's last step scores only the
+tokens the schema allows, with the same tokens as before (1.37x on a 28-token order with a 0.5B model at one thread).
+Opt-in jump-forward writes the text a schema forces in one batched pass: its exact mode keeps the model's own tokens
+and gains only with a good draft, and its canonical mode changes the tokens. See the
+[1.15.0 release note](docs/releases/1.15.0.md).
 
 In 1.14.0 a host got CPU save and restore of a frozen shared prompt prefix as an `SPX1` blob (`sslm_prefix_save`,
 `sslm_prefix_restore`), so it can restore the prefix instead of prefilling it again. A blob is bound to the engine

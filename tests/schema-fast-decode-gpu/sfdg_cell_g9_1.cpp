@@ -9,13 +9,23 @@
 // Box only. Run: sfdg_cell_g9_1.exe [--fixture-dir=DIR]
 #include "sfdg_helpers.h"
 
+#include <algorithm>
+
 using namespace sfdg;
 
 namespace {
 
 SslmGpuKvPoolHandle* g_pool = nullptr;
 
-// Save `s` and restore it into a new handle (SLM5, or SLM6 into the pool), replacing s.h.
+// Release `h` and drop it from rig.seqs, so a pooled sequence gives its pages back to the pool.
+void Drop(GRig& rig, SslmGpuSequenceHandle* h) {
+	if (!h) return;
+	rig.seqs.erase(std::remove(rig.seqs.begin(), rig.seqs.end(), h), rig.seqs.end());
+	sslm_gpu_seq_release(rig.ctx(), h);
+}
+
+// Save `s` and restore it into a new handle (SLM5, or SLM6 into the pool), replacing and releasing s.h. The pool
+// holds a few sequences, so a run of restores must not keep the replaced handles' pages.
 bool SaveRestore(GRig& rig, GSeq& s, bool pooled, const char* cell) {
 	const std::vector<uint8_t> blob = rig.Blob(s.h);
 	SslmGpuSequenceHandle* r = nullptr;
@@ -26,6 +36,7 @@ bool SaveRestore(GRig& rig, GSeq& s, bool pooled, const char* cell) {
 	if (st != GS::SSLM_OK || !r) return false;
 	CHECK_MSG(rig.Blob(r) == blob, "[%s] the restored sequence saves a different blob", cell);
 	rig.seqs.push_back(r);
+	Drop(rig, s.h);
 	s.h = r;
 	return true;
 }
@@ -60,6 +71,7 @@ int main(int argc, char** argv) {
 				if (!plain.h) continue;
 				rig.Prompt(plain, prompt);
 				const GJfRun want = RunGpuJf(rig, plain, 64);
+				Drop(rig, plain.h);
 				GSeq s = NewSeq(rig, g.schema, pooled);
 				if (!s.h) continue;
 				rig.Prompt(s, prompt);
@@ -72,6 +84,7 @@ int main(int argc, char** argv) {
 				          Str(got.stream).c_str(), Str(want.stream).c_str());
 				CHECK_MSG(HexDigest(got.stream) == g.digest, "[%s] %s: digest %s, pinned %s", cell, g.schema,
 				          HexDigest(got.stream).c_str(), g.digest);
+				Drop(rig, s.h);
 			}
 		}
 		// (c) a restore inside one chain.

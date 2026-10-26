@@ -70,13 +70,16 @@ GS DriveSliced(GRig& rig, GSeq& s, uint32_t layers_per_call) {
 	return LayerIdx(s.h) == L ? GS::SSLM_OK : GS::SSLM_SEQUENCE_REJECTED;
 }
 
-// The primed row (G30): the prompt's last row at full depth with the ready flag clear. The prompt bridge admits all
-// but the last token; the last is embedded and driven to depth by hand, and never finished.
+// The primed row (G30): the prompt's last row at full depth with the ready flag clear. Every prompt token is
+// embedded and driven to depth by hand, as the plugin's prefill does, and the last is never finished. No bridge
+// runs: the prompt bridge sets the ready flag, and sslm_gpu_seq_embed_token does not clear it.
 void Primed(GRig& rig, GSeq& s, const std::vector<int32_t>& prompt) {
-	std::vector<int32_t> head(prompt.begin(), prompt.end() - 1);
-	rig.Prompt(s, head);
-	CHECK_MSG(sslm_gpu_seq_embed_token(rig.ctx(), s.h, prompt.back()) == GS::SSLM_OK, "primed: embed");
-	CHECK_MSG(DriveSliced(rig, s, 4) == GS::SSLM_OK, "primed: drive");
+	for (const int32_t t : prompt) {
+		if (sslm_gpu_seq_embed_token(rig.ctx(), s.h, t) != GS::SSLM_OK || DriveSliced(rig, s, 4) != GS::SSLM_OK) {
+			CHECK_MSG(false, "primed: embed and drive %d", t);
+			return;
+		}
+	}
 	s.ready = false;
 	s.last = prompt.back();
 }

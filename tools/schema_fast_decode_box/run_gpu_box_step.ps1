@@ -1,5 +1,5 @@
 # Schema fast-decode plan rev 1.4.4 Sec. 10, the GPU steps on the box (the RTX 2080 SUPER), and the kit's steps on the work
-# machine (the Radeon RX 7900 XTX). run_box_step.ps1 hands every GB, GK and GB-XG step to this script.
+# machine (now workhorse's Radeon RX 7900 XT, the same device id as the XTX). run_box_step.ps1 hands every GB, GK and GB-XG step to this script.
 #
 #   GB0       fixtures (F-SFD and its --untied variant, generated and hashed), the build at -Tip (the G cells, the
 #             smoke, the GPU jump-forward bench), G0.1, and the F-SFD smoke at value 2, whose debug-layer message IDs
@@ -219,7 +219,8 @@ function Build-Cells([string]$Wt, [string[]]$Targets) {
     $outDir = Join-Path $Wt 'build\sfdg'
     $log = Join-Path $Logs "$Step-build.log"
     $bat = Join-Path $Wt 'tests\schema-fast-decode-gpu\build_sfd_gpu.bat'
-    $code = Invoke-Capped 'cmd.exe' (@('/c', $bat, "--out=$outDir", "--shaders=$shaders") + $Targets) $log $Wt
+    # cmd splits a batch argument at '=', so the bat sees --out=/--shaders= only when they arrive quoted (its usage line).
+    $code = Invoke-Capped 'cmd.exe' (@('/c', $bat, "`"--out=$outDir`"", "`"--shaders=$shaders`"") + $Targets) $log $Wt
     if ($code -eq 'timeout') { return $null }
     $r = [ordered]@{}
     foreach ($line in Get-Content -LiteralPath $log) {

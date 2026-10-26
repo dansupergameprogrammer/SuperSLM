@@ -20,7 +20,7 @@ from check_api_ordinals import check  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 DOC = ROOT / "docs/api.md"
 HEADER = ROOT / "include/superslm/sslm_abi.h"
-PAIRED = "One covers precached prefixes (1.16.0, unreleased; ordinal 30):"
+PAIRED = "One covers precached prefixes (1.16.0; ordinal 30):"
 
 
 def refuses(text: str, what: str, directory: Path) -> bool:

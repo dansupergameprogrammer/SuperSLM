@@ -44,7 +44,7 @@ using namespace g1e;
 // Plan §4 item 3 step 6: SSLM_RESTORE_PRODUCER_MISMATCH, appended to SslmGpuStatus after paged KV's six.
 constexpr SslmGpuStatus kProducerMismatch = static_cast<SslmGpuStatus>(30);
 static_assert(kProducerMismatch == SslmGpuStatus::SSLM_RESTORE_PRODUCER_MISMATCH, "plan §4 item 3: ordinal 30");
-// Schema skip-ahead on the GPU (1.17.0, unreleased) appends two statuses after it, at 31 and 32; 30 stays.
+// Schema skip-ahead on the GPU (1.17.0) appends two statuses after it, at 31 and 32; 30 stays.
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_FORCED_TABLE_ABSENT) == 31, "appended at 31");
 static_assert(static_cast<uint32_t>(SslmGpuStatus::SSLM_GPU_CONTEXT_CAP_EXCEEDED) == 32, "appended at 32");
 

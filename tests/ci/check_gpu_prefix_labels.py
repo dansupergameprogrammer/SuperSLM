@@ -1,13 +1,15 @@
-"""Require this plan's GPU prefix twins to be labelled unreleased until 1.16.0 (precache plan cell 7.22).
+"""Require this plan's GPU prefix twins to be labelled released in 1.16.0 (precache plan cell 7.22's inverse).
 
-Two rules, both from plan 7.22 and the section 4 preamble:
+Until 1.16.0 this check required the label "unreleased until 1.16.0" (cell 7.22, run at M1, E5 and the 1.15.0
+release). Plan section 9, F4 lifts that label and runs the inverse; this is the inverse. Two rules:
 
-1. Every mention of sslm_gpu_prefix_save and sslm_gpu_prefix_restore in include/superslm/gpu_1p0.h
-   and docs/api.md, and docs/api.md's status-30 sentence for the GPU twins, carries the phrase
-   "unreleased until 1.16.0". The unit that must carry it is the one the mention sits in: in the
-   header, the comment holding the mention, or for a declaration the run of non-blank lines holding
-   it (its doc comment and the declarations); in docs/api.md, the list item or paragraph. Text is
-   compared with comment leaders and line breaks folded to single spaces, so a wrapped phrase counts.
+1. No mention of sslm_gpu_prefix_save or sslm_gpu_prefix_restore in include/superslm/gpu_1p0.h or
+   docs/api.md, and not docs/api.md's status-30 sentence for the GPU twins, still calls them
+   "unreleased". The unit is the one the mention sits in: in the header, the comment holding the
+   mention, or for a declaration the run of non-blank lines holding it (its doc comment and the
+   declarations); in docs/api.md, the list item or paragraph. Text is compared with comment leaders
+   and line breaks folded to single spaces, so a wrapped word counts. The status-30 sentence must
+   still exist and name 1.16.0.
 
 2. No release number other than 1.16.0 stands beside this plan's GPU code: in each file the section 4
    preamble lists, and in any other tracked file the sweep finds, a label site is a line naming
@@ -26,7 +28,7 @@ import re
 import subprocess
 import sys
 
-PHRASE = "unreleased until 1.16.0"
+STALE = re.compile(r"\bunreleased\b|\bnot (?:yet )?released\b|\buntil 1\.16\.0\b", re.I)
 RELEASE = "1.16.0"
 VERBS = re.compile(r"\bsslm_gpu_prefix_(?:save|restore)\b")
 PRECACHED = re.compile(r"precached[ -]prefix", re.I)
@@ -118,8 +120,8 @@ def rule_one(root: Path, problems: list) -> int:
         if VERBS.search(line):
             first, last = header_unit(hlines, spans, i)
             checked += 1
-            if PHRASE not in fold("\n".join(hlines[first:last + 1])):
-                problems.append(f"{HEADER}:{i + 1}: mention without \"{PHRASE}\" in lines "
+            if STALE.search(fold("\n".join(hlines[first:last + 1]))):
+                problems.append(f"{HEADER}:{i + 1}: mention still labelled \"unreleased\" in lines "
                                 f"{first + 1}-{last + 1}")
     dlines = (root / DOC).read_text(encoding="utf-8").splitlines()
     status_sentences = 0
@@ -128,11 +130,13 @@ def rule_one(root: Path, problems: list) -> int:
         mentions = VERBS.search(text) is not None
         status30 = mentions and re.search(r"\bordinal\s+30\b", text, re.I) is not None
         status_sentences += status30
+        if status30 and RELEASE not in text:
+            problems.append(f"{DOC}:{first + 1}: the status-30 sentence does not name {RELEASE}")
         if mentions:
             checked += 1
-            if PHRASE not in text:
+            if STALE.search(text):
                 what = "the status-30 sentence" if status30 else "mention"
-                problems.append(f"{DOC}:{first + 1}: {what} without \"{PHRASE}\" in lines "
+                problems.append(f"{DOC}:{first + 1}: {what} still labelled \"unreleased\" in lines "
                                 f"{first + 1}-{last + 1}")
     if status_sentences < 1:
         problems.append(f"{DOC}: no paragraph pairs a GPU prefix verb with ordinal 30 (the status-30 "
@@ -218,7 +222,7 @@ def main() -> int:
     except (OSError, ValueError) as exc:
         print(f"check_gpu_prefix_labels: {exc}", file=sys.stderr)
         return 1
-    print(f"check_gpu_prefix_labels: {mentions} mention unit(s) carry \"{PHRASE}\"; "
+    print(f"check_gpu_prefix_labels: {mentions} mention unit(s), none labelled unreleased; "
           f"{sites} label site(s) read {RELEASE}")
     return 0
 
