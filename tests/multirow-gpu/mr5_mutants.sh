@@ -21,6 +21,7 @@
 #   KM1   the Exact commit does not put the rejected rows' device K/V back (decision (b); XG4b's edit)     -> gx.16
 #   KM2   the rollback does not put the chunk's device K/V back (graded on the jump's pass rollback)       -> gx.16
 #   KMA   the abandon does not pass the submit guard, so its rollback's restore fails (ruling 35)          -> gx.18
+#   XGC   a guard-refused EXACT_DRAFT close rolls back again (the old behaviour; ruling 38)            -> gx.19
 #   KM19  the first slice's device K/V snapshot is not taken                                                -> gx.16
 #   KM3   the widened logits stage: every row finishes on row 0's logits                                    -> gx.14
 #   KM18  the widened logits stage uploads row 0's codes for every row                                      -> gx.14
@@ -188,6 +189,9 @@ if want KM1; then host_mutant KM1 mr5 $G 1 'RowsRestoreDeviceKvAbove\(seq, f \+ 
 if want KM2; then host_mutant KM2 mr5 $G 1 'RowsRestoreDeviceKvAbove\(seq, 0\)' 'SSLM_OK /* KM2 */' && must_red KM2 mr5 gx.16; fi
 # KMA (ruling 35): sslm_gpu_seq_rows_abandon's submit guard dropped, so the rollback's restore fails -> gx.18.
 if want KMA; then host_mutant KMA mr5 $G 1 'if \(seq->rows_chunk->device_kv_snap\) \{' 'if (false /* KMA */) {' && must_red KMA mr5 gx.18; fi
+# XGC (ruling 38): the refused close rolls back unguarded instead of keeping the chunk open -> gx.19. The builder's site
+# (build-mr5.md, ruling 38): RowsExactClose's `c.close_pending = true;`, which occurs once.
+if want XGC; then host_mutant XGC mr5 $G 1 '^\t\tc\.close_pending = true;$' '\t\tRowsRollbackAndClose(seq); return g; /* XGC */' && must_red XGC mr5 gx.19; fi
 if want KM19; then host_mutant KM19 mr5 $G 1 'if \(first_slice && \(c\.kind == SSLM_GPU_ROWS_EXACT_DRAFT \|\| c\.kind == kRowsKindExactPass\)\) \{' \
 	'if (false /* KM19 */ && first_slice && (c.kind == SSLM_GPU_ROWS_EXACT_DRAFT || c.kind == kRowsKindExactPass)) {' && must_red KM19 mr5 gx.16; fi
 if want KM3; then host_mutant KM3 mr5 $G 1 'device_stage \? wide\.data\(\) \+ static_cast<size_t>\(r\) \* V : nullptr' \

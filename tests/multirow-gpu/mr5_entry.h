@@ -45,6 +45,9 @@
 //     the largest of them computed.
 //       extern "C" void GpuExactPassLogResetForTest() noexcept;
 //       extern "C" int32_t GpuExactPassCountForTest() noexcept;
+//   S-GCLOSEGUARD (ruling 38; gx.19). The next EXACT_DRAFT close (never a jump pass) is refused SSLM_BUSY before its
+//     EntrySubmitGuard runs, as a real guard refusal would be. Single shot; 0 disarms.
+//       extern "C" void ArmGpuExactCloseGuardRefusalForTest(int32_t on) noexcept;
 #pragma once
 #include <cstdint>
 
@@ -63,5 +66,6 @@ extern "C" void ArmGpuExactReadbackFaultForTest(int32_t pass, int32_t row) noexc
 extern "C" void SetGpuExactVerifyAlwaysEqualForTest(int32_t on) noexcept;
 extern "C" void GpuExactPassLogResetForTest() noexcept;
 extern "C" int32_t GpuExactPassCountForTest() noexcept;
+extern "C" void ArmGpuExactCloseGuardRefusalForTest(int32_t on) noexcept;
 // 1 when the seam above is the stub (mr5_red_stubs.cpp): the cell that needs it reports "unimplemented" and is red.
 extern "C" int32_t Mr5StubbedSeamsForTest() noexcept;

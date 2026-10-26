@@ -2224,6 +2224,127 @@ void CellGx18(Fsfd& fx) {
 	}
 }
 
+// gx.19 (ruling 38, MR5 re-check R1): a guard refusal of the EXACT_DRAFT close changes nothing. S-GCLOSEGUARD refuses the
+// close once: sslm_gpu_ready returns OK, ready 1, out_status BUSY; the chunk stays open (rows_open M,
+// last_rows_committed and the context unchanged), rows_produced, the decode step and the save are refused, and a second
+// armed refusal leaves the observation and the whole device K/V byte for byte as the first left them. Then (retry) a
+// plain sslm_gpu_ready closes: out_status OK, last_rows_committed = the matching prefix, rows_produced, the save blob,
+// gx.16's whole-device K/V comparison and the next decode equal the Off twin world's after that many decodes; or
+// (abandon) sslm_gpu_seq_rows_abandon rolls back: the blob and the device K/V equal the Off twin's with no decode.
+// Canary background (gx.16), unbound F-SFD, M = 4 with row 2 wrong and M = 8 every draft right; dedicated and pooled.
+// XGC (the refused close rolls back again, the old behaviour) must turn it red.
+struct OpenObs {
+	uint32_t walk = 0, layer = 0, mapped = 0;
+	int32_t ready = -1, open = -1, kept = -1, prod_st = -1;
+	int64_t ctx = -1;
+	bool operator==(const OpenObs& o) const {
+		return walk == o.walk && layer == o.layer && mapped == o.mapped && ready == o.ready && open == o.open && kept == o.kept &&
+		       prod_st == o.prod_st && ctx == o.ctx;
+	}
+	std::string Str() const {
+		return F("walk %u layer %u ready %d open %d kept %d rows_produced %d ctx %lld mapped %u", walk, layer, ready, open, kept, prod_st,
+		         (long long)ctx, mapped);
+	}
+};
+OpenObs ObserveOpen(World& w, SslmGpuSequenceHandle* s) {
+	OpenObs o;
+	o.walk = Walk(s);
+	o.layer = *SslmGpuSeqHandleLayerIndexForBench(s);
+	o.ready = ReadyFlag(w, s);
+	o.ctx = CtxLen(s);
+	o.open = RowsOpen(s);
+	o.kept = LastCommitted(s);
+	o.mapped = Mapped(s);
+	int32_t tok = -1;
+	o.prod_st = static_cast<int32_t>(sslm_gpu_seq_rows_produced(s, &tok));
+	return o;
+}
+void CellGx19(Fsfd& fx) {
+	const Model& m = fx.m;
+	if (Mr5StubbedSeamsForTest() & 32) Check(false, "S-GCLOSEGUARD (ArmGpuExactCloseGuardRefusalForTest) is the stub: unimplemented");
+	const std::vector<int32_t> pr = Prompt(9, 1919u);
+	const OffRef off = RunOff(m, nullptr, pr, 12);
+	Check(off.ok && off.toks.size() >= 9, "the Off reference");
+	if (!off.ok || off.toks.size() < 9) return;
+	for (int pooled = 0; pooled < 2; ++pooled)
+		for (const auto& mw : std::vector<std::pair<int, int>>{{4, 2}, {8, -1}})
+			for (int retry = 1; retry >= 0; --retry) {
+				const int M = mw.first, wrong = mw.second;
+				const std::string tag = F("%s M=%d %s, then %s", pooled ? "pooled" : "dedicated", M,
+				                          wrong < 0 ? "every draft right" : F("row %d wrong", wrong).c_str(), retry ? "a retried ready" : "an abandon");
+				World wa(m), wb(m);
+				if (!wa.ok || !wb.ok) { Check(false, tag + ": worlds"); continue; }
+				SslmGpuKvPoolHandle *pa = nullptr, *pb = nullptr;
+				SslmGpuSequenceHandle* a = CanaryHandle(wa, m, pooled != 0, &pa);
+				SslmGpuSequenceHandle* b = CanaryHandle(wb, m, pooled != 0, &pb);
+				Hist ha, hb;
+				if (!a || !b || !Replay(wa, m, a, pr, 1, &ha) || !Replay(wb, m, b, pr, 1, &hb)) { Check(false, tag + ": history"); continue; }
+				const int64_t ctx0 = CtxLen(a);
+				const int32_t kept0 = LastCommitted(a);
+				std::vector<int32_t> rows(off.toks.begin(), off.toks.begin() + M);
+				if (wrong > 0) rows[static_cast<size_t>(wrong)] = (rows[static_cast<size_t>(wrong)] + 1) % 20000 + 200;
+				const int want_a = wrong > 0 ? wrong : M;
+				int32_t adm = -9;
+				const S e = EmbedRows(wa, a, kExactDraft, rows, 0, &adm);
+				Check(e == S::SSLM_OK && adm == M, F("%s: embed_rows %s admitted %d of %d", tag.c_str(), N(e), adm, M));
+				if (e != S::SSLM_OK || adm != M) continue;
+				const S st0 = sslm_decode_step_gpu(wa.ctx, a, nullptr, m.full_budget());
+				Check(st0 == S::SSLM_OK, F("%s: the full-depth slice %s", tag.c_str(), N(st0)));
+				// The refusal: ready OK, ready 1, out_status BUSY, and the chunk still open at full depth, nothing committed.
+				ArmGpuExactCloseGuardRefusalForTest(1);
+				int32_t rdy = -1;
+				S out = S::SSLM_OK;
+				const S r1 = sslm_gpu_ready(wa.ctx, a, 1, &rdy, &out);
+				ArmGpuExactCloseGuardRefusalForTest(0);
+				Check(r1 == S::SSLM_OK && rdy == 1 && out == S::SSLM_BUSY,
+				      F("%s: the refused close: ready %s, ready %d, out_status %s; want OK, 1, BUSY", tag.c_str(), N(r1), rdy, N(out)));
+				const OpenObs o1 = ObserveOpen(wa, a);
+				// (The handle's layer index is the one-row walk's, 0 here; the chunk's depth is not read, the open rows are.)
+				Check(o1.open == M && o1.ctx == ctx0 && o1.kept == kept0 && o1.prod_st == static_cast<int32_t>(S::SSLM_BUSY),
+				      F("%s: after the refusal %s; want open %d, ctx %lld, kept %d, rows_produced BUSY (ruling 38: nothing changes)",
+				        tag.c_str(), o1.Str().c_str(), M, (long long)ctx0, kept0));
+				const std::vector<uint8_t> kv1 = DeviceKv(wa, pa, a, tag + " (after the refusal)");
+				// While the close waits: the step and the save are refused, and a second refusal keeps everything.
+				StatusIs(sslm_decode_step_gpu(wa.ctx, a, nullptr, m.full_budget()), S::SSLM_BUSY, tag + ": the decode step while the close waits");
+				size_t need = 0;
+				StatusIs(sslm_gpu_seq_save(wa.ctx, a, nullptr, &need), S::SSLM_GPU_ROWS_CHUNK_OPEN, tag + ": the save while the close waits");
+				ArmGpuExactCloseGuardRefusalForTest(1);
+				rdy = -1;
+				out = S::SSLM_OK;
+				const S r2 = sslm_gpu_ready(wa.ctx, a, 1, &rdy, &out);
+				ArmGpuExactCloseGuardRefusalForTest(0);
+				Check(r2 == S::SSLM_OK && rdy == 1 && out == S::SSLM_BUSY,
+				      F("%s: the second refusal: ready %s, ready %d, out_status %s", tag.c_str(), N(r2), rdy, N(out)));
+				const OpenObs o2 = ObserveOpen(wa, a);
+				Check(o2 == o1, F("%s: the step, the save and a second refusal changed the handle (%s; then %s)", tag.c_str(), o1.Str().c_str(), o2.Str().c_str()));
+				const std::vector<uint8_t> kv2 = DeviceKv(wa, pa, a, tag + " (after the second refusal)");
+				Check(!kv1.empty() && kv1 == kv2, F("%s: the device K/V moved across the refused calls (first byte %ld)", tag.c_str(), mr2::FirstDiff(kv1, kv2)));
+				if (retry) {
+					rdy = -1;
+					out = S::SSLM_BUSY;
+					const S r3 = sslm_gpu_ready(wa.ctx, a, 1, &rdy, &out);
+					Check(r3 == S::SSLM_OK && rdy == 1 && out == S::SSLM_OK, F("%s: the retried close: ready %s, ready %d, out_status %s", tag.c_str(), N(r3), rdy, N(out)));
+					Check(RowsOpen(a) == 0 && LastCommitted(a) == want_a,
+					      F("%s: after the retry rows open %d, last_rows_committed %d, want 0 and %d", tag.c_str(), RowsOpen(a), LastCommitted(a), want_a));
+					int32_t tok = -77;
+					const S pst = sslm_gpu_seq_rows_produced(a, &tok);
+					const int32_t off_tok = TwinDecodes(wb, m, b, &hb, want_a);
+					Check(pst == S::SSLM_OK && tok == off_tok, F("%s: rows_produced %s %d, Off %d", tag.c_str(), N(pst), tok, off_tok));
+					BlobEq(Blob(wa, a, tag), Blob(wb, b, tag), tag);
+					DeviceKvEq(wa, pa, a, wb, pb, b, tag);
+					int32_t ta = -1, tt = -1;
+					const S sa = Dec(wa, m, a, tok, &ta), sb = Dec(wb, m, b, hb.pend, &tt);
+					Check(sa == S::SSLM_OK && sa == sb && ta == tt, F("%s: the next decode %s %d, Off %s %d", tag.c_str(), N(sa), ta, N(sb), tt));
+				} else {
+					StatusIs(sslm_gpu_seq_rows_abandon(wa.ctx, a), S::SSLM_OK, tag + ": abandon");
+					Check(RowsOpen(a) == 0 && CtxLen(a) == ctx0, F("%s: after the abandon rows open %d, ctx %lld, want 0 and %lld", tag.c_str(), RowsOpen(a),
+					                                              (long long)CtxLen(a), (long long)ctx0));
+					BlobEq(Blob(wa, a, tag), Blob(wb, b, tag), tag);
+					DeviceKvEq(wa, pa, a, wb, pb, b, tag);
+				}
+			}
+}
+
 // gx.17 (S4): the EXACT_DRAFT guard-refusal close. On fsfd_refuse (mr4_fixtures.py: the last layer's attn_residual
 // patched so its guard refuses some rows) a bound handle's Off decodes are searched for a run whose decode j + 1 is
 // refused (the embed of o_j), j in 1..7. The chunk [o_0, o_1 .. o_j] (every draft Off's) then refuses at row j with rows
@@ -2317,7 +2438,7 @@ int main(int argc, char** argv) {
 	    {"gx.6", [&] { CellGx6(fx); }},   {"gx.7", [&] { CellGx7(fx); }},   {"gx.8", [&] { CellGx8(fx); }},   {"gx.9", [&] { CellGx9(fx); }},
 	    {"gx.10", [&] { CellGx10(fx); }}, {"gx.11", [&] { CellGx11(fx); }}, {"gx.12", [&] { CellGx12(fx); }}, {"gx.13", [&] { CellGx13(fx); }},
 	    {"gx.14", [&] { CellGx14(fx); }}, {"gx.15", [&] { CellGx15(fx); }}, {"gx.16", [&] { CellGx16(fx); }}, {"gx.17", [&] { CellGx17(fx); }},
-	    {"gx.18", [&] { CellGx18(fx); }},
+	    {"gx.18", [&] { CellGx18(fx); }}, {"gx.19", [&] { CellGx19(fx); }},
 	};
 	bool all = true;
 	for (auto& c : cells) {

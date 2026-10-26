@@ -28,4 +28,7 @@ extern "C" void SetGpuExactVerifyAlwaysEqualForTest(int32_t) noexcept { g_stubbe
 extern "C" void GpuExactPassLogResetForTest() noexcept { g_stubbed |= 16; }
 extern "C" int32_t GpuExactPassCountForTest() noexcept { return -1; }
 #endif
+#if !defined(MR5_HAVE_CLOSEGUARD)
+extern "C" void ArmGpuExactCloseGuardRefusalForTest(int32_t) noexcept { g_stubbed |= 32; }
+#endif
 extern "C" int32_t Mr5StubbedSeamsForTest() noexcept { return g_stubbed; }

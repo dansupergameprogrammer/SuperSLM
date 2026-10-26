@@ -85,7 +85,8 @@ fixtures5() {
 mr5_have() {
 	local d="" pair name sym
 	for pair in ROWS_PRODUCED:sslm_gpu_seq_rows_produced SATROW:ArmGpuSatRowForTest NARROW:ArmGpuFinishNarrowFaultForTest \
-		READBACK:ArmGpuExactReadbackFaultForTest VERIFY:SetGpuExactVerifyAlwaysEqualForTest PASSLOG:GpuExactPassLogResetForTest; do
+		READBACK:ArmGpuExactReadbackFaultForTest VERIFY:SetGpuExactVerifyAlwaysEqualForTest PASSLOG:GpuExactPassLogResetForTest \
+		CLOSEGUARD:ArmGpuExactCloseGuardRefusalForTest; do
 		name="${pair%%:*}" sym="${pair#*:}"
 		# A definition: the name followed by its parameter list and a body, in src/ (a declaration in a header is not enough).
 		if grep -rqE "\b$sym\s*\([^;]*\)\s*(noexcept\s*)?\{" src/ 2>/dev/null; then d="$d -DMR5_HAVE_$name"; fi
