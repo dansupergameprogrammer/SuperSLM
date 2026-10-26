@@ -504,8 +504,12 @@ token.
   dispatch is one dispatch. So the budget bounds the layers each submission
   runs, `floor(budget / DispatchesPerLayer)`, not the rows a pass carries. A
   budget of at least one layer gives passes of 8 rows (fewer for the last
-  pass). A budget below one layer reads one row at a time, as before. A
-  pass of one row runs the one-row shaders.
+  pass). Each pass is submitted in slices of that many layers, so a call
+  of n tokens on L layers makes `ceil(n / 8) * ceil(L / floor(budget /
+  DispatchesPerLayer))` synchronous submissions (`ceil(n / 8)` at full
+  depth or more). A budget below one layer runs the shipped path whatever
+  its value: sub-chunks of up to 4 tokens, each at full depth in one
+  submission. A pass of one row runs the one-row shaders.
 - **Refusals and threads.** Every refusal and claim rule is the bridge's
   existing one. A guard refusal commits the rows before the refused one and
   returns `SSLM_SEQUENCE_REJECTED`. The bridge takes no per-handle claim.

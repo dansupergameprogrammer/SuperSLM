@@ -773,13 +773,19 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
  * (src/sslm_abi.cpp) EXACTLY -- a caller's own next `SslmGpuSeqDecodeStepForG5Bridge` call
  * consumes this flag automatically.
  *
- * `dispatch_budget` is a bulk-throughput call, not a submission-slicing contract: it is
- * validated nonzero (SSLM_SEQUENCE_KV_BUFFER_MISMATCH otherwise) but this call records and
- * submits every admitted token in `tokens` as ONE chunk (subject only to an internal
- * driver-stability sub-chunk split, unrelated to this parameter's value) rather than issuing
- * `dispatch_budget`-sized round trips per token. Per-call, per-token submission slicing by a
- * dispatch budget remains the DECODE path's own contract
- * (`sslm_decode_step_gpu`/`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth step),
+ * `dispatch_budget` is validated nonzero (SSLM_SEQUENCE_KV_BUFFER_MISMATCH otherwise). It counts
+ * dispatches, a widened multi-row dispatch counting as one, and it sets how the admitted tokens
+ * are submitted (multi-row plan, ruling 19a). Let dpl be the model's dispatches per layer and L
+ * its layers. When the budget buys at least one layer (budget >= dpl), the tokens run in passes
+ * of up to 8 rows, and each pass is submitted in slices of floor(budget / dpl) layers. A call of
+ * n tokens therefore makes ceil(n / 8) * ceil(L / floor(budget / dpl)) synchronous submissions,
+ * which is ceil(n / 8) at a budget of full depth or more. A caller that passes a frame-sized
+ * budget gets layer-sliced submissions. Below one layer (budget < dpl), or with
+ * SSLM_GPU_MULTIROW_PROMPT=0 set before sslm_gpu_context_create, the call is the shipped one-row
+ * path: sub-chunks of up to 4 tokens, each run to full depth in one submission, whatever the
+ * budget. The results (final hidden state, K/V rows, save blob, statuses) are byte-identical
+ * either way. Per-token submission slicing on the decode path
+ * (`sslm_decode_step_gpu`/`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth step) is
  * unchanged by this call.
  *
  * Returns SSLM_SEQUENCE_REJECTED when a device-side domain guard refused one of the admitted
