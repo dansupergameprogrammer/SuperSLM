@@ -2419,12 +2419,122 @@ void CellGx17(Fsfd&) {
 // prompt and one Off token in its history and that token embedded) take one whole token each in one
 // sslm_decode_step_batch_gpu call (budget N x full). Their solo twins (the same history and token) each take it in one
 // sslm_decode_step_gpu call. Over R = 5 rounds, each in a fresh world:
-//   - a solo call advances the counter by the time it published to LastCallTiming() (gpu_busy_ms), within 1 us;
+//   - a solo call advances the counter by the time it published to LastCallTiming() (gpu_busy_ms), within 1 us (the
+//     step and its Ready run no finish: the token's finish is the finish bridge's own call, ruling 46a's arm below);
 //   - the batch call advances it by at least 1.5 times its last member's published time (with N = 3 the sum is about
 //     three times it, so a counter that kept only the last member's time is red);
 //   - the batch's median advance is within 25% of the median sum of its members' solo advances (each member's time,
 //     measured as a solo run of the same work; lavapipe's clock is noisy, hence the median and the tolerance);
 //   - each member's blob equals its solo twin's after the token (the batch ran every member's whole token).
+// Ruling 46's arm: the submissions ruling 45a left untimed now advance the counter. Unbound F-SFD (device head),
+// dedicated and pooled, each case in its own world with an Off twin of the same history; every slice takes the full
+// budget:
+//   - an M = 1 EXACT_DRAFT close (Off's one-row device-logits finish inside sslm_gpu_ready, ruling 37);
+//   - an Exact close that refuses rows (M = 4 with row 1 wrong, M = 8 with row 2 wrong: the device K/V restore of the
+//     refused rows inside sslm_gpu_ready), on gx.16's canary background.
+//   Each close advances the counter by more than 0 and by more than its drive's own LastCallTiming() shows: over the
+//   close's slices, the sum of the slice's per-dispatch times (LastCallPerDispatchTimingsMs(): consecutive timestamps,
+//   so they sum to the drive's published gpu_busy_ms, and work added to the call's timing afterwards adds no entry)
+//   plus the widened logits stage's gpu_ms when the slice ran one. The excess is over 1 us.
+//   - ruling 46a: the M = 1 Off path's standalone finish (SslmGpuSeqFinishTokenForG5Bridge after a full-depth step) is
+//     its own call: it advances the counter by more than 0, by the gpu_busy_ms it published to LastCallTiming()
+//     (within 1 us), with one per-dispatch entry.
+// Bytes stay equal to Off: the token equals the twin's, last_rows_committed is the rows kept, the blob equals the
+// twin's, and after a refusing close the whole device K/V equals the twin world's.
+struct TimedClose {
+	S embed = S::SSLM_OK, close = S::SSLM_OK, prod = S::SSLM_OK;
+	int32_t adm = -9, tok = -77;
+	double delta = 0.0, shown = 0.0;
+};
+TimedClose RunExactTimed(World& w, const Model& m, SslmGpuSequenceHandle* s, const std::vector<int32_t>& rows) {
+	TimedClose o;
+	o.embed = EmbedRows(w, s, kExactDraft, rows, 0, &o.adm);
+	if (o.embed != S::SSLM_OK) return o;
+	const double c0 = superslm_gpu::CumulativeGpuBusyUs();
+	o.close = S::SSLM_DEVICE_LOST;
+	for (int i = 0; i < 128; ++i) {
+		const uint64_t g0 = superslm_gpu::LastLogitsStageTiming().stages;
+		S st = sslm_decode_step_gpu(w.ctx, s, nullptr, m.full_budget());
+		if (st == S::SSLM_OK) st = Ready(w, s);
+		for (const double d : superslm_gpu::LastCallPerDispatchTimingsMs()) o.shown += d * 1000.0;
+		const superslm_gpu::GpuLogitsStageTiming g = superslm_gpu::LastLogitsStageTiming();
+		if (g.stages != g0) o.shown += g.gpu_ms * 1000.0;
+		if (st != S::SSLM_OK) { o.close = st; break; }
+		if (RowsOpen(s) == 0) { o.close = S::SSLM_OK; break; }
+	}
+	o.delta = superslm_gpu::CumulativeGpuBusyUs() - c0;
+	o.prod = sslm_gpu_seq_rows_produced(s, &o.tok);
+	return o;
+}
+void Gx20Ruling46(const Model& m) {
+	const std::vector<int32_t> pr = Prompt(9, 4646u);
+	const OffRef off = RunOff(m, nullptr, pr, 12);
+	Check(off.ok && off.toks.size() >= 9, "ruling 46: the Off reference");
+	if (!off.ok || off.toks.size() < 9) return;
+	for (int pooled = 0; pooled < 2; ++pooled)
+		for (const auto& mw : std::vector<std::pair<int, int>>{{1, -1}, {4, 1}, {8, 2}}) {
+			const int M = mw.first, wrong = mw.second;
+			const int kept = wrong < 0 ? M : wrong;
+			const std::string tag = F("ruling 46 %s M=%d %s", pooled ? "pooled" : "dedicated", M,
+			                          wrong < 0 ? "(the one-row device-logits finish)" : F("row %d wrong (the refused rows' K/V restore)", wrong).c_str());
+			World wa(m), wb(m);
+			if (!wa.ok || !wb.ok) { Check(false, tag + ": worlds"); continue; }
+			SslmGpuKvPoolHandle *pa = nullptr, *pb = nullptr;
+			SslmGpuSequenceHandle* a = CanaryHandle(wa, m, pooled != 0, &pa);
+			SslmGpuSequenceHandle* b = CanaryHandle(wb, m, pooled != 0, &pb);
+			Hist ha, hb;
+			if (!a || !b || !Replay(wa, m, a, pr, 1, &ha) || !Replay(wb, m, b, pr, 1, &hb)) { Check(false, tag + ": history"); continue; }
+			std::vector<int32_t> rows(off.toks.begin(), off.toks.begin() + M);
+			if (wrong > 0) rows[static_cast<size_t>(wrong)] = (rows[static_cast<size_t>(wrong)] + 1) % 20000 + 200;
+			if (rows[0] != ha.pend) { Check(false, tag + ": precondition: row 0 is the pending token"); continue; }
+			const TimedClose o = RunExactTimed(wa, m, a, rows);
+			Check(o.embed == S::SSLM_OK && o.adm == M && o.close == S::SSLM_OK && o.prod == S::SSLM_OK && LastCommitted(a) == kept,
+			      F("%s: embed %s admitted %d of %d, close %s, rows_produced %s, kept %d, want %d", tag.c_str(), N(o.embed), o.adm, M,
+			        N(o.close), N(o.prod), LastCommitted(a), kept));
+			Check(o.delta > 0.0 && o.delta > o.shown + 1.0,
+			      F("%s: the close advanced the counter by %.1f us; its drive's own timing shows %.1f us (want more, by over 1 us)",
+			        tag.c_str(), o.delta, o.shown));
+			std::printf("    gx.20 %s: counter %.1f us, shown %.1f us\n", tag.c_str(), o.delta, o.shown);
+			const int32_t off_tok = TwinDecodes(wb, m, b, &hb, kept);
+			Check(o.tok == off_tok, F("%s: rows_produced %d, Off %d", tag.c_str(), o.tok, off_tok));
+			BlobEq(Blob(wa, a, tag), Blob(wb, b, tag), tag);
+			if (wrong > 0) DeviceKvEq(wa, pa, a, wb, pb, b, tag);
+		}
+	// Ruling 46a: the standalone finish.
+	for (int pooled = 0; pooled < 2; ++pooled) {
+		const std::string tag = F("ruling 46a %s the standalone one-row finish", pooled ? "pooled" : "dedicated");
+		World wa(m), wb(m);
+		if (!wa.ok || !wb.ok) { Check(false, tag + ": worlds"); continue; }
+		SslmGpuSequenceHandle* a = wa.Seq(pooled != 0, 64, nullptr);
+		SslmGpuSequenceHandle* b = wb.Seq(pooled != 0, 64, nullptr);
+		Hist ha, hb;
+		if (!a || !b || !Replay(wa, m, a, pr, 1, &ha) || !Replay(wb, m, b, pr, 1, &hb) ||
+		    sslm_gpu_seq_embed_token(wa.ctx, a, ha.pend) != S::SSLM_OK) {
+			Check(false, tag + ": history");
+			continue;
+		}
+		S st = sslm_decode_step_gpu(wa.ctx, a, nullptr, m.full_budget());
+		if (st == S::SSLM_OK) st = Ready(wa, a);
+		if (st != S::SSLM_OK || *SslmGpuSeqHandleLayerIndexForBench(a) != m.layers()) {
+			Check(false, F("%s: precondition: the step reached full depth (%s)", tag.c_str(), N(st)));
+			continue;
+		}
+		int32_t tok = -1;
+		const double c0 = superslm_gpu::CumulativeGpuBusyUs();
+		const S fs = SslmGpuSeqFinishTokenForG5Bridge(wa.ctx, a, &tok);
+		const double d = superslm_gpu::CumulativeGpuBusyUs() - c0;
+		const double pub = superslm_gpu::LastCallTiming().gpu_busy_ms * 1000.0;
+		const size_t entries = superslm_gpu::LastCallPerDispatchTimingsMs().size();
+		StatusIs(fs, S::SSLM_OK, tag + ": the finish");
+		Check(d > 0.0 && std::fabs(d - pub) <= 1.0 && entries == 1,
+		      F("%s: the finish advanced the counter by %.1f us; it published %.1f us with %zu per-dispatch entries (want more than 0, "
+		        "equal within 1 us, one entry)", tag.c_str(), d, pub, entries));
+		std::printf("    gx.20 %s: counter %.1f us, published %.1f us\n", tag.c_str(), d, pub);
+		const int32_t off_tok = TwinDecodes(wb, m, b, &hb, 1);
+		Check(tok == off_tok, F("%s: the token %d, Off %d", tag.c_str(), tok, off_tok));
+		BlobEq(Blob(wa, a, tag), Blob(wb, b, tag), tag);
+	}
+}
 void CellGx20(Fsfd& fx) {
 	const Model& m = fx.m;
 	constexpr int kN = 3, kRounds = 5;
@@ -2487,6 +2597,7 @@ void CellGx20(Fsfd& fx) {
 	const double mb = batch_us[kRounds / 2], ms = solo_sum_us[kRounds / 2];
 	Check(ms > 0.0 && std::fabs(mb - ms) <= 0.25 * ms,
 	      F("median batch advance %.1f us vs the median sum of its members' solo times %.1f us (tolerance 25%%)", mb, ms));
+	Gx20Ruling46(m);
 }
 
 }  // namespace
