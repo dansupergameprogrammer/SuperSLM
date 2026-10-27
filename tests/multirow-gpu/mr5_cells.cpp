@@ -69,6 +69,8 @@
 //         and bytes of the Off twin after its own refused decode of o_j (KM8).
 //   gx.18 Ruling 33 S1: the abandon's rollback after a slice puts every row's device K/V back (green since ruling 35:
 //         the abandon passes the submit guard; KMA).
+//   gx.20 Ruling 45a: the cumulative GPU-busy counter advances by a solo call's published time, and by a batch call's
+//         every member (within 25% of the members' solo times, at least 1.5x the last member's), never the last only.
 //
 // Usage: mr5_cells.exe --fixtures=DIR [--cells=2.2,7.17,...] [--show=N]
 #ifndef WIN32_LEAN_AND_MEAN
@@ -81,6 +83,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstring>
 #include <functional>
@@ -2411,6 +2414,81 @@ void CellGx17(Fsfd&) {
 	Check(!seen.empty(), "fsfd_refuse: no Off run refuses at a row j in 1..7");
 }
 
+// gx.20 (ruling 45a; MB6 10.4's oracle): the engine's cumulative GPU-busy counter (superslm_gpu::CumulativeGpuBusyUs,
+// gpu_port.h) times every member of a batch call. On unbound F-SFD, N = 3 plain members (dedicated handles, each with a
+// prompt and one Off token in its history and that token embedded) take one whole token each in one
+// sslm_decode_step_batch_gpu call (budget N x full). Their solo twins (the same history and token) each take it in one
+// sslm_decode_step_gpu call. Over R = 5 rounds, each in a fresh world:
+//   - a solo call advances the counter by the time it published to LastCallTiming() (gpu_busy_ms), within 1 us;
+//   - the batch call advances it by at least 1.5 times its last member's published time (with N = 3 the sum is about
+//     three times it, so a counter that kept only the last member's time is red);
+//   - the batch's median advance is within 25% of the median sum of its members' solo advances (each member's time,
+//     measured as a solo run of the same work; lavapipe's clock is noisy, hence the median and the tolerance);
+//   - each member's blob equals its solo twin's after the token (the batch ran every member's whole token).
+void CellGx20(Fsfd& fx) {
+	const Model& m = fx.m;
+	constexpr int kN = 3, kRounds = 5;
+	const uint32_t full = m.full_budget();
+	std::vector<double> batch_us, solo_sum_us;
+	for (int r = 0; r < kRounds; ++r) {
+		const std::string tag = F("round %d", r);
+		World w(m);
+		if (!w.ok) { Check(false, tag + ": world"); continue; }
+		SslmGpuSequenceHandle* solo[kN] = {};
+		SslmGpuSequenceHandle* mem[kN] = {};
+		bool ok = true;
+		for (int i = 0; i < kN && ok; ++i) {
+			const std::vector<int32_t> pr = Prompt(6 + i, 2000u + 10u * static_cast<uint32_t>(i));
+			Hist hs, hb;
+			solo[i] = w.Seq(false, 64, nullptr);
+			mem[i] = w.Seq(false, 64, nullptr);
+			ok = solo[i] && mem[i] && Replay(w, m, solo[i], pr, 1, &hs) && Replay(w, m, mem[i], pr, 1, &hb) && hs.pend == hb.pend &&
+			     sslm_gpu_seq_embed_token(w.ctx, solo[i], hs.pend) == S::SSLM_OK && sslm_gpu_seq_embed_token(w.ctx, mem[i], hb.pend) == S::SSLM_OK;
+		}
+		if (!ok) { Check(false, tag + ": precondition: N handles and their twins at one embedded Off token"); continue; }
+		// Solo: each member's time.
+		double sum = 0.0;
+		for (int i = 0; i < kN; ++i) {
+			const double c0 = superslm_gpu::CumulativeGpuBusyUs();
+			S st = sslm_decode_step_gpu(w.ctx, solo[i], nullptr, full);
+			if (st == S::SSLM_OK) st = Ready(w, solo[i]);
+			const double d = superslm_gpu::CumulativeGpuBusyUs() - c0;
+			const double pub = superslm_gpu::LastCallTiming().gpu_busy_ms * 1000.0;
+			StatusIs(st, S::SSLM_OK, F("%s: solo %d", tag.c_str(), i));
+			Check(*SslmGpuSeqHandleLayerIndexForBench(solo[i]) == m.layers(), F("%s: solo %d reached full depth", tag.c_str(), i));
+			Check(d > 0.0 && std::fabs(d - pub) <= 1.0,
+			      F("%s: solo %d advanced the counter by %.1f us; the call published %.1f us", tag.c_str(), i, d, pub));
+			sum += d;
+		}
+		// The batch: every member's time, not the last one's.
+		std::vector<S> st(kN, S::SSLM_PREFILL_HIDDEN_UNAVAILABLE);
+		std::vector<const SslmGpuAdapterHandle*> none(kN, nullptr);
+		const double c0 = superslm_gpu::CumulativeGpuBusyUs();
+		const S call = sslm_decode_step_batch_gpu(w.ctx, mem, none.data(), kN, kN * full, st.data());
+		for (int i = 0; i < kN; ++i) Ready(w, mem[i]);
+		const double last = superslm_gpu::LastCallTiming().gpu_busy_ms * 1000.0;
+		const double d = superslm_gpu::CumulativeGpuBusyUs() - c0;
+		StatusIs(call, S::SSLM_OK, tag + ": the batch call");
+		for (int i = 0; i < kN; ++i) {
+			StatusIs(st[i], S::SSLM_OK, F("%s: member %d", tag.c_str(), i));
+			Check(*SslmGpuSeqHandleLayerIndexForBench(mem[i]) == m.layers(), F("%s: member %d reached full depth", tag.c_str(), i));
+			BlobEq(Blob(w, mem[i], tag), Blob(w, solo[i], tag), F("%s: member %d vs its solo twin", tag.c_str(), i));
+		}
+		Check(last > 0.0 && d >= 1.5 * last,
+		      F("%s: the batch advanced the counter by %.1f us; its last member published %.1f us (never just the last member's)", tag.c_str(), d,
+		        last));
+		std::printf("    gx.20 %s: batch %.1f us, solo sum %.1f us, last member %.1f us\n", tag.c_str(), d, sum, last);
+		batch_us.push_back(d);
+		solo_sum_us.push_back(sum);
+	}
+	if (batch_us.size() != static_cast<size_t>(kRounds)) { Check(false, "every round ran"); return; }
+	std::sort(batch_us.begin(), batch_us.end());
+	std::sort(solo_sum_us.begin(), solo_sum_us.end());
+	const double mb = batch_us[kRounds / 2], ms = solo_sum_us[kRounds / 2];
+	Check(ms > 0.0 && std::fabs(mb - ms) <= 0.25 * ms,
+	      F("median batch advance %.1f us vs the median sum of its members' solo times %.1f us (tolerance 25%%)", mb, ms));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -2438,7 +2516,7 @@ int main(int argc, char** argv) {
 	    {"gx.6", [&] { CellGx6(fx); }},   {"gx.7", [&] { CellGx7(fx); }},   {"gx.8", [&] { CellGx8(fx); }},   {"gx.9", [&] { CellGx9(fx); }},
 	    {"gx.10", [&] { CellGx10(fx); }}, {"gx.11", [&] { CellGx11(fx); }}, {"gx.12", [&] { CellGx12(fx); }}, {"gx.13", [&] { CellGx13(fx); }},
 	    {"gx.14", [&] { CellGx14(fx); }}, {"gx.15", [&] { CellGx15(fx); }}, {"gx.16", [&] { CellGx16(fx); }}, {"gx.17", [&] { CellGx17(fx); }},
-	    {"gx.18", [&] { CellGx18(fx); }}, {"gx.19", [&] { CellGx19(fx); }},
+	    {"gx.18", [&] { CellGx18(fx); }}, {"gx.19", [&] { CellGx19(fx); }}, {"gx.20", [&] { CellGx20(fx); }},
 	};
 	bool all = true;
 	for (auto& c : cells) {

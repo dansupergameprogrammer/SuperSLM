@@ -13,7 +13,7 @@
 #
 # Legs (each printed PASS or FAIL; exit 0 only when every leg run passes):
 #   census   tests/ci/check_gpu_status_site_census.py: every status and catch site in src/gpu is in te425's list.
-#   cells    mr5_cells.exe: 2.2, 2.3x, 7.10, 7.11e, 7.17, 7.18, 7.19, 8.4, gx.1, gx.2, gx.4-gx.18 (MR5_CELLS=... runs a
+#   cells    mr5_cells.exe: 2.2, 2.3x, 7.10, 7.11e, 7.17, 7.18, 7.19, 8.4, gx.1, gx.2, gx.4-gx.20 (MR5_CELLS=... runs a
 #            subset). Every name mr5_entry.h lists that src/ and include/ do not define yet is linked from
 #            mr5_red_stubs.cpp, so the suite builds and runs red today; the leg passes -DMR5_HAVE_<NAME> for each one
 #            the library defines (grep below), so a stub never sits next to the real definition.
