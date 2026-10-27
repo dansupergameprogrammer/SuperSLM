@@ -25,6 +25,7 @@
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (T-2035 mlp_act_site upload)
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -760,6 +761,7 @@ LastCallTimingSnapshot<GpuCallTiming> g_last_call_timing_snapshot;
 // allocation failure there is the call's own SSLM_GPU_ALLOCATION_FAILED (gpu_1p0.h), never
 // swallowed into SSLM_OK.
 void PublishCallTimingNoThrow(const GpuCallTiming& timing, std::vector<double> per_dispatch_ms) noexcept {
+	AddCumulativeGpuBusyMs(timing.gpu_busy_ms);  // ruling 45a: counted even when the publish itself fails
 	try {
 		g_last_call_timing_snapshot.Publish(timing, std::move(per_dispatch_ms));
 	} catch (...) {
@@ -4593,6 +4595,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuInFlightToken&& inflight,
 	// throws into this try's catch (rule 2) before any `seq` field is written, and a prefill's
 	// derived count stays short. Every timing field is final here.
 	g_last_call_timing_snapshot.Publish(rec->timing, std::move(rec->per_dispatch_ms));
+	AddCumulativeGpuBusyMs(rec->timing.gpu_busy_ms);  // ruling 45a: after the publish (a throw publishes in the catch)
 
 	for (uint32_t i = 0; i < H; ++i) {
 		int32_t v = 0;
@@ -4820,6 +4823,16 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 }
 
 GpuCallTiming LastCallTiming() { return g_last_call_timing_snapshot.CopyTiming(); }
+
+// Ruling 45a (gpu_port.h): nanoseconds, so summing many short submissions loses nothing to rounding.
+namespace {
+std::atomic<uint64_t> g_cumulative_gpu_busy_ns{0};
+}  // namespace
+void AddCumulativeGpuBusyMs(double gpu_ms) noexcept {
+	if (!(gpu_ms > 0.0) || !(gpu_ms < 1.0e9)) return;  // nothing measured (0.0, no timestamp frequency), or not finite
+	g_cumulative_gpu_busy_ns.fetch_add(static_cast<uint64_t>(gpu_ms * 1.0e6 + 0.5), std::memory_order_relaxed);
+}
+double CumulativeGpuBusyUs() { return static_cast<double>(g_cumulative_gpu_busy_ns.load(std::memory_order_relaxed)) / 1000.0; }
 
 // Paged-KV plan §4.4, step G3: the internal layer's drain (gpu_port.h). Reads the singleton
 // through the accessor, so a process with no device returns at once and constructs nothing.

@@ -490,6 +490,17 @@ struct GpuCallTiming {
 	double readback_ms = 0.0;
 };
 GpuCallTiming LastCallTiming();
+// Multi-row GPU plan 10.4 (ruling 45a): the process's monotonic total, in microseconds, of the GPU-measured busy time
+// of every call that published a timing to LastCallTiming() (each call's own `gpu_busy_ms`: one-row and widened
+// slices, every member of sslm_decode_step_batch_gpu, which submits and drains its members one at a time, and the
+// catch paths' "as far as it got" publishes) plus every widened logits stage (LastLogitsStageTiming()'s `gpu_ms`, its
+// own submission). Untimed work adds nothing: the one-row device-logits finish (RunDeviceLogits records no
+// timestamps) and the K/V restore an Exact close submits. A caller takes the difference across the calls it made;
+// beside another thread's calls the difference includes theirs. Instrumentation only: not part of the C ABI, and
+// nothing in the engine reads it.
+double CumulativeGpuBusyUs();
+// The engine's publish sites add each measured submission here (internal; never a caller's).
+void AddCumulativeGpuBusyMs(double gpu_ms) noexcept;
 
 // Multi-row GPU plan §4.7 (MR5), ruling 27: the GPU time of the most recent widened logits stage -- the logits
 // sites an Exact close (sslm_gpu_seq_embed_rows with SSLM_GPU_ROWS_EXACT_DRAFT) or a jump verb's Exact pass runs

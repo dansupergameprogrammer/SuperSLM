@@ -864,6 +864,7 @@ superslm::SslmForwardStatus RunRowsSliceGpuFinish(GpuInFlightToken&& inflight, c
 		rec->timing.readback_ms =
 		    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_readback_start).count();
 		g_last_call_timing_snapshot.Publish(rec->timing, std::move(rec->per_dispatch_ms));
+		AddCumulativeGpuBusyMs(rec->timing.gpu_busy_ms);  // ruling 45a: after the publish (a throw publishes in the catch)
 		if (out_ready) *out_ready = 1;
 		return superslm::SslmForwardStatus::Ok;
 	} catch (...) {

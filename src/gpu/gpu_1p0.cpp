@@ -1598,6 +1598,7 @@ void PublishLogitsStageTiming(double gpu_ms, uint32_t rows) {
 	g_logits_stage_timing.gpu_ms = gpu_ms;
 	g_logits_stage_timing.rows = rows;
 	++g_logits_stage_timing.stages;
+	superslm_gpu::AddCumulativeGpuBusyMs(gpu_ms);  // ruling 45a: the stage is its own submission
 }
 // Ruling 33 S7: the host side of an Exact close (gpu_port.h).
 void PublishExactCloseHostTiming(double host_ms, uint32_t rows) {
