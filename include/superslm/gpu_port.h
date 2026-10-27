@@ -494,13 +494,25 @@ GpuCallTiming LastCallTiming();
 // of every call that published a timing to LastCallTiming() (each call's own `gpu_busy_ms`: one-row and widened
 // slices, every member of sslm_decode_step_batch_gpu, which submits and drains its members one at a time, and the
 // catch paths' "as far as it got" publishes) plus every widened logits stage (LastLogitsStageTiming()'s `gpu_ms`, its
-// own submission). Untimed work adds nothing: the one-row device-logits finish (RunDeviceLogits records no
-// timestamps) and the K/V restore an Exact close submits. A caller takes the difference across the calls it made;
-// beside another thread's calls the difference includes theirs. Instrumentation only: not part of the C ABI, and
-// nothing in the engine reads it.
+// own submission), plus (ruling 46) every one-row device-logits finish (RunDeviceLogits: the M = 1 path) and every
+// device K/V restore an Exact close or an Exact chunk's rollback submits, each between a timestamp pair of its own.
+// A caller takes the difference across the calls it made; beside another thread's calls the difference includes
+// theirs. Instrumentation only: not part of the C ABI, and nothing in the engine reads it.
+//
+// Ruling 46 (46a) on LastCallTiming(): a finish bridge call that does not drive (the standalone finish, and the
+// decode bridge's ready shortcut) is its own call, and when its finish submits on the device it publishes that
+// submission's timing as the last call's (record, submit-wait, GPU and read-back of the logits submission; one
+// per-dispatch entry). A host-path finish submits nothing and publishes nothing. A device finish or K/V restore inside
+// a call that already published (the decode bridge's finish after its drive; the M = 1 Exact close's finish and an
+// Exact close's restore inside sslm_gpu_ready; a rollback's restore) adds its four times to that published timing
+// instead (AddToLastCallTimingNoThrow). The widened logits stage stays on LastLogitsStageTiming() alone.
 double CumulativeGpuBusyUs();
 // The engine's publish sites add each measured submission here (internal; never a caller's).
 void AddCumulativeGpuBusyMs(double gpu_ms) noexcept;
+// Ruling 46 (internal; never a caller's): a standalone finish's own timing, published as the last call's and counted;
+// and a submission that publishes no timing of its own, counted and added to the last published call's.
+void PublishOwnCallTimingNoThrow(const GpuCallTiming& timing) noexcept;
+void AddToLastCallTimingNoThrow(const GpuCallTiming& extra) noexcept;
 
 // Multi-row GPU plan §4.7 (MR5), ruling 27: the GPU time of the most recent widened logits stage -- the logits
 // sites an Exact close (sslm_gpu_seq_embed_rows with SSLM_GPU_ROWS_EXACT_DRAFT) or a jump verb's Exact pass runs
@@ -510,7 +522,8 @@ void AddCumulativeGpuBusyMs(double gpu_ms) noexcept;
 // yet). gpu_ms is 0.0 when the queue reports no timestamp frequency. A process-wide diagnostic, like
 // LastCallTiming(): with several threads it is whichever stage published last.
 // The stage runs on an Exact close of two or more rows; a one-row EXACT_DRAFT close takes Off's own one-row logits
-// call, untimed (ruling 37), so g(1) comes from the measured table (gpu_rows_cost_table.h).
+// call and no stage (ruling 37), so g(1) comes from the measured table (gpu_rows_cost_table.h); that call's GPU time
+// goes to CumulativeGpuBusyUs() and the close's LastCallTiming() (ruling 46), never to this record.
 // Ruling 33 S7: the same record carries the host side of the most recent Exact close (an EXACT_DRAFT close at any M,
 // or a jump pass's close): host_finish_ms is the wall time, on the closing thread, of its rows' host finishes (final_norm,
 // then each row's logits path, narrowing, mask and argmax), excluding the widened stage's submission and wait;

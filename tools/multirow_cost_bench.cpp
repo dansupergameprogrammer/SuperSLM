@@ -19,10 +19,13 @@
 //   X      sslm_gpu_seq_embed_rows(EXACT_DRAFT, M) + one sslm_decode_step_gpu of L x DispatchesPerLayer + sslm_gpu_ready
 //          (block): the chunk from opening to its Exact close. Its GPU time is the layers' submission
 //          (LastCallTiming().gpu_busy_ms) plus the widened logits stage's own bracket (LastLogitsStageTiming().gpu_ms);
-//          its wall time is filed beside it.
+//          its wall time is filed beside it. Ruling 46: at M = 1 the close's one-row logits call (below) is timed into
+//          the layers' published timing, so X(1) carries the close's logits as X(M) does through the stage (the rows
+//          all agree, so no K/V restore runs). C is read before any finish, and S is the stage's own record: C(M),
+//          r(M) and g(M) are unchanged by it.
 //   S      the widened logits stage alone (LastLogitsStageTiming().gpu_ms): the CSV's logits_stage_gpu_us, at its
 //          maximum over the timed runs, whole us rounded up. mr4_box.py prices g(M) = ceil(S(M) x 1000 / C(1)).
-//          M >= 2 only: a one-row close takes Off's own one-row logits call, untimed (ruling 37), so the M = 1 row's
+//          M >= 2 only: a one-row close takes Off's own one-row logits call, no stage (ruling 37), so the M = 1 row's
 //          column is empty and g(1) is the table's (kGpuRowsLogitsRatioPerMille[0]).
 //   HF     the close's host finishes (LastLogitsStageTiming().host_finish_ms: final_norm and each row's logits path,
 //          narrowing, mask and argmax; the stage excluded): the CSV's host_finish_us, its maximum, report only (the GPU

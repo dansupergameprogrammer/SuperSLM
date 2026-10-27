@@ -15,9 +15,11 @@
 // CPU decode runs. The prompt is tokenized by the CPU ABI (sslm_tokenize), as the CPU bench does.
 //
 // Timed: generation only, from the first call after the prompt prefill to the stop (the prompt prefill is untimed and
-// identical in both arms). Per run: wall ms, the sum of superslm_gpu::LastCallTiming().gpu_busy_ms over the run's
-// layer-loop submissions (the finish's logits are not in it), submissions, tokens, ms per token, the token stream and
-// its FNV-1a 64 digest. Per pair, R = off / on wall.
+// identical in both arms). Per run: wall ms, the GPU busy time of the run (the delta of superslm_gpu::CumulativeGpuBusyUs()
+// across it: every layer-loop submission and, with --device-head, every finish's logits submission, each once, in every
+// arm alike; ruling 46 -- a per-call sum of LastCallTiming() would now take the decode bridge's finish in on its driving
+// calls only, and a finish-only call publishes its own), submissions, tokens, ms per token, the token stream and its
+// FNV-1a 64 digest. Per pair, R = off / on wall.
 //
 // Usage: sslm_schema_fast_decode_gpu_jf_bench <model.sslm> [--pairs 15] [--warmup 1] [--max-new 64] [--device-head]
 //            [--pair A,B] [--json PATH]
@@ -246,7 +248,6 @@ int main(int argc, char** argv) {
 		return a != 0;
 	};
 	auto timing = [&](Run& r) {
-		r.gpu += superslm_gpu::LastCallTiming().gpu_busy_ms;
 		++r.submits;
 	};
 	// The off arm: one decode step per token. The first finishes the prompt's last token.
@@ -255,6 +256,7 @@ int main(int argc, char** argv) {
 		start();
 		int32_t next = 0;
 		const auto t0 = Clock::now();
+		const double gpu0 = superslm_gpu::CumulativeGpuBusyUs();
 		for (int i = 0; i < max_new; ++i) {
 			int32_t tok = -1;
 			Ok(SslmGpuSeqDecodeStepForG5Bridge(ctx, seq, next, kWhole, &tok), "off decode");
@@ -271,6 +273,7 @@ int main(int argc, char** argv) {
 			}
 		}
 		r.wall = MsSince(t0);
+		r.gpu = (superslm_gpu::CumulativeGpuBusyUs() - gpu0) / 1000.0;
 		if (r.stop.empty()) r.stop = "max-new";
 		return r;
 	};
@@ -280,6 +283,7 @@ int main(int argc, char** argv) {
 		start();
 		int32_t pending = -1;  // a produced token that is walked but not yet run
 		const auto t0 = Clock::now();
+		const double gpu0 = superslm_gpu::CumulativeGpuBusyUs();
 		for (int i = 0; i < max_new && static_cast<int>(r.stream.size()) < max_new;) {
 			const std::vector<int32_t> chain = chain_from(SslmGpuSeqWalkStateForG5Bridge(seq));
 			int32_t next = pending;
@@ -319,6 +323,7 @@ int main(int argc, char** argv) {
 			}
 		}
 		r.wall = MsSince(t0);
+		r.gpu = (superslm_gpu::CumulativeGpuBusyUs() - gpu0) / 1000.0;
 		if (r.stop.empty()) r.stop = "max-new";
 		return r;
 	};
@@ -330,6 +335,7 @@ int main(int argc, char** argv) {
 		int32_t pending = -1;  // a produced token, walked, not yet embedded
 		std::vector<int32_t> forced(static_cast<size_t>(budget));
 		const auto t0 = Clock::now();
+		const double gpu0 = superslm_gpu::CumulativeGpuBusyUs();
 		while (static_cast<int>(r.stream.size()) < max_new) {
 			bool accepted = false;
 			for (int guard = 0; guard < 4096; ++guard) {
@@ -374,6 +380,7 @@ int main(int argc, char** argv) {
 			}
 		}
 		r.wall = MsSince(t0);
+		r.gpu = (superslm_gpu::CumulativeGpuBusyUs() - gpu0) / 1000.0;
 		if (r.stop.empty()) r.stop = "max-new";
 		return r;
 	};

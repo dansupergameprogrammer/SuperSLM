@@ -4824,6 +4824,28 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 
 GpuCallTiming LastCallTiming() { return g_last_call_timing_snapshot.CopyTiming(); }
 
+// Ruling 46 (gpu_port.h): a standalone finish's own timing, and work added to the last published call's.
+void PublishOwnCallTimingNoThrow(const GpuCallTiming& timing) noexcept {
+	std::vector<double> per_dispatch;
+	try {
+		per_dispatch.push_back(timing.gpu_busy_ms);  // its one dispatch
+	} catch (...) {
+	}
+	PublishCallTimingNoThrow(timing, std::move(per_dispatch));
+}
+void AddToLastCallTimingNoThrow(const GpuCallTiming& extra) noexcept {
+	AddCumulativeGpuBusyMs(extra.gpu_busy_ms);  // counted even when the amendment itself fails
+	try {
+		g_last_call_timing_snapshot.Amend([&](GpuCallTiming& t) {
+			t.record_ms += extra.record_ms;
+			t.submit_wait_ms += extra.submit_wait_ms;
+			t.gpu_busy_ms += extra.gpu_busy_ms;
+			t.readback_ms += extra.readback_ms;
+		});
+	} catch (...) {
+	}
+}
+
 // Ruling 45a (gpu_port.h): nanoseconds, so summing many short submissions loses nothing to rounding.
 namespace {
 std::atomic<uint64_t> g_cumulative_gpu_busy_ns{0};

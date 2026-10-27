@@ -47,6 +47,27 @@ public:
 		std::shared_ptr<const Block> fresh;
 		Swap(fresh);
 	}
+	// Ruling 46: work that publishes no timing of its own (a one-row device-logits finish inside a call, an Exact
+	// close's device K/V restore) added to the last published call's. `amend` edits a copy of the current timing (the
+	// empty timing when there is no block); the copy, with the per-dispatch times kept, is swapped in only while the
+	// current block is still the one copied, so a publish from another thread in between is never overwritten (the
+	// amendment is then retried on that publish). Allocates outside the lock, and throws what that allocation throws.
+	template <class Fn>
+	void Amend(Fn&& amend) {
+		for (;;) {
+			std::shared_ptr<const Block> seen = Load();
+			Timing t = seen ? seen->timing : Timing{};
+			std::vector<double> d = seen ? seen->per_dispatch_ms : std::vector<double>{};
+			amend(t);
+			std::shared_ptr<const Block> fresh = std::make_shared<const Block>(t, std::move(d));
+			{
+				std::lock_guard<std::mutex> lock(mu_);
+				if (current_ != seen) continue;  // another publish landed: amend that one
+				current_.swap(fresh);
+			}
+			return;  // the old block leaves with `fresh`, after the lock
+		}
+	}
 	Timing CopyTiming() const {
 		std::shared_ptr<const Block> b = Load();
 		return b ? b->timing : Timing{};

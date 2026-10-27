@@ -1450,15 +1450,23 @@ void ApplyReadbackOverrideSeam(int64_t* wide_out, uint32_t V) {
 // (vi) mapping after the fence wait. Its only fallible steps are Reset, Close and Signal, with
 // the phase-B dispositions, classified (1.8.0): E_OUTOFMEMORY on a live device with the submission
 // clean returns SSLM_GPU_ALLOCATION_FAILED; every other failure SSLM_DEVICE_LOST.
+// Ruling 46: with `out_timing`, a GPU timestamp pair brackets the submission's work (from the x copy to the read-back
+// copy, as RunDeviceLogitsRows's), and *out_timing receives its four times (gpu_busy_ms 0 when the queue has no
+// timestamp frequency); the caller counts and publishes them. The queries change no value the submission computes.
 SslmGpuStatus RunDeviceLogits(SslmGpuContext* ctx, const DeviceLogitsBuffers& b,
-                              const int8_t* x_codes, int64_t* wide_out) {
+                              const int8_t* x_codes, int64_t* wide_out,
+                              superslm_gpu::GpuCallTiming* out_timing = nullptr) {
 	DeviceLogitsSeamScope scope(/*bundle_creation=*/false);
 	superslm_gpu::harness::Device& dev = ctx->device;
+	if (out_timing) *out_timing = superslm_gpu::GpuCallTiming{};
 	try {
 		for (uint32_t k = 0; k < b.H; ++k) b.x_upload_ptr[k] = x_codes[k];
+		const bool timed = out_timing != nullptr && dev.timestamp_frequency > 0;
+		const auto record_t0 = std::chrono::steady_clock::now();
 		dev.BeginRecording();  // the ledger's reset (G3, plan §4.4); the PSO is set right after it
 		dev.list->SetPipelineState(b.pso.Get());
 		ID3D12GraphicsCommandList* list = dev.list.Get();
+		if (timed) list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
 		superslm_gpu::harness::RecordCopyBufferRegion(list, b.x.Get(), 0, b.x_upload.Get(), 0, static_cast<UINT64>(b.H) * 4);
 		TransitionBuffer(list, b.x.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
 		           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1472,14 +1480,40 @@ SslmGpuStatus RunDeviceLogits(SslmGpuContext* ctx, const DeviceLogitsBuffers& b,
 		TransitionBuffer(list, b.out.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 		           D3D12_RESOURCE_STATE_COPY_SOURCE);
 		superslm_gpu::harness::RecordCopyBufferRegion(list, b.readback.Get(), 0, b.out.Get(), 0, static_cast<UINT64>(b.V) * 8);
+		if (timed) {
+			list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+			list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, dev.timestamp_readback.Get(), 0);
+		}
 		// Back to the resting states the next dispatch starts from.
 		TransitionBuffer(list, b.out.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
 		           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		TransitionBuffer(list, b.x.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
 		           D3D12_RESOURCE_STATE_COPY_DEST);
 		dev.CloseListOrThrow();
+		const auto submit_t0 = std::chrono::steady_clock::now();
 		ExecuteSignalAndWait(dev, b.head, b.x_upload, b.x, b.out, b.readback);
+		const auto readback_t0 = std::chrono::steady_clock::now();
 		std::memcpy(wide_out, b.readback_ptr, static_cast<size_t>(b.V) * 8);
+		if (out_timing) {
+			using Ms = std::chrono::duration<double, std::milli>;
+			out_timing->record_ms = Ms(submit_t0 - record_t0).count();
+			out_timing->submit_wait_ms = Ms(readback_t0 - submit_t0).count();
+			if (timed) {
+				UINT64 ts[2] = {0, 0};
+				void* qp = nullptr;
+				D3D12_RANGE qrange{0, sizeof ts};
+				if (SUCCEEDED(dev.timestamp_readback->Map(0, &qrange, &qp))) {
+					std::memcpy(ts, qp, sizeof ts);
+					D3D12_RANGE qnone{0, 0};
+					dev.timestamp_readback->Unmap(0, &qnone);
+					if (ts[1] >= ts[0]) {
+						out_timing->gpu_busy_ms =
+						    static_cast<double>(ts[1] - ts[0]) / static_cast<double>(dev.timestamp_frequency) * 1000.0;
+					}
+				}
+			}
+			out_timing->readback_ms = Ms(std::chrono::steady_clock::now() - readback_t0).count();
+		}
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
 		ApplyReadbackOverrideSeam(wide_out, b.V);
 #endif
@@ -4509,6 +4543,10 @@ struct GpuFinishResult {
 	bool rearm_ready = false;        // on that failure, Off re-arms ready_for_logits (the parallel-for exit)
 	int32_t token = -1;              // SSLM_OK: the produced token, or -2 at a schema dead end
 	uint32_t next_state = 0;         // SSLM_OK, a token >= 0, bound: the walk state after it
+	// Ruling 46: the finish's own device-logits submission (RunDeviceLogits, `pre` null on the device path), when it
+	// ran to completion: its timing, for the caller to count and publish (gpu_port.h, ruling 46).
+	bool device_submitted = false;
+	superslm_gpu::GpuCallTiming device_timing{};
 };
 // A row's device logits computed ahead by the widened stage (RunDeviceLogitsRows): its status and V values.
 struct GpuDeviceRow {
@@ -4573,7 +4611,9 @@ GpuFinishResult GpuFinishFromNorm(SslmGpuContext* ctx, SslmGpuModelHandle* model
 		// T-2851 (B): the exact int64 row, computed on the device from the resident head, then the
 		// unchanged host narrowing -- the same call on the same values as the host path below.
 		const SslmGpuStatus device_status =
-		    pre != nullptr ? pre->status : RunDeviceLogits(ctx, *model->device_logits, final_codes, wide_logits.data());
+		    pre != nullptr ? pre->status
+		                   : RunDeviceLogits(ctx, *model->device_logits, final_codes, wide_logits.data(), &r.device_timing);
+		r.device_submitted = pre == nullptr && device_status == SSLM_OK;
 		if (device_status != SSLM_OK) {
 			r.status = device_status;
 			return r;
@@ -4640,8 +4680,11 @@ GpuFinishResult GpuFinishFromNorm(SslmGpuContext* ctx, SslmGpuModelHandle* model
 }
 }  // namespace
 
+// Ruling 46 (46a): `own_call` -- the finish is its own call (the standalone bridge, the decode bridge's ready
+// shortcut), so a device finish publishes its submission's timing as the last call's; false -- the decode bridge's
+// finish after its drive, so the drive's published timing takes it in (gpu_port.h, CumulativeGpuBusyUs).
 SslmGpuStatus SslmGpuSeqFinishTokenForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
-                                                int32_t* out_token) {
+                                                int32_t* out_token, bool own_call = true) {
 	if (!out_token) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	*out_token = -1;
 	if (!ctx || !seq || !seq->model || seq->ctx != ctx) {
@@ -4681,6 +4724,14 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuS
 	if (fst != superslm::SslmForwardStatus::Ok) return MapDecodedStatusToGpuStatus(fst);
 	const GpuFinishResult fin =
 	    GpuFinishFromNorm(ctx, model, seq->bound_schema_index, seq->dfa_walk_state, final_codes.data(), /*pre=*/nullptr);
+	if (fin.device_submitted) {
+		// Ruling 46: the one-row device-logits finish, counted and published (a host-path finish submits nothing).
+		if (own_call) {
+			superslm_gpu::PublishOwnCallTimingNoThrow(fin.device_timing);
+		} else {
+			superslm_gpu::AddToLastCallTimingNoThrow(fin.device_timing);
+		}
+	}
 	if (fin.status != SSLM_OK) {
 		if (fin.rearm_ready) seq->ready_for_logits = true;
 		return fin.status;
@@ -5630,6 +5681,9 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5BridgeImpl(SslmGpuContext* ctx, SslmGp
 // embed/`sslm_decode_step_gpu`/`sslm_gpu_ready`/finish primitives stay available (this bridge/
 // `gpu_1p0.h` do not remove them) for a caller that genuinely needs to interleave other GPU work
 // between layers, but composing them by hand is exactly what re-trips this session's own bug.
+// The finish bridge's public body (its boundary, under the bridge's own name), with ruling 46's timing mode (below).
+SslmGpuStatus FinishTokenBridgeTimed(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t* token,
+                                     bool own_call) noexcept;
 SslmGpuStatus SslmGpuSeqDecodeStepForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                int32_t token_to_embed_if_needed,
                                                uint32_t dispatch_budget, int32_t* out_token) {
@@ -5654,19 +5708,21 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5BridgeImpl(SslmGpuContext* ctx, SslmGpuSe
 		return g;
 	}
 	seq->bind_eligible = false;
+	bool drove = false;  // ruling 46: the finish's timing joins the drive's published one
 	if (seq->ready_for_logits) {
 		// This sequence's hidden_codes already hold a fully-computed final hidden state (from a
 		// prior prefill call) -- no embed, no layer loop this call; jump straight to finishing,
 		// exactly sslm_decode_step's own ready_for_logits branch (src/sslm_abi.cpp:1708-1715).
 		seq->ready_for_logits = false;
 	} else {
+		drove = true;
 		if (seq->state() != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
 		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, token_to_embed_if_needed);
 		if (st != SSLM_OK) return st;
 		const SslmGpuStatus driven = DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget);
 		if (driven != SSLM_OK) return driven;  // 1.8.0 (TE-426): the drive's own status, kept
 	}
-	return SslmGpuSeqFinishTokenForG5Bridge(ctx, seq, out_token);
+	return FinishTokenBridgeTimed(ctx, seq, out_token, /*own_call=*/!drove);
 }
 
 SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5BridgeImpl(SslmGpuContext* ctx,
@@ -7628,13 +7684,17 @@ SslmGpuStatus SslmGpuSeqSchemaBoundForG5Bridge(
 		return SslmGpuSeqSchemaBoundForG5BridgeImpl(ctx, seq, out_schema_bound);
 	});
 }
+SslmGpuStatus FinishTokenBridgeTimed(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t* token,
+                                     bool own_call) noexcept {
+	return InvokeGpuApiBoundary("SslmGpuSeqFinishTokenForG5Bridge", [&] {
+		if (seq != nullptr && RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6
+		return SslmGpuSeqFinishTokenForG5BridgeImpl(ctx, seq, token, own_call);
+	});
+}
 SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx,
                                                 SslmGpuSequenceHandle* seq,
                                                 int32_t* token) noexcept {
-	return InvokeGpuApiBoundary(__func__, [&] {
-		if (seq != nullptr && RowsChunkOpen(seq)) return SSLM_BUSY;  // multi-row plan §4.6
-		return SslmGpuSeqFinishTokenForG5BridgeImpl(ctx, seq, token);
-	});
+	return FinishTokenBridgeTimed(ctx, seq, token, /*own_call=*/true);
 }
 SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx,
                                                   SslmGpuSequenceHandle* seq,
@@ -8254,7 +8314,8 @@ void RowsDropChunkImpl(SslmGpuSequenceHandle* seq) {
 // whose first slice never ran). It submits on the singleton, so its caller has passed EntrySubmitGuard
 // (kReachesSingleton). A failed copy returns the snapshot's own classification (an allocation failure
 // SSLM_GPU_ALLOCATION_FAILED, anything else SSLM_DEVICE_LOST); the rows then hold the chunk's values (unread: they
-// lie above the committed length).
+// lie above the committed length). Ruling 46: a timestamp pair brackets the copies, and the restore's times are
+// counted and added to the last published call's (the close's or the rollback's slice); the queries change no byte.
 SslmGpuStatus RowsRestoreDeviceKvAbove(SslmGpuSequenceHandle* seq, uint32_t first) noexcept {
 	GpuRowsChunk& c = *seq->rows_chunk;
 	if (!c.device_kv_snap || c.rows == 0 || first >= c.rows) return SSLM_OK;
@@ -8264,8 +8325,12 @@ SslmGpuStatus RowsRestoreDeviceKvAbove(SslmGpuSequenceHandle* seq, uint32_t firs
 		superslm_gpu::harness::Device& dev = superslm_gpu::harness::GetDevice();
 		const Microsoft::WRL::ComPtr<ID3D12Resource>& buf = seq->pool != nullptr ? seq->pool->pool_buf : seq->kv_buf;
 		bool& latch = seq->pool != nullptr ? seq->pool->kv_needs_resume_barrier : seq->kv_needs_resume_barrier;
+		const bool timed = dev.timestamp_frequency > 0;
+		using Ms = std::chrono::duration<double, std::milli>;
+		const auto record_t0 = std::chrono::steady_clock::now();
 		dev.BeginRecording();
 		// ---- no allocation and no throw from here to CloseListOrThrow ----
+		if (timed) dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
 		superslm_gpu::harness::RecordKvTransitionFromLatch(dev.list.Get(), buf.Get(), latch, D3D12_RESOURCE_STATE_COPY_DEST);
 		for (size_t k = static_cast<size_t>(first) * per_row; k < c.device_kv_offsets.size(); ++k) {
 			superslm_gpu::harness::RecordCopyBufferRegion(dev.list.Get(), buf.Get(), c.device_kv_offsets[k], c.device_kv_snap.Get(),
@@ -8273,9 +8338,31 @@ SslmGpuStatus RowsRestoreDeviceKvAbove(SslmGpuSequenceHandle* seq, uint32_t firs
 		}
 		superslm_gpu::harness::RecordTransition(dev.list.Get(), buf.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
 		                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		if (timed) {
+			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+			dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, dev.timestamp_readback.Get(), 0);
+		}
 		dev.CloseListOrThrow();
+		const auto submit_t0 = std::chrono::steady_clock::now();
 		dev.SubmitAndWaitKeepingAlive(/*retry=*/false, c.device_kv_snap, buf);
 		latch = false;
+		superslm_gpu::GpuCallTiming t{};
+		const auto readback_t0 = std::chrono::steady_clock::now();
+		t.record_ms = Ms(submit_t0 - record_t0).count();
+		t.submit_wait_ms = Ms(readback_t0 - submit_t0).count();
+		if (timed) {
+			UINT64 ts[2] = {0, 0};
+			void* qp = nullptr;
+			D3D12_RANGE qrange{0, sizeof ts};
+			if (SUCCEEDED(dev.timestamp_readback->Map(0, &qrange, &qp))) {
+				std::memcpy(ts, qp, sizeof ts);
+				D3D12_RANGE qnone{0, 0};
+				dev.timestamp_readback->Unmap(0, &qnone);
+				if (ts[1] >= ts[0]) t.gpu_busy_ms = static_cast<double>(ts[1] - ts[0]) / static_cast<double>(dev.timestamp_frequency) * 1000.0;
+			}
+		}
+		t.readback_ms = Ms(std::chrono::steady_clock::now() - readback_t0).count();
+		superslm_gpu::AddToLastCallTimingNoThrow(t);
 		return SSLM_OK;
 	} catch (const superslm_gpu::harness::GpuAllocationError&) {
 		return SSLM_GPU_ALLOCATION_FAILED;
@@ -8839,7 +8926,11 @@ void RowsAfterOneRowFinish(SslmGpuSequenceHandle* seq, SslmGpuStatus slice_statu
 				} else if (GpuFinishPathFor(model, seq->bound_schema_index) == GpuFinishPath::kDevice) {
 					std::vector<int64_t> wide(static_cast<size_t>(model->vocab_size));
 					host_ms += HostMsSince(host_t0);
-					const SslmGpuStatus ws = RunDeviceLogits(seq->ctx, *model->device_logits, final_codes.data(), wide.data());
+					superslm_gpu::GpuCallTiming logits_timing{};
+					const SslmGpuStatus ws =
+					    RunDeviceLogits(seq->ctx, *model->device_logits, final_codes.data(), wide.data(), &logits_timing);
+					// Ruling 46: inside sslm_gpu_ready, after the token's own timing published: that timing takes it in.
+					if (ws == SSLM_OK) superslm_gpu::AddToLastCallTimingNoThrow(logits_timing);
 					host_t0 = HostClock::now();
 					const GpuDeviceRow pre{ws, wide.data()};
 					fin = GpuFinishFromNorm(seq->ctx, model, seq->bound_schema_index, seq->dfa_walk_state, final_codes.data(),
