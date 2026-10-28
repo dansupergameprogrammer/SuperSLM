@@ -5,7 +5,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 ## [1.18.0] - @RELEASE_DATE@
 
 Multi-row GPU dispatch (GPU Exact), the removal of canonical jump-forward, and threaded batched passes on the CPU.
-No save format (`SLM5`, `SLM6`, `SPX1`) changes. Multi-row GPU dispatch
+`docs/releases/1.18.0.md` is the release note. No save format (`SLM5`, `SLM6`, `SPX1`) changes. Multi-row GPU dispatch
 is certified on the AMD Radeon RX 7900 XT; the NVIDIA RTX 5060 kernel-equality run is pending.
 
 ### Removed
@@ -34,7 +34,8 @@ is certified on the AMD Radeon RX 7900 XT; the NVIDIA RTX 5060 kernel-equality r
   slices as a one-row token, and the close commits the rows. `sslm_gpu_seq_rows_abandon` restores the state before
   the chunk; `sslm_gpu_seq_rows_open` and `sslm_gpu_seq_last_rows_committed` read the chunk's state. A batch call
   takes members with chunks open. A save with a chunk open is refused with the appended `SSLM_GPU_ROWS_CHUNK_OPEN`
-  (ordinal 33), nothing written. Every result is byte-identical to the one-row path's: K/V rows, final hidden
+  (ordinal 33), nothing written. It is GPU-only: no CPU call can return it, so it is not appended to the CPU's
+  `SSLM_STATUS_ENUM_LIST`, which still ends at 32. Every result is byte-identical to the one-row path's: K/V rows, final hidden
   state, save blob and statuses.
 - **Exact on the GPU.** `sslm_gpu_seq_jump_forward` runs Exact: p and the draft (the caller's, or the forced chain)
   go through the layers in passes of up to 8 rows, each row is finished with the decode bridge's own finish, and the

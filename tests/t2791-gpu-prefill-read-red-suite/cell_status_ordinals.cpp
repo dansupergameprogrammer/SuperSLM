@@ -67,8 +67,8 @@ PIN(SSLM_RESTORE_PRODUCER_MISMATCH, 30);
 // Schema skip-ahead on the GPU (1.17.0): the forced-table and context-cap statuses.
 PIN(SSLM_GPU_FORCED_TABLE_ABSENT, 31);
 PIN(SSLM_GPU_CONTEXT_CAP_EXCEEDED, 32);
-// Multi-row GPU (branch-provisional, plan §3.7 and errata E-2): the chunk-open refusal, appended last. Since R-17
-// the cap refusal is 1.17's SSLM_GPU_CONTEXT_CAP_EXCEEDED (32).
+// Multi-row GPU passes (1.18.0; plan §3.7 and errata E-2): the chunk-open refusal, appended last at its final
+// ordinal. The cap refusal is 1.17's SSLM_GPU_CONTEXT_CAP_EXCEEDED (32).
 PIN(SSLM_GPU_ROWS_CHUNK_OPEN, 33);
 
 // "Last": a switch over every named enumerator with no default compiles warning-free under

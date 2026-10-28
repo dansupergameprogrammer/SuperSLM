@@ -433,11 +433,11 @@ widths and caps, other pool occupancies, batched decode and the AMD card
 are not measured. That is the only GPU speed statement; the
 [1.13.0 release note](releases/1.13.0.md) has the readings.
 
-### Multi-row prompt reading (unreleased)
+### Multi-row prompt reading (1.18.0)
 
-*On the multi-row branch, for 1.21.0. Nothing here is released, and the two
-new statuses below are provisional: their names and numbers change before
-release.*
+*Released in 1.18.0. Every name here is an addition; no save format (`SLM5`,
+`SLM6`, `SPX1`) changes. Certified on the AMD Radeon RX 7900 XT; see the
+[1.18.0 release note](releases/1.18.0.md) for the NVIDIA run.*
 
 `sslm_gpu_seq_embed_rows` reads up to `SSLM_GPU_MAX_ROWS` (8) prompt tokens
 at once. The tokens pass through each layer together, with one weight read
@@ -498,9 +498,8 @@ do {
   Submitted), that `sslm_gpu_ready` reports `SSLM_BUSY` and changes nothing:
   the chunk stays open at full depth, and the next `sslm_gpu_ready` retries
   the close, or `sslm_gpu_seq_rows_abandon` rolls it back.
-- **No schema-forced kind.** The branch's provisional schema-forced kind and its
-  first-prewalked flag were removed with canonical mode before release
-  (1.18.0). Kind 1 is reserved and is a bad spec, and so is any flag.
+- **No schema-forced kind.** A schema-forced kind and a first-prewalked flag
+  were removed with canonical mode before release (1.18.0). Kind 1 is reserved and is a bad spec, and so is any flag.
 - **Advancing.** `sslm_decode_step_gpu` moves every row of the chunk forward
   by the whole layers the budget covers, counted as for one row
   (`DispatchesPerLayer` per layer). A budget below one layer returns
@@ -702,13 +701,14 @@ dedicated sequence for more rows than fit before its context cap; the rows that 
 committed. Both names are also appended to the CPU's `SSLM_STATUS_ENUM_LIST`, so the two
 enums keep one ordinal space; no CPU call returns either.
 
-One covers multi-row prompt reading (unreleased and provisional: appended
-after the schema skip-ahead pair on the branch only, and given the next free
-number at release; see
-[Multi-row prompt reading](#multi-row-prompt-reading-unreleased)):
-`SSLM_GPU_ROWS_CHUNK_OPEN`, a save refused while a row chunk is open. An
-`sslm_gpu_seq_embed_rows` at the context cap that admits no row returns
-1.17's `SSLM_GPU_CONTEXT_CAP_EXCEEDED`.
+One covers multi-row GPU passes (1.18.0; `SslmGpuStatus` value 33, appended
+after the schema skip-ahead pair; see
+[Multi-row prompt reading](#multi-row-prompt-reading-1180)):
+`SSLM_GPU_ROWS_CHUNK_OPEN`, a save refused while a row chunk is open; nothing
+is written. It is GPU-only: no CPU sequence has a row chunk, so no CPU call
+can return it, and it is not appended to the CPU's `SSLM_STATUS_ENUM_LIST`,
+as the paged K/V statuses above are not. An `sslm_gpu_seq_embed_rows` at the
+context cap that admits no row returns 1.17's `SSLM_GPU_CONTEXT_CAP_EXCEEDED`.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 diverge on one refusal: when a device-side domain guard refuses one of the admitted
@@ -1585,14 +1585,13 @@ no save format (`SLM5`, `SLM6`, `SPX1`) changes. Stream equality with the CPU, p
 RTX 5060 and the AMD Radeon RX 7900 XT only. 1.17.0 also fixes the RTX 50-series (Blackwell) GPU results that 1.16.0
 listed as a known issue.
 
-**Canonical mode is removed in 1.18.0** (on the multi-row branch, unreleased). It changed answers: it wrote the
+**Canonical mode is removed in 1.18.0.** It changed answers: it wrote the
 forced text with the tokenizer's split, so the model continued from tokens it would not have chosen. On a schema-heavy
 workload it changed 8 of 44 answers, where exact mode kept every answer and was nearly as fast. NULL options,
 `SSLM_JUMP_DEFAULT` (canonical's old value 0) and `SSLM_JUMP_EXACT` now all select Exact, and `SSLM_JUMP_DEFAULT`
-takes no draft, as NULL options take none. **The GPU verb refuses every call with `SSLM_SEQUENCE_REJECTED` until
-multi-row dispatch builds Exact on the GPU (MR5)**, after its argument checks (a mode outside the enum, or a draft with
-`SSLM_JUMP_DEFAULT`, is `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`, and a call with a multi-row chunk open is `SSLM_BUSY`). A 1.17.0 GPU save made after a canonical jump still
-restores. The jump-forward paragraph below describes 1.17.0's canonical verb.
+takes no draft, as NULL options take none. The GPU verb runs Exact on multi-row dispatch (below), after its argument
+checks (a mode outside the enum, or a draft with `SSLM_JUMP_DEFAULT`, is `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`, and a call
+with a multi-row chunk open is `SSLM_BUSY`). A 1.17.0 GPU save made after a canonical jump still restores. The jump-forward paragraph below describes 1.17.0's canonical verb.
 
 **The forced-text query.** `sslm_gpu_seq_forced_tokens(ctx, seq, out_ids, cap, out_count, out_accepting)` returns
 the text the bound schema forces from the sequence's current walk state, as token ids: the CPU's

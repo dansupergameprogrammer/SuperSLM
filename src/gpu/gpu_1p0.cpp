@@ -3853,7 +3853,7 @@ SslmGpuStatus sslm_gpu_seq_saveImpl(SslmGpuContext* ctx, const SslmGpuSequenceHa
 	if (!superslm_gpu::CallProceedsOrBusy_SeqSave(is_submitted)) {
 		return SSLM_BUSY;  // design Sec4.2's own state table, unchanged policy.
 	}
-	// Multi-row plan §4.5: refused while a chunk is open, nothing written (§3.7's branch-provisional status).
+	// Multi-row plan §4.5: refused while a chunk is open, nothing written (SSLM_GPU_ROWS_CHUNK_OPEN, 33 since 1.18.0).
 	if (RowsChunkOpen(seq)) return SSLM_GPU_ROWS_CHUNK_OPEN;
 	// Paged KV (G5, §4 item 10's writer rule): a pooled sequence saves 'SLM6', gathered from the pool's
 	// host mirror through its table; a dedicated sequence keeps saving 'SLM5', below, unchanged. A

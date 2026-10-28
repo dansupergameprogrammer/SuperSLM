@@ -309,15 +309,17 @@ enum class SslmGpuStatus : uint32_t {
     SSLM_GPU_FORCED_TABLE_ABSENT,
     /* Schema skip-ahead (1.17.0), ordinal 32: the context cap.
      *   - 1.17.0's sslm_gpu_seq_jump_forward asked for more rows than a dedicated sequence (or a pooled one whose
-     *     limit is its cap) had before its context cap; the rows that fit were committed. (Until MR5 the verb
-     *     refuses every call; see its comment.)
+     *     limit is its cap) had before its context cap; the rows that fit were committed. (1.18.0's verb is
+     *     Exact; see its comment.)
      *   - sslm_gpu_seq_embed_rows (multi-row passes) with no headroom at all before the cap, on a dedicated
      *     sequence or a pooled one whose limit is its cap: nothing is admitted and nothing is written. (A
      *     pooled sequence stopped by a budget limit below its cap gets SSLM_GPU_KV_BUDGET_EXCEEDED instead.) */
     SSLM_GPU_CONTEXT_CAP_EXCEEDED,
-    /* BRANCH-PROVISIONAL (multi-row GPU passes, unreleased; this ordinal is not stable). sslm_gpu_seq_save on
-     * a sequence with an open row chunk (sslm_gpu_seq_embed_rows): nothing is written. Close the chunk (finish
-     * its layers, or sslm_gpu_seq_rows_abandon) and save again. Takes the next free ordinal at release. */
+    /* Multi-row GPU passes (1.18.0), ordinal 33: sslm_gpu_seq_save on a sequence with an open row chunk
+     * (sslm_gpu_seq_embed_rows): nothing is written. Close the chunk (finish its layers, or
+     * sslm_gpu_seq_rows_abandon) and save again. Appended LAST. GPU-only: no CPU sequence has a row chunk, so
+     * no CPU call can return it, and it is not in the CPU's SSLM_STATUS_ENUM_LIST (sslm_abi.h), as the paged-K/V
+     * GPU statuses are not. Released in 1.18.0. */
     SSLM_GPU_ROWS_CHUNK_OPEN
 };
 
@@ -612,7 +614,7 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
                               SslmGpuStatus* out_status) noexcept;
 
 /* ============================================================================
- * Multi-row prompt reading (multi-row GPU passes; unreleased, on the multi-row branch until 1.21.0).
+ * Multi-row prompt reading (multi-row GPU passes, 1.18.0). Released in 1.18.0.
  * Up to SSLM_GPU_MAX_ROWS prompt tokens pass through each layer together: one weight read and one
  * dispatch per site for all of them, instead of one token at a time. The result is byte-identical
  * to feeding the same tokens one at a time through sslm_gpu_seq_embed_token and the decode step.
@@ -713,7 +715,7 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
 #define SSLM_GPU_MAX_ROWS 8
 typedef enum {
     SSLM_GPU_ROWS_PROMPT = 0,
-    /* 1 is reserved and never reused: a bad spec (the branch-provisional schema-forced kind, removed, E-11 (c)) */
+    /* 1 is reserved and never reused: a bad spec (a schema-forced kind, removed before release, E-11 (c)) */
     SSLM_GPU_ROWS_EXACT_DRAFT = 2     /* Exact: [p, draft...] (below) */
 } SslmGpuRowsKind;
 typedef struct SslmGpuRowsSpec {

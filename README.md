@@ -14,10 +14,14 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **[1.17.0](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.17.0)**. Schema
-skip-ahead comes to the GPU (the masked finish and canonical jump-forward), and GPU results on NVIDIA RTX 50-series
-cards are fixed. Canonical mode changes answers and is deprecated (1.18.0 removes it); use exact mode on the CPU.
-See the [1.17.0 release note](docs/releases/1.17.0.md).
+Current release: **[1.18.0](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.18.0)**. The GPU
+runs several tokens through the model in one pass (multi-row): prompts are read in fewer frames, and exact
+skip-ahead comes to the GPU, with every token and saved byte equal to the one-token path's. Canonical jump-forward is
+removed; NULL options and mode 0 now select exact mode. On the CPU, an opt-in parallel-for bit threads multi-token
+passes. See the [1.18.0 release note](docs/releases/1.18.0.md).
+
+In 1.17.0 schema skip-ahead came to the GPU (the masked finish and canonical jump-forward), and GPU results on NVIDIA
+RTX 50-series cards were fixed. See the [1.17.0 release note](docs/releases/1.17.0.md).
 
 In 1.16.0 the GPU backend got the CPU's frozen-prefix save and restore: a host can save a frozen GPU prefix as an
 `SPX1` blob (`sslm_gpu_prefix_save`) and restore it instead of prefilling it again (`sslm_gpu_prefix_restore`). A GPU

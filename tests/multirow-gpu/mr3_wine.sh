@@ -10,8 +10,10 @@
 #
 # Legs (each printed PASS or FAIL; exit 0 only when every leg run passes):
 #   contract  include/superslm/gpu_1p0.h publishes plan §4.1's verbs and types, 1.17's SSLM_GPU_CONTEXT_CAP_EXCEEDED (the
-#             cap refusal since R-17), and the branch-provisional SSLM_GPU_ROWS_CHUNK_OPEN (§3.7, mr3_entry.h) appended
-#             after it, marked provisional on its line.
+#             cap refusal since R-17), and SSLM_GPU_ROWS_CHUNK_OPEN (§3.7, mr3_entry.h) appended after it. Until the
+#             1.18.0 release commit CHUNK_OPEN was branch-provisional and had to be marked so on its line; at release
+#             it takes its final ordinal (§3.7: the next free one, 33), so the leg now requires it immediately after
+#             CONTEXT_CAP_EXCEEDED, last in the enum, and no longer marked provisional.
 #   cells     mr3_cells.exe on pkv_def and pkv_qk (MR3_CELLS=2.1,7.6 runs a subset; MR3_CYCLES sets 1.1's count, default
 #             1000; MR3_RACES sets 3.1's free-running count, default 10000). Built with -DMR3_UNPUBLISHED until the
 #             contract leg passes (see mr3_entry.h).
@@ -84,11 +86,13 @@ else:
             elif "SSLM_GPU_CONTEXT_CAP_EXCEEDED" in after and after.index(want) < after.index("SSLM_GPU_CONTEXT_CAP_EXCEEDED"):
                 miss.append(want + " is not appended after 1.17's statuses")
             else:
+                # 1.18.0 (§3.7 at release): the final ordinal, 33 -- right after 1.17's 32, last in the enum.
+                if names.index(want) != names.index("SSLM_GPU_CONTEXT_CAP_EXCEEDED") + 1 or names[-1] != want:
+                    miss.append(want + " is not the enum's last status, right after SSLM_GPU_CONTEXT_CAP_EXCEEDED (33)")
                 line = next(l for l in lines if re.match(r"\s*" + want + r"\b", l))
-                # the marker may sit on the enumerator's line or in the comment block directly above it
                 i = lines.index(line)
-                ctx = " ".join(lines[max(0, i - 3):i + 1]).lower()
-                if "provisional" not in ctx: miss.append(want + " is not marked provisional")
+                ctx = " ".join(lines[max(0, i - 5):i + 1]).lower()
+                if "provisional" in ctx: miss.append(want + " is still marked provisional at release")
 for x in miss: print("    contract: " + x)
 sys.exit(1 if miss else 0)
 PY
@@ -96,7 +100,7 @@ PY
 PUBLISHED=0
 if contract >"$OUT/contract.txt"; then PUBLISHED=1; fi
 if want contract; then
-	if [ $PUBLISHED = 1 ]; then echo "PASS contract (gpu_1p0.h publishes §4.1, 1.17's cap status and the provisional CHUNK_OPEN)"
+	if [ $PUBLISHED = 1 ]; then echo "PASS contract (gpu_1p0.h publishes §4.1, 1.17's cap status and CHUNK_OPEN at 33)"
 	else cat "$OUT/contract.txt"; echo "FAIL contract"; FAILED+=(contract); fi
 fi
 

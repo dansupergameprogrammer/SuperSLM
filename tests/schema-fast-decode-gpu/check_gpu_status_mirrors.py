@@ -14,9 +14,10 @@ names. For each such file:
 Records, release notes and the changelog are history, not mirrors, and are not read; nor are the engine's .cpp
 sources under src/, which return the statuses rather than spell the enum.
 
-Multi-row GPU errata E-3: the enum may end with exactly one more status, the branch-provisional
-SSLM_GPU_ROWS_CHUNK_OPEN, until R-20; any other appended status is red. Each run first self-tests that rule (an appended
-unruled status must go red; review M2).
+Multi-row GPU errata E-3, reversed at release (1.18.0): "ends with" is restored. The enum ends with 1.17's two and
+then SSLM_GPU_ROWS_CHUNK_OPEN at its final ordinal, 33, and with nothing after it; any other tail is red. CHUNK_OPEN
+is GPU-only (no CPU call can return it), so it is checked in gpu_1p0.h and is not required in the CPU's mirrors. Each
+run first self-tests that rule (an appended unruled status must go red; review M2).
 
 Host-only: it runs in the cloud and in CI. Usage: python tests/schema-fast-decode-gpu/check_gpu_status_mirrors.py
 """
@@ -61,34 +62,39 @@ def gpu_enumerators() -> list:
     return re.findall(r"\b(SSLM_[A-Z0-9_]+)\b", body)
 
 
-# Multi-row GPU plan errata E-3 (rulings items 10 and 18, review M2): the one status allowed after 31 and 32 is the
-# branch-provisional SSLM_GPU_ROWS_CHUNK_OPEN, until R-20 restores "the enum ends with the two".
-E3_PROVISIONAL = ["SSLM_GPU_ROWS_CHUNK_OPEN"]
+# Multi-row GPU plan errata E-3 (rulings items 10 and 18, review M2), reversed at release: CHUNK_OPEN took its final
+# ordinal, 33, in 1.18.0, and "the enum ends with" its last released status again. It is GPU-only, so it is not one of
+# the mirrored NEW names.
+GPU_ONLY = {"SSLM_GPU_ROWS_CHUNK_OPEN": 33}
 
 
 def tail_rule(names: list):
-    """None when the enum's tail is exactly [LAST, *NEW] or E-3's [LAST, *NEW, *E3_PROVISIONAL]; else the failure."""
-    want, allowed = [LAST, *NEW], [LAST, *NEW, *E3_PROVISIONAL]
+    """None when the enum's tail is exactly [LAST, *NEW, *GPU_ONLY] at their ordinals; else the failure."""
+    want = [LAST, *NEW, *GPU_ONLY]
     tail = names[-len(want):] if len(names) >= len(want) else names
-    tail_e3 = names[-len(allowed):] if len(names) >= len(allowed) else names
-    if tail == want or tail_e3 == allowed:
-        return None
-    return (f"include/superslm/gpu_1p0.h: the enum ends {names[-(len(allowed) + 1):]}, want it to end {want} "
-            f"or, under errata E-3, {allowed}")
+    if tail != want:
+        return f"include/superslm/gpu_1p0.h: the enum ends {names[-(len(want) + 1):]}, want it to end {want}"
+    ordinals = {n: i for i, n in enumerate(names)}
+    for n, v in {LAST: 30, **NEW, **GPU_ONLY}.items():
+        if ordinals[n] != v:
+            return f"include/superslm/gpu_1p0.h: {n} is at {ordinals[n]}, want {v}"
+    return None
 
 
 def self_test() -> list:
     """The tail rule sees the defects it exists for: an appended unruled status goes red (review M2)."""
-    head = ["SSLM_OK", "SSLM_BUSY", LAST]
+    head = [f"SSLM_S{i}" for i in range(30)] + [LAST]
+    chunk = list(GPU_ONLY)
     cases = [
-        ("1.17's own tail", head + list(NEW), True),
-        ("E-3's provisional CHUNK_OPEN", head + list(NEW) + E3_PROVISIONAL, True),
-        ("an unruled status after CHUNK_OPEN", head + list(NEW) + E3_PROVISIONAL + ["SSLM_GPU_UNRULED"], False),
-        ("two unruled statuses after CHUNK_OPEN", head + list(NEW) + E3_PROVISIONAL + ["SSLM_GPU_A", "SSLM_GPU_B"], False),
+        ("1.18's tail", head + list(NEW) + chunk, True),
+        ("1.17's tail, CHUNK_OPEN dropped", head + list(NEW), False),
+        ("an unruled status after CHUNK_OPEN", head + list(NEW) + chunk + ["SSLM_GPU_UNRULED"], False),
+        ("two unruled statuses after CHUNK_OPEN", head + list(NEW) + chunk + ["SSLM_GPU_A", "SSLM_GPU_B"], False),
         ("an unruled status instead of CHUNK_OPEN", head + list(NEW) + ["SSLM_GPU_UNRULED"], False),
-        ("CHUNK_OPEN before 31 and 32", head + E3_PROVISIONAL + list(NEW), False),
-        ("31 and 32 swapped", head + list(reversed(list(NEW))), False),
-        ("a status between 30 and 31", head + ["SSLM_GPU_UNRULED"] + list(NEW), False),
+        ("CHUNK_OPEN before 31 and 32", head + chunk + list(NEW), False),
+        ("31 and 32 swapped", head + list(reversed(list(NEW))) + chunk, False),
+        ("a status between 30 and 31", head + ["SSLM_GPU_UNRULED"] + list(NEW) + chunk, False),
+        ("the right tail at the wrong ordinals", head[1:] + list(NEW) + chunk, False),
     ]
     bad = []
     for name, names, green in cases:
@@ -104,7 +110,7 @@ def states_ordinal(text: str, name: str, value: int) -> bool:
 def main() -> int:
     names = gpu_enumerators()
     failures = self_test()
-    # The enum ends with the two, or (errata E-3) with the two and the provisional CHUNK_OPEN, and nothing else.
+    # The enum ends with the two and CHUNK_OPEN (33), and nothing else (E-3 reversed at release).
     tail_failure = tail_rule(names)
     if tail_failure:
         failures.append(tail_failure)
