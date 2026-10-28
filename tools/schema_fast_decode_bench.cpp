@@ -4,6 +4,9 @@
 // object, which tools/schema_fast_decode_box/run_box_step.ps1 wraps with provenance. Every figure it
 // prints off the box is indicative; the plan's readings are the box's (§10).
 //
+//   Every mode that opens the artifact takes --bits N (default 2): the hook's `reserved` bits under --tasks;
+//   3 adds SSLM_PARALLEL_FOR_PREFILL (1.18.0), so the batched passes thread too.
+//
 //   schema_fast_decode_bench ARTIFACT extract SCHEMA [prompt options] [--pair A,B] [--budget 64]
 //                            [--pairs 15] [--warmup 0] [--tasks 0] [--max-new 256]
 //       B2 (B3 with --tasks 4): the extraction from a fixed prompt as n interleaved pairs of two arms
@@ -437,7 +440,7 @@ struct Engine {
 	ReferenceParallelFor* threads = nullptr;
 	sslm_parallel_for pf{};
 
-	bool Open(const char* path, int tasks) {
+	bool Open(const char* path, int tasks, uint32_t bits = SSLM_PARALLEL_FOR_MATVEC) {
 		std::vector<uint8_t> raw;
 		if (!superslm_marshal::ReadFile(path, raw) || raw.empty()) {
 			std::fprintf(stderr, "cannot read %s\n", path);
@@ -467,7 +470,7 @@ struct Engine {
 		if (sslm_workspace_create(model, &cfg, ws_buf, wsz, &ws) != SSLM_OK) return false;
 		if (tasks >= 2) {
 			threads = new ReferenceParallelFor(tasks - 1);
-			pf = sslm_parallel_for{&ReferenceParallelFor::Run, threads, tasks, SSLM_PARALLEL_FOR_MATVEC};
+			pf = sslm_parallel_for{&ReferenceParallelFor::Run, threads, tasks, bits};
 			if (sslm_workspace_set_parallel_for(ws, &pf) != SSLM_OK) {
 				std::fprintf(stderr, "hook refused\n");
 				return false;
@@ -1088,6 +1091,7 @@ int Extract(Engine& e, int argc, char** argv) {
 	                ",\"prompt_tokens\":" + std::to_string(prompt.size()) + ",\"budget\":" + std::to_string(budget) +
 	                ",\"pairs\":" + std::to_string(pairs) + ",\"warmup\":" + std::to_string(warmup) +
 	                ",\"max_new\":" + std::to_string(max_new) + ",\"tasks\":" + Arg(argc, argv, 3, "--tasks", "0") +
+	                ",\"bits\":" + Arg(argc, argv, 3, "--bits", "2") +
 	                ",\"pair\":" + JStr(pair) + JComparison(rec, first) + ",\"ok\":" + (ok ? "true" : "false") + "}";
 	if (!WriteJson(argc, argv, j)) return 2;
 	return ok ? 0 : 1;
@@ -1269,6 +1273,7 @@ int Pass(Engine& e, int argc, char** argv) {
 	const int i1 = index_of(1);
 	std::string j = "{\"mode\":\"pass\",\"depth\":" + std::to_string(prompt.size()) + ",\"example\":" +
 	                (Flag(argc, argv, 3, "--example") ? "true" : "false") + ",\"tasks\":" + Arg(argc, argv, 3, "--tasks", "0") +
+	                ",\"bits\":" + Arg(argc, argv, 3, "--bits", "2") +
 	                ",\"pairs\":" + std::to_string(pairs) + ",\"warmup\":" + std::to_string(warmup) +
 	                ",\"order\":\"rounds outer, sizes rotated by one per round\",\"sizes\":[";
 	for (size_t si = 0; si < n; ++si) {
@@ -1891,9 +1896,12 @@ int main(int argc, char** argv) {
 		return 2;
 	}
 	const int tasks = std::atoi(Arg(argc, argv, 3, "--tasks", "0"));
+	// --bits: the hook's `reserved` under --tasks (default 2, bit 1 alone; 3 adds bit 0, tiled-matmul slice 2's
+	// threaded batched pass). A library without bit 0 refuses 3 at install.
+	const uint32_t bits = static_cast<uint32_t>(std::strtoul(Arg(argc, argv, 3, "--bits", "2"), nullptr, 0));
 	Engine e;
-	if (!e.Open(argv[1], tasks)) return 2;
-	std::printf("artifact %s layers %d tasks %d\n", argv[1], e.layers, tasks);
+	if (!e.Open(argv[1], tasks, bits)) return 2;
+	std::printf("artifact %s layers %d tasks %d bits %u\n", argv[1], e.layers, tasks, bits);
 	if (mode == "extract") return Extract(e, argc, argv);
 	if (mode == "pass") return Pass(e, argc, argv);
 #if !defined(SFD_BENCH_DECODE_ONLY)

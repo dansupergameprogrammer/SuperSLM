@@ -5,6 +5,7 @@
 
 void RunDecodeThreadingCells(int& checks, int& failures);
 void RunDecodeThreadingD1Cells(int& checks, int& failures);
+void RunBatchedThreadingCells(int& checks, int& failures);  // tiled-matmul plan slice 2
 
 int main() {
 #if !defined(SUPERSLM_FORCE_SCALAR_MATMUL)
@@ -13,6 +14,7 @@ int main() {
 	int checks = 0, failures = 0;
 	RunDecodeThreadingCells(checks, failures);
 	RunDecodeThreadingD1Cells(checks, failures);
+	RunBatchedThreadingCells(checks, failures);
 	std::printf("superslm_decode_threading_scalar_forced (SUPERSLM_FORCE_SCALAR_MATMUL): %d checks, %d failures\n",
 	            checks, failures);
 	return failures == 0 && checks > 0 ? 0 : 1;

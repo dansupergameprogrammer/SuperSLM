@@ -2,10 +2,11 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
-## [1.18.0] - Unreleased
+## [1.18.0] - @RELEASE_DATE@
 
-Multi-row GPU dispatch and the threaded-CPU batched fix. This section is in progress and is merged with the CPU
-thread's 1.18.0 section when that lands.
+Multi-row GPU dispatch (GPU Exact), the removal of canonical jump-forward, and threaded batched passes on the CPU.
+`docs/releases/1.18.0.md` is the release note. No save format (`SLM5`, `SLM6`, `SPX1`) changes. Multi-row GPU dispatch
+is certified on the AMD Radeon RX 7900 XT; the NVIDIA RTX 5060 kernel-equality run is pending.
 
 ### Removed
 
@@ -17,7 +18,8 @@ thread's 1.18.0 section when that lands.
     `SSLM_SEQUENCE_KV_BUFFER_MISMATCH` on the GPU).
   - On the CPU, `sslm_seq_jump_forward` with NULL options, or with mode 0, now runs exact mode with the forced chain
     as its draft. A caller's draft still takes `SSLM_JUMP_EXACT`; a draft with mode 0 is refused, as it was.
-  - On the GPU, `sslm_gpu_seq_jump_forward` runs Exact on multi-row dispatch (below).
+  - On the GPU, `sslm_gpu_seq_jump_forward` runs Exact on multi-row dispatch (below). 1.17.0's refusal of
+    `SSLM_JUMP_EXACT` with `SSLM_SEQUENCE_REJECTED` is gone.
   - Saves made by 1.15.0-1.17.0 after a canonical jump still restore. The restored sequence continues under
     whatever mode the caller asks for.
   - The multi-row branch's provisional `SSLM_GPU_ROWS_SCHEMA_FORCED` kind and `SSLM_GPU_ROWS_FIRST_PREWALKED` flag
@@ -26,16 +28,58 @@ thread's 1.18.0 section when that lands.
 
 ### Added
 
+- **Multi-row GPU passes.** `sslm_gpu_seq_embed_rows` opens a row chunk of up to `SSLM_GPU_MAX_ROWS` (8) tokens on
+  a sequence (`SslmGpuRowsSpec`, kind `SSLM_GPU_ROWS_PROMPT` or `SSLM_GPU_ROWS_EXACT_DRAFT`). It is host-only; the
+  decode step (and a batch member) then runs the chunk's layers as one widened dispatch per site, in the same layer
+  slices as a one-row token, and the close commits the rows. `sslm_gpu_seq_rows_abandon` restores the state before
+  the chunk; `sslm_gpu_seq_rows_open` and `sslm_gpu_seq_last_rows_committed` read the chunk's state. A batch call
+  takes members with chunks open. A save with a chunk open is refused with the appended `SSLM_GPU_ROWS_CHUNK_OPEN`
+  (ordinal 33), nothing written. Every result is byte-identical to the one-row path's: K/V rows, final hidden
+  state, save blob and statuses.
 - **Exact on the GPU.** `sslm_gpu_seq_jump_forward` runs Exact: p and the draft (the caller's, or the forced chain)
   go through the layers in passes of up to 8 rows, each row is finished with the decode bridge's own finish, and the
   rows up to the first mismatch are kept. The stream and every saved byte equal the plain GPU decode loop's.
 - **`SSLM_GPU_ROWS_EXACT_DRAFT`** for `sslm_gpu_seq_embed_rows` (kind 2): `[p, draft...]`, closed by the same check,
-  and **`sslm_gpu_seq_rows_produced`**, which reads the token the close produced. A model mapped without the device
-  logits head refuses the kind with `SSLM_SEQUENCE_REJECTED`.
-- **The widened logits stage** has its own GPU timestamp bracket: `superslm_gpu::LastLogitsStageTiming()`
-  (`gpu_port.h`). An Exact close of two or more rows on the device-head path runs exactly one stage; a
-  one-row close keeps the one-row logits call. The same record carries the close's host-finish time (`host_finish_ms`,
-  `host_rows`, `closes`).
+  and **`sslm_gpu_seq_rows_produced`**, which reads the token the close produced (-2 at a schema dead end). A model
+  mapped without the device logits head refuses the kind with `SSLM_SEQUENCE_REJECTED`. A guard refusal of the
+  close changes nothing.
+- **The GPU prompt bridge in passes of up to 8 rows (MR3e).** `SslmGpuSeqPrefillForG5Bridge` runs the prompt as
+  multi-row passes, each submitted in slices of floor(`dispatch_budget` / dispatches per layer) layers, so a
+  frame-sized budget gives layer-sliced submissions. Below one layer of budget, or with `SSLM_GPU_MULTIROW_PROMPT=0`
+  set before `sslm_gpu_context_create`, it is 1.17.0's one-row path. Results are byte-identical either way. A
+  guard refusal restores the device's own K/V rows.
+- **Threaded batched passes on the CPU (tiled-matmul plan, slice 2).** A new opt-in bit,
+  `SSLM_PARALLEL_FOR_PREFILL` (bit 0 of `sslm_parallel_for.reserved`), splits every projection of a pass of two or
+  more rows across the host's parallel-for hook: prompt prefill, prefix prefill, and `sslm_seq_jump_forward`'s
+  passes. The tiled kernel still reads each weight panel once for all the pass's rows; the split is by output
+  columns, in blocks of 32, capped by a minimum of 4 Mi multiply-adds per task (`docs/api.md` gives the rule).
+  Tokens and saved state are byte-identical with the bit on or off, on every tier. All scratch is allocated on the
+  calling thread before `run`, and no task allocates. A `run` that breaks its exactly-once contract fails the call
+  with `SSLM_INVALID_ARGUMENT`, nothing of that pass admitted and the saturation counts as they were.
+  - The jump-forward keeps Q6 C's one-row split at 2 to 7 rows under bit 1, with or without bit 0: its check stops
+    at the first mismatch, so one-row passes compute no rejected row (measured on a 16-core CPU: with the batched
+    pass threaded instead, Exact with its default draft ran at 0.86x of plain decoding, against 0.98x with the
+    split). At 8 rows or more it runs the threaded batched pass.
+  - Both CPU setters now accept bit 0 (and bits 0 and 1 together); bit 2 and above are still refused. The GPU
+    setter accepts and ignores it.
+- **GPU timing for embedders (internal, `gpu_port.h`).** `superslm_gpu::LastLogitsStageTiming()` brackets the
+  widened logits stage with its own GPU timestamps (an Exact close of two or more rows on the device-head path runs
+  exactly one stage; a one-row close keeps the one-row logits call), and carries the close's host-finish time
+  (`host_finish_ms`, `host_rows`, `closes`). `superslm_gpu::CumulativeGpuBusyUs()` is a process-wide counter of
+  GPU-measured busy time that every call advances, each batch member, the one-row finish, the M = 1 close's finish,
+  the standalone finish and the K/V restore of refused rows included. `gpu_rows_cost_table.h` carries the measured
+  row-cost ratios r(M) and g(M) (RX 7900 XT, 0.5B and 1.5B) that an embedder prices a multi-row pass with.
+
+### Changed
+
+- `SSLM_GPU_CONTEXT_CAP_EXCEEDED` (32) is also returned by `sslm_gpu_seq_embed_rows` with no headroom before the
+  context cap (nothing admitted, nothing written).
+- No CPU symbol, struct layout or save format changes.
+
+### Known issues
+
+- On a card that slows under sustained load, a 2 ms frame budget can run up to about 20% over for a stretch.
+- A schema-end dead end (no legal continuation) stays a fault until 1.19.0.
 
 ## [1.17.0] - 2026-10-26
 

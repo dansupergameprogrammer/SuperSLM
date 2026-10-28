@@ -3,8 +3,9 @@
 // snapshot and the setters' validation. Internal to the library: nothing here is SUPERSLM_API, and
 // the installed headers do not include this file.
 //
-// Users: LogitsSiteParallel (the token finish's logits step), and the one-row matvec groups of the
-// decode and one-token-prefill layer loops (MatvecGroupParallel, below).
+// Users: LogitsSiteParallel (the token finish's logits step), the one-row matvec groups of the
+// decode and one-token-prefill layer loops (MatvecGroupParallel, below), and the batched (M >= 2)
+// projections of the chunk-batched layer loop (BatchedGemmParallel, tiled-matmul plan slice 2).
 #ifndef SUPERSLM_SRC_FORWARD_PARALLEL_SPLIT_H
 #define SUPERSLM_SRC_FORWARD_PARALLEL_SPLIT_H
 
@@ -83,10 +84,41 @@ SslmForwardStatus MatvecGroupParallel(const sslm_parallel_for& pf, const ColumnS
                                       const int8_t* x, size_t k, const MatvecPart* parts,
                                       size_t part_count);
 
+// ---- batched (M >= 2) projections: tiled-matmul plan slice 2 (§5.2, §5.3) ------------------------
+
+// The fewest rows a batched projection splits at. The plan's §5.2 said 8 (the tiled kernel's floor);
+// 2 lets the exact jump-forward's check passes of 2 to 7 rows thread too (skip-ahead costing
+// 2026-10-24 §2). Below it a projection is a one-row matvec (MatvecGroupSplit's rule).
+inline constexpr size_t kBatchedMinTokens = 2;
+
+// The least multiply-adds (M·K·N) one task of a batched projection must carry (§5.3). Commissioned
+// on the box (plan §11); 4 Mi until then. The production library reads this constant and nothing
+// else; a test build moves it only through superslm::test::SetMinMacsPerTask (below).
+inline constexpr size_t kMinMacsPerTask = size_t{4} * 1024 * 1024;
+size_t MinMacsPerTask() noexcept;
+
+// The §5.2 rule for one batched projection of `m` rows, input width `k` and `n` output columns:
+//   T = min(max_tasks, SSLM_PARALLEL_FOR_MAX_TASKS, ceil(n / 32), floor(m·k·n / MinMacsPerTask())),
+// and `run` is called iff m >= kBatchedMinTokens and T >= 2; otherwise task_count is below 2 and the
+// projection runs serially. Reads nothing but the hook's `run` and `max_tasks`; the caller has
+// already decided the hook applies (GemmThreading::batched).
+ColumnSplit BatchedGemmSplit(const sslm_parallel_for* pf, size_t m, size_t k, size_t n) noexcept;
+
+// Runs a batched projection whose split has task_count >= 2 through RunExactlyOnce: task i writes
+// output columns [i * rows_per_task, min(n, (i + 1) * rows_per_task)) of every row, through
+// detail::GemmInt8AccumulateColsTask, so every value is GemmInt8Accumulate's. The widened
+// activations and one packed-panel scratch per task are allocated here, on the calling thread, before
+// `run` (a failure throws std::bad_alloc before any task runs); no task allocates. Returns Ok or
+// ParallelForIncomplete.
+SslmForwardStatus BatchedGemmParallel(const sslm_parallel_for& pf, const ColumnSplit& split,
+                                      const int8_t* activations, const int8_t* weights, size_t m,
+                                      size_t k, size_t n, int64_t* out);
+
 // The one GEMM dispatch point of the chunk-batched layer loop (§3.4, §12): M = 1 with
-// `threading.row` set and a split of two or more tasks takes the row split above; everything else
-// (M >= 8 with `threading.batched` is tiled slice 2's, not in this build) is the serial
-// GemmInt8Accumulate call made before this plan. Returns Ok or ParallelForIncomplete.
+// `threading.row` set and a split of two or more tasks takes the row split above; M >= 2 with
+// `threading.batched` set and a split of two or more tasks takes the column split (slice 2);
+// everything else is the serial GemmInt8Accumulate call made before either plan. Returns Ok or
+// ParallelForIncomplete.
 SslmForwardStatus GemmDispatch(const GemmThreading& threading, const int8_t* activations,
                                const int8_t* weights, size_t m, size_t k, size_t n, int64_t* out);
 
@@ -100,6 +132,13 @@ namespace test {
 // Moves the minimum work per task the matvec rule reads (default kMinRowBytesPerTask).
 void SetMinRowBytesPerTask(size_t bytes) noexcept;
 void ResetMinRowBytesPerTask() noexcept;
+// Moves the minimum multiply-adds per task the batched rule reads (default kMinMacsPerTask).
+void SetMinMacsPerTask(size_t macs) noexcept;
+void ResetMinMacsPerTask() noexcept;
+// The `run` calls the batched split has made (BatchedGemmParallel), counted on the calling thread
+// since the last reset: the engine-side witness that a batched pass threaded (plan 10.0's H).
+size_t BatchedRunCalls() noexcept;
+void ResetBatchedRunCalls() noexcept;
 // Single-shot: the next time either layer loop reaches `site` of layer `layer`, it fails there,
 // before that site's GEMM (so after K/V landing for kO, kGateUp and kDown), with a real domain
 // rejection (kNonPfiStatus: CarriedScaleMantissaOutOfDomain) or a thrown std::bad_alloc, and the
@@ -144,9 +183,10 @@ struct SaturationCounters {
 // ---- the setters' shared validation (§3.7) -------------------------------------------------------
 
 // The `reserved` bits this build implements. A setter rejects any other bit, so a host that asks
-// for a feature this library lacks is told so rather than silently ignored. D1 adds bit 1; the
-// batched-prefill bit (bit 0) is added by the step that implements it, not before.
-inline constexpr uint32_t kImplementedParallelForBits = SSLM_PARALLEL_FOR_MATVEC;
+// for a feature this library lacks is told so rather than silently ignored. D1 added bit 1; tiled
+// slice 2 adds bit 0 (the batched split, above).
+inline constexpr uint32_t kImplementedParallelForBits =
+    SSLM_PARALLEL_FOR_PREFILL | SSLM_PARALLEL_FOR_MATVEC;
 
 // The one field-domain check both hook setters apply (sslm_workspace_set_parallel_for and
 // sslm_gpu_context_set_host_parallel_for). `pf` is non-null.

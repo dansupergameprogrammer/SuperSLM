@@ -91,7 +91,8 @@ struct XSpec {
 	int32_t page = 0;           // 0: F-SFD's own page size; else pinned (2 in every page-count cell)
 	bool full_finish = false;   // S-BOUND 0: the model without the exactness predicate (cell 5.X5)
 	int hook = 0;               // 0 none; 1 bit 1 at max_tasks 4 (Q6 C's split); 2 bit 1 at max_tasks 1;
-	                            // 3 bit 1 at max_tasks 4 on real threads; 4 the same at max_tasks 8
+	                            // 3 bit 1 at max_tasks 4 on real threads; 4 the same at max_tasks 8;
+	                            // 5 bits 0 and 1 at max_tasks 4 on real threads (tiled-matmul slice 2)
 	sslm_adapter adapter = nullptr;
 	int max_out = 320;
 	std::string Name() const {
@@ -131,7 +132,9 @@ struct XEnv {
 		if (ok && sp.hook) {
 			hook.max_tasks = sp.hook == 2 ? 1 : sp.hook == 4 ? 8 : 4;
 			hook.threads = sp.hook >= 3;
-			for (int i = 0; i < workspaces && ok; ++i) ok = Install(rig->W(i), &hook, SSLM_PARALLEL_FOR_MATVEC);
+			const uint32_t bits = sp.hook == 5 ? SSLM_PARALLEL_FOR_PREFILL | SSLM_PARALLEL_FOR_MATVEC
+			                                   : SSLM_PARALLEL_FOR_MATVEC;
+			for (int i = 0; i < workspaces && ok; ++i) ok = Install(rig->W(i), &hook, bits);
 		}
 	}
 	sslm_workspace W(const XSpec& sp, int i = 0) const { return sp.ws ? rig->W(i) : nullptr; }
@@ -2148,6 +2151,60 @@ void Cell_X_8_1() {
 			}
 		}
 	}
+}
+
+// 8.X1b [tiled-matmul plan slice 2] Under bits 0 and 1, with every batched projection above the (lowered)
+// minimum multiply-adds, the exact verb keeps Q6 C's split: for M <= 7, exactly j + 1 one-row passes (no row past
+// the first mismatch, box 2026-10-26); for M >= 8, one batched pass of M rows, which threads (`run` is called from
+// it). The run equals off and the one-thread run.
+void Cell_X_8_1b() {
+	if (!XLive("8.X1b")) return;
+	const Sfd& f = GetSfd();
+	superslm::test::SetMinMacsPerTask(1);
+	bool any_split = false, any_batched = false;
+	for (const char* schema : {kPotion, kLongKey}) {
+		for (int32_t budget : {2, 4, 7, 9}) {
+			for (XDraft kind : {XDraft::kPerfect, XDraft::kWrongAt}) {
+				XSpec one, both;
+				one.schema = both.schema = schema;
+				both.hook = 5;
+				const XOff off = RunOff(f, one);
+				XPlan plan;
+				plan.kind = kind;
+				plan.budget = budget;
+				const XRun r1 = RunExact(f, one, off, plan);
+				superslm::test::ResetBatchedRunCalls();
+				const XRun rb = RunExact(f, both, RunOff(f, both), plan);
+				const size_t batched_runs = superslm::test::BatchedRunCalls();
+				X_EQUALS_OFF("8.X1b bits 0 and 1", rb, both, plan);
+				CHECK_MSG(r1.stream == rb.stream, "[8.X1b %s] the threaded run's stream differs from one thread's",
+				          XWhat(both, plan).c_str());
+				bool big = false;
+				for (const XVerbRec& v : rb.verbs) {
+					const size_t m = 1 + v.draft.size();
+					if (v.draft.empty()) continue;
+					const size_t j1 = size_t(std::max(v.j.count, 0)) + 1;
+					bool shape = true;
+					if (m <= kQ6cSplitMax) {
+						any_split = true;
+						shape = v.passes.size() == j1;
+						for (const sfd::LayerRowsEntry& e : v.passes) shape = shape && e.kind == sfd::kLayerRowsBatched && e.rows == 1;
+					} else {
+						big = any_batched = true;
+						shape = v.passes.size() == 1 && v.passes[0].rows == m;
+					}
+					CHECK_MSG(shape, "[8.X1b %s] the call at %zu (M %zu, j %d): S-LAYERROWS %s; want %s",
+					          XWhat(both, plan).c_str(), v.pos, m, v.j.count, Q6cShape(v.passes).c_str(),
+					          m <= kQ6cSplitMax ? "j + 1 one-row passes" : "one pass of M rows");
+				}
+				CHECK_MSG(!big || batched_runs > 0, "[8.X1b %s] a pass of 8 or more rows made no batched run call",
+				          XWhat(both, plan).c_str());
+			}
+		}
+	}
+	CHECK_MSG(any_split && any_batched, "[8.X1b] no verb call of %s rows carried a draft (the cell would test nothing)",
+	          any_split ? "8 or more" : "2 to 7");
+	superslm::test::ResetMinMacsPerTask();
 }
 
 // 8.X2 [J1-X; XE29] Save and restore between calls in each resting shape (pending after a decode; ready after an

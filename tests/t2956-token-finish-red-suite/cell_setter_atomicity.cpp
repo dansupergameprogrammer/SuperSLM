@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
     invalid[1].max_tasks = 257;
     invalid[2].max_tasks = INT_MAX;
     invalid[3] = valid_cpu;
-    invalid[3].reserved = 1;
+    invalid[3].reserved = 4; // bit 2: no plan defines it (bit 0 is implemented, tiled slice 2)
     invalid[4].max_tasks = 2; // NULL run
     for (int index = 0; index < static_cast<int>(invalid.size()); ++index) {
         const auto* pf = &invalid[index];

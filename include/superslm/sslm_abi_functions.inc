@@ -56,11 +56,13 @@ SUPERSLM_API sslm_status sslm_workspace_create(sslm_model model, const sslm_conf
  * - Read by the logits step of the token finish in sslm_decode_step and sslm_decode_step_v2
  *   when this workspace is passed. With SSLM_PARALLEL_FOR_MATVEC set in pf->reserved, also read
  *   by every decode layer's one-row projections and by a prefill or prefix-prefill call that
- *   admits exactly one token (parallel_for.h states the rule). Every other call ignores it.
+ *   admits exactly one token. With SSLM_PARALLEL_FOR_PREFILL set (1.18.0), also read by the
+ *   projections of every prefill, prefix-prefill and jump-forward pass of two or more rows
+ *   (parallel_for.h states both rules). Every other call ignores it.
  *   Tokens are identical with any hook, any max_tasks, any accepted bits, and no hook.
  * - Returns SSLM_INVALID_ARGUMENT, and changes nothing, for: a NULL ws; a pf->reserved bit other
- *   than SSLM_PARALLEL_FOR_MATVEC; pf->max_tasks < 0 or > SSLM_PARALLEL_FOR_MAX_TASKS; pf->run
- *   NULL with pf->max_tasks > 1.
+ *   than SSLM_PARALLEL_FOR_PREFILL and SSLM_PARALLEL_FOR_MATVEC; pf->max_tasks < 0 or
+ *   > SSLM_PARALLEL_FOR_MAX_TASKS; pf->run NULL with pf->max_tasks > 1.
  * - Must not run concurrently with a call using the same workspace (the workspace's existing
  *   rule). pf->host_ctx must outlive every call made with this workspace while the hook is
  *   installed.
@@ -68,8 +70,9 @@ SUPERSLM_API sslm_status sslm_workspace_create(sslm_model model, const sslm_conf
  *   SSLM_INVALID_ARGUMENT. At the finish, the sequence is left resting with its final hidden
  *   state ready for logits and its schema walk and current token unchanged, so a retry recomputes
  *   the finish. In a layer (SSLM_PARALLEL_FOR_MATVEC), it rests at the start of that layer with
- *   the layer's saturation counts put back, and the next call resumes there. A failed prefill
- *   call that admitted nothing leaves the sequence's saturation counts as they were before it. */
+ *   the layer's saturation counts put back, and the next call resumes there. In a batched pass
+ *   (SSLM_PARALLEL_FOR_PREFILL), the prefill or jump-forward call fails with nothing of that pass
+ *   admitted. A failed prefill call that admitted nothing leaves the sequence's saturation counts as they were before it. */
 SUPERSLM_API sslm_status sslm_workspace_set_parallel_for(sslm_workspace ws,
                                                           const sslm_parallel_for* pf);
 

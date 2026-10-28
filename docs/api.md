@@ -194,10 +194,32 @@ against 1.6.0 is in the
   runs on the calling thread. On Qwen2.5-0.5B at `max_tasks` 4, k + v
   (256 rows, 229,376 bytes) runs on the calling thread and the other four
   groups split, so there are 97 `run` calls per decode token (4 per layer
-  plus the finish). A call admitting two or more tokens is unchanged. The GPU
+  plus the finish). A call admitting two or more tokens is unchanged by this
+  bit (see the next item). The GPU
   setter accepts the bit and ignores it: the GPU backend reads its hook only
   for the finish. The macro's presence in `parallel_for.h` is the
   compile-time test, and a library without the feature refuses the bit.
+- **Batched projections, opt-in (CPU backend, 1.18.0).** Setting
+  `SSLM_PARALLEL_FOR_PREFILL` (bit 0) in `reserved` also splits every
+  projection of a pass that runs two or more rows at once: a prefill or
+  prefix-prefill call admitting two or more tokens, and every
+  `sslm_seq_jump_forward` pass of two or more rows. The jump-forward's check
+  is the exception: at 2 to 7 rows it still runs one-row passes when bit 1
+  threads them, since its check stops at the first mismatch and one-row
+  passes compute no rejected row; at 8 rows or more it runs the threaded
+  batched pass. Each of the seven projections (q, k, v, o, gate, up, down)
+  splits alone, by output columns. For M rows, input width K and N output
+  columns, the task count is the smallest of `max_tasks`, ceil(N / 32) and
+  floor(M·K·N / 4 Mi), and at least 1. Each task then takes ceil(N / count)
+  columns rounded up to a multiple of 32, and the last task takes what is
+  left. A projection calls `run` only when this gives at least two tasks.
+  On Qwen2.5-0.5B (K, N of 896 and 4864) at `max_tasks` 4, gate, up and down
+  split from M = 2, q and o from M = 11, and k and v from M = 74. Every value
+  is still an exact integer sum computed on one thread, so tokens and saved
+  state are identical with the bit on or off. The buffers a split needs are
+  allocated on the calling thread before `run`; no task allocates. The GPU
+  setter accepts the bit and ignores it. A library before
+  1.18.0 refuses it.
 - Rows are split into contiguous blocks whose size is a function of the
   matrix shape, `max_tasks` and the 256 KiB constant only, and every row is one
   exact integer sum on one thread: tokens, save blobs and digests are
@@ -851,6 +873,8 @@ silently accepted.
   the finish is serial on the calling thread as before. With
   `SSLM_PARALLEL_FOR_MATVEC` set, each decode layer's one-row projections,
   and a prefill call that admits exactly one token, split across it too.
+  With `SSLM_PARALLEL_FOR_PREFILL` set (1.18.0), so does every pass of two or
+  more rows.
   Tokens are identical either way. A hook that breaks its exactly-once contract fails that call
   with `SSLM_INVALID_ARGUMENT` and leaves the sequence ready to retry. See
   [The token finish](#the-token-finish) above for the contract and the

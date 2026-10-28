@@ -4051,7 +4051,9 @@ std::vector<sfd::LayerRowsEntry> Q6cPasses() {
 	return v;
 }
 
-enum class Q6cArm { kNoHook, kBit1, kBit0 };
+// kBit0 is a hook with `reserved` = 0 (no bits; the name predates bit 0). kBit01: bits 0 and 1
+// (SSLM_PARALLEL_FOR_PREFILL and _MATVEC, tiled-matmul plan slice 2), under which the batched pass itself threads.
+enum class Q6cArm { kNoHook, kBit1, kBit0, kBit01 };
 
 struct SpanRun {
 	bool ok = false;
@@ -4079,7 +4081,9 @@ SpanRun Q6cSpan(const Sfd& f, const std::vector<int32_t>& draft, int32_t budget,
 	h.threads = threads;
 	if (!rig.ok) return o;
 	if (arm != Q6cArm::kNoHook) {
-		sslm_parallel_for pf = h.Pf(arm == Q6cArm::kBit1 ? SSLM_PARALLEL_FOR_MATVEC : 0u);
+		sslm_parallel_for pf = h.Pf(arm == Q6cArm::kBit1    ? SSLM_PARALLEL_FOR_MATVEC
+		                            : arm == Q6cArm::kBit01 ? SSLM_PARALLEL_FOR_PREFILL | SSLM_PARALLEL_FOR_MATVEC
+		                                                    : 0u);
 		if (null_run) pf.run = nullptr;
 		const sslm_status st = sslm_workspace_set_parallel_for(rig.W(), &pf);
 		CHECK_MSG(st == SSLM_OK, "[Q6C] installing a hook (max_tasks %d, run %s) == %d", max_tasks,
@@ -4145,9 +4149,10 @@ bool Q6cExactShapeIs(const std::vector<sfd::LayerRowsEntry>& passes, size_t m, s
 
 // Q6C.1 [Q6 C] One verb call at M = 1, 2, 7, 8 and 9 rows, both as a whole span (budget 64 at a state whose
 // chain is M) and as a chunk_budget-bounded piece (budget M at the longest chain). Under bit 1 the status,
-// forced ids and whole blob equal the batched pass's (no hook, and bit 0) and the token-by-token reference
+// forced ids and whole blob equal the batched pass's (no hook, and a hook with no bits) and the token-by-token reference
 // (the same tokens as explicit content, one per prefill call); 7 splits into seven threaded one-row passes,
-// 8 stays one serial pass of eight. Bit 0 keeps one pass at every M and never calls `run`. The bit-1 arm's
+// 8 stays one serial pass of eight. A hook with no bits keeps one pass at every M and never calls `run`;
+// with bits 0 and 1 (tiled-matmul slice 2) the exact verb keeps bit 1's split (see the arm below). The bit-1 arm's
 // hook runs its tasks on real threads, so the cell is also the split path's TSan cell.
 // MRX (ruling 23): re-pointed to Exact passes of M = 2, 7, 8 and 9 rows (the pending token and a draft of the
 // model's own next M - 1 tokens, all kept: count M - 1); M = 1 is dropped (an Exact pass of the pending token alone
@@ -4174,7 +4179,7 @@ void Cell_Q6C_1() {
 			const SpanRun plain = Q6cSpan(f, draft, budget, Q6cArm::kNoHook);
 			const SpanRun bit0 = Q6cSpan(f, draft, budget, Q6cArm::kBit0);
 			for (const SpanRun* x : {&bit1, &plain, &bit0}) {
-				const char* arm = x == &bit1 ? "bit 1" : x == &plain ? "no hook" : "bit 0";
+				const char* arm = x == &bit1 ? "bit 1" : x == &plain ? "no hook" : "no bits";
 				CHECK_MSG(x->ok && x->j.st == SSLM_OK && x->j.count == int32_t(m) - 1 && x->j.forced == want,
 				          "[Q6C.1 M %zu %s, %s] status %d count %d kept %s; want %s", m, how, arm,
 				          static_cast<int>(x->j.st), x->j.count, Str(x->j.forced).c_str(), Str(want).c_str());
@@ -4193,10 +4198,30 @@ void Cell_Q6C_1() {
 				CHECK_MSG(bit1.run_calls > 0, "[Q6C.1 M %zu %s, bit 1] %zu run calls; want some (threaded one-row passes)",
 				          m, how, bit1.run_calls);
 			}
-			CHECK_MSG(Q6cShapeIs(bit0.passes, m, false), "[Q6C.1 M %zu %s, bit 0] S-LAYERROWS %s; want one pass of M rows",
+			CHECK_MSG(Q6cShapeIs(bit0.passes, m, false), "[Q6C.1 M %zu %s, no bits] S-LAYERROWS %s; want one pass of M rows",
 			          m, how, Q6cShape(bit0.passes).c_str());
 			CHECK_MSG(Q6cShapeIs(plain.passes, m, false), "[Q6C.1 M %zu %s, no hook] S-LAYERROWS %s", m, how,
 			          Q6cShape(plain.passes).c_str());
+			// Tiled-matmul plan slice 2, re-pointed to Exact at the 1.18.0 merge (canonical is removed): with bit 0 too,
+			// and every batched projection above the (lowered) minimum multiply-adds, the exact verb keeps Q6 C's split
+			// (091c298c): M <= 7 runs bit 1's one-row passes, and M >= 8 one batched pass of M rows, which threads
+			// (`run` called from it). The status, kept ids and blob equal the no-hook pass's.
+			{
+				superslm::test::SetMinMacsPerTask(1);
+				superslm::test::ResetBatchedRunCalls();
+				const SpanRun bit01 = Q6cSpan(f, draft, budget, Q6cArm::kBit01, nullptr, -1, /*threads=*/true);
+				const size_t batched_runs = superslm::test::BatchedRunCalls();
+				superslm::test::ResetMinMacsPerTask();
+				CHECK_MSG(bit01.ok && bit01.j.st == SSLM_OK && bit01.j.count == int32_t(m) - 1 && bit01.j.forced == want &&
+				              bit01.blob == plain.blob,
+				          "[Q6C.1 M %zu %s, bits 0 and 1] status %d count %d kept %s, blob %s the no-hook pass's", m,
+				          how, static_cast<int>(bit01.j.st), bit01.j.count, Str(bit01.j.forced).c_str(),
+				          bit01.blob == plain.blob ? "equals" : "differs from");
+				CHECK_MSG(Q6cShapeIs(bit01.passes, m, true) && (m <= kQ6cSplitMax || batched_runs > 0),
+				          "[Q6C.1 M %zu %s, bits 0 and 1] S-LAYERROWS %s, %zu batched run calls; want %s", m, how,
+				          Q6cShape(bit01.passes).c_str(), batched_runs,
+				          m <= kQ6cSplitMax ? "one-row passes, one per row" : "one threaded pass of M rows");
+			}
 		}
 	}
 }
@@ -5018,6 +5043,7 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("5.X6", Cell_X_5_6);
 	run("5.X7", Cell_X_5_7);
 	run("8.X1", Cell_X_8_1);
+	run("8.X1b", Cell_X_8_1b);
 	run("8.X2", Cell_X_8_2);
 	run("8.X3", Cell_X_8_3);
 	run("8.X4", Cell_X_8_4);
