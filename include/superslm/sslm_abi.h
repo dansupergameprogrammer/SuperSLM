@@ -185,7 +185,7 @@ typedef struct sslm_detok_state {
     X(SSLM_KV_BUDGET_EXCEEDED) /* 29 */ \
     X(SSLM_RESTORE_PRODUCER_MISMATCH) /* 30 */ \
     /* Schema skip-ahead on the GPU (1.17.0): the two GPU statuses gpu_1p0.h appends, carried
-     * here so the two enums keep one ordinal space (Gate C re-expands this list). No CPU call returns
+     * here by name (Gate C re-expands this list); the CPU and GPU enums do not share ordinals. No CPU call returns
      * either: a C-ABI addition of two names, with no CPU behaviour change. */ \
     X(SSLM_GPU_FORCED_TABLE_ABSENT) /* 31 */ \
     X(SSLM_GPU_CONTEXT_CAP_EXCEEDED) /* 32 */

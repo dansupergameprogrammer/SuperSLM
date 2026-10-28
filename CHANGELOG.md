@@ -6,7 +6,7 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 Multi-row GPU dispatch (GPU Exact), the removal of canonical jump-forward, and threaded batched passes on the CPU.
 `docs/releases/1.18.0.md` is the release note. No save format (`SLM5`, `SLM6`, `SPX1`) changes. Multi-row GPU dispatch
-is certified on the AMD Radeon RX 7900 XT; the NVIDIA RTX 5060 kernel-equality run is pending.
+is certified on the AMD Radeon RX 7900 XT; the NVIDIA RTX 5060 kernel-equality run passed.
 
 ### Removed
 

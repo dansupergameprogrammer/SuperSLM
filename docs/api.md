@@ -698,8 +698,8 @@ Two cover schema skip-ahead on the GPU (1.17.0; see
 artifact carries no tokenizer section); nothing changes.
 `SSLM_GPU_CONTEXT_CAP_EXCEEDED` (ordinal 32): a `sslm_gpu_seq_jump_forward` call that asked a
 dedicated sequence for more rows than fit before its context cap; the rows that fit are
-committed. Both names are also appended to the CPU's `SSLM_STATUS_ENUM_LIST`, so the two
-enums keep one ordinal space; no CPU call returns either.
+committed. Both names are also appended to the CPU's `SSLM_STATUS_ENUM_LIST`; no CPU call returns
+either. The CPU and GPU enums do not share ordinals: compare statuses by name, never by number.
 
 One covers multi-row GPU passes (1.18.0; `SslmGpuStatus` value 33, appended
 after the schema skip-ahead pair; see
