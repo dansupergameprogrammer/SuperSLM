@@ -9,13 +9,18 @@
 // (the decode_threading_alloc_main.cpp pattern, so it is its own binary) and fails allocation number k,
 // counted from the start of one verb call, for every k the call reaches.
 //
-// Each trial: a POTION-bound sequence, the prompt, the verb at damped order 3 with budget 1 (an order-3
-// state whose history is the start chain's first token), then the verb at damped order 2 with budget 1
-// and allocation k failing. Plan §5.8 and cell 5.2: the call returns SSLM_ALLOCATION_FAILED with nothing
+// Each trial: a POTION-bound sequence, the prompt, one damped decode at order 3 (an order-3 state whose
+// history is the decoded token, left pending), then the verb -- exact mode at damped order 2, budget 2, a
+// one-token draft the model confirms, so two tokens are admitted and the call re-keys the state to order 2
+// -- with allocation k failing. (Release 1.18.0: canonical mode was removed; the setup's budget-1 verb and
+// the trial's budget-1 canonical verb became the decode and this exact call, keeping the re-key and the
+// one-token admission the cells are about.) Plan §5.8 and cell 5.2: the call returns SSLM_ALLOCATION_FAILED with nothing
 // admitted, and the anti-LM order, its history and the whole save blob are unchanged; a retry then gives
 // the blob of a sequence that never failed; a further save and the release are clean. A trial whose
 // verb call returns SSLM_OK (the failed allocation was absorbed) passes if its blob is the never-failed
-// one. A trial whose failure comes after tokens were admitted (the history update after the pass; code
+// one, or -- when the call confirmed nothing drafted (plan §5.10.3: the failure ended the check, and the
+// call kept the pending token alone) -- if its next decodes equal a plain decode run's at the same output
+// position, blobs included. A trial whose failure comes after tokens were admitted (the history update after the pass; code
 // review round 1, observation 9) is outside these cells: its status and blob are not asserted.
 //
 // Fix round 4 (code review re-check, finding 9): every trial then makes the sequence's next use, two damped
@@ -230,13 +235,22 @@ struct Engine {
 		b.resize(st == SSLM_OK ? n : 0);
 		return b;
 	}
+	// The verb under test: exact mode, budget 2, a one-token draft {verb_draft}. main sets verb_draft to the
+	// token a damped decode at order 2 gives from Setup()'s state, so the pass admits the pending token and
+	// confirms the draft (count 1): two admitted tokens, so the call re-keys the order-3 anti-LM state to
+	// order 2 before its pass (1.18.0 removed canonical mode, whose budget-1 call admitted one token and is
+	// a no-op in exact mode).
+	int32_t verb_draft = -1;
 	sslm_status Verb(sslm_seq s, int32_t order, int32_t* count) const {
 		const sslm_decode_params p = Damped(order);
 		int32_t buf[8] = {-7, -7, -7, -7, -7, -7, -7, -7};
+		const int32_t draft[1] = {verb_draft};
+		const sslm_jump_options o{sizeof(sslm_jump_options), SSLM_JUMP_EXACT, draft, 1};
 		*count = -1;
-		return superslm::test::sfd::JumpCanonical(m, s, 1, &p, ws, buf, 8, count);
+		return superslm::test::sfd::JumpWithOptions(m, s, 2, &p, &o, ws, buf, 8, count);
 	}
-	// A POTION-bound sequence, the prompt, then the verb at order 3, budget 1. Null on a setup failure.
+	// A POTION-bound sequence, the prompt, then one damped decode at order 3 (an order-3 state whose history
+	// is that decode's token, which stays pending). Null on a setup failure.
 	sslm_seq Setup() {
 		sslm_seq s = nullptr;
 		if (sslm_seq_create(m, &pool, &s) != SSLM_OK || !s) {
@@ -244,13 +258,14 @@ struct Engine {
 			return nullptr;
 		}
 		sslm_schema h = nullptr;
-		int32_t consumed = 0, count = -1;
+		int32_t consumed = 0, tok = -100;
+		const sslm_decode_params p3 = Damped(3);
 		const bool ok_setup =
 		    sslm_schema_lookup(m, kPotion, &h) == SSLM_OK && sslm_seq_set_schema(s, h) == SSLM_OK &&
 		    sslm_prefill(m, s, prompt.data(), int32_t(prompt.size()), int32_t(prompt.size()), SSLM_SPAN_PROMPT, ws,
 		                 &consumed) == SSLM_OK &&
-		    Verb(s, 3, &count) == SSLM_OK && count == 1;
-		CHECK_MSG(ok_setup, "setup: bind, prompt and verb@3 (count %d)", count);
+		    sslm_decode_step_v2(m, &s, 1, &p3, ws, &tok) == SSLM_OK && tok >= 0;
+		CHECK_MSG(ok_setup, "setup: bind, prompt and damped decode@3 (token %d)", tok);
 		if (!ok_setup) {
 			sslm_seq_release(s);
 			return nullptr;
@@ -318,8 +333,31 @@ void Arm(long k) {
 	g_armed = true;
 }
 
+// Off's run from the setup state (damped decodes at order 2, no verb): its statuses and tokens, and the blob
+// after each. A verb call that returns OK having confirmed fewer drafted tokens than the never-failed call
+// (plan §5.10.3: an allocation failure inside a check row's finish, or in the history feed after it, ends
+// the check there) is held to off at the same output position, as cell 5.X3 (ii) holds exact mode.
+struct OffRun {
+	Decoded next;
+	std::vector<std::vector<uint8_t>> blob;
+};
+OffRun OffFromSetup(Engine& e, int n) {
+	OffRun o;
+	sslm_seq s = e.Setup();
+	if (!s) return o;
+	const sslm_decode_params p = e.Damped(2);
+	for (int i = 0; i < n; ++i) {
+		int32_t out = -100;
+		o.next.st.push_back(static_cast<int>(sslm_decode_step_v2(e.m, &s, 1, &p, e.ws, &out)));
+		o.next.tok.push_back(out);
+		o.blob.push_back(e.Save(s));
+	}
+	sslm_seq_release(s);
+	return o;
+}
+
 // One verb trial at allocation index k. Returns true iff every check in it passed.
-bool Trial(Engine& e, long k, const std::vector<uint8_t>& ref_after, const Decoded& ref_next) {
+bool Trial(Engine& e, long k, const std::vector<uint8_t>& ref_after, const Decoded& ref_next, const OffRun& off) {
 	const int failures_before = g_failures;
 	sslm_seq s = e.Setup();
 	if (!s) return false;
@@ -358,6 +396,29 @@ bool Trial(Engine& e, long k, const std::vector<uint8_t>& ref_after, const Decod
 		CHECK_MSG(rs == SSLM_OK && count == 1 && e.Save(s) == ref_after, "[k %ld] the retry: status %d count %d, blob "
 		          "%s the never-failed sequence's", k, static_cast<int>(rs), count,
 		          e.Save(s) == ref_after ? "equals" : "differs from");
+	} else if (fired && st == SSLM_OK && count == 0) {
+		// §5.10.3: the failure ended the check before the drafted row; the call kept the pending token alone.
+		// The sequence's next decodes (on a restored copy) must equal off's at the same output position:
+		// statuses, tokens and blobs.
+		const std::vector<uint8_t> snap = e.Save(s);
+		sslm_seq r = nullptr;
+		const sslm_status rs = snap.empty() ? SSLM_INVALID_ARGUMENT : sslm_seq_restore(e.m, &e.pool, snap.data(), snap.size(), &r);
+		CHECK_MSG(rs == SSLM_OK && r, "[k %ld] short commit: restoring its blob == %d", k, static_cast<int>(rs));
+		if (rs == SSLM_OK && r) {
+			const sslm_decode_params p = e.Damped(2);
+			bool same = off.blob.size() == size_t(kNextDecodes);
+			Decoded got;
+			for (int i = 0; i < kNextDecodes && same; ++i) {
+				int32_t out = -100;
+				got.st.push_back(static_cast<int>(sslm_decode_step_v2(e.m, &r, 1, &p, e.ws, &out)));
+				got.tok.push_back(out);
+				same = got.st[size_t(i)] == off.next.st[size_t(i)] && out == off.next.tok[size_t(i)] &&
+				       e.Save(r) == off.blob[size_t(i)];
+			}
+			CHECK_MSG(same, "[k %ld] OK with count 0 (a short commit): the next decodes %s differ from off's at the same "
+			          "output position %s (statuses, tokens or blobs)", k, Str(got).c_str(), Str(off.next).c_str());
+			sslm_seq_release(r);
+		}
 	} else {
 		CHECK_MSG(st == SSLM_OK && count == 1 && e.Save(s) == ref_after, "[k %ld] status %d count %d with the failure "
 		          "absorbed; want SSLM_OK and the never-failed blob", k, static_cast<int>(st), count);
@@ -449,12 +510,18 @@ void RunTrial(const char* tag, long k, std::vector<std::string>* failed, F&& bod
 // workspace and without one:
 //   (a)  the layer branch: N decodes, then the target decode embeds t_{N-1}, runs the layers and finishes;
 //   (b)  the ready branch, off: the first decode after the prompt;
-//   (c)  canonical J1 after a span: the §5.6 drain, a choice, the drain again, then the target decode;
-//   (c') canonical at budget 1 after N decodes: the verb admits the pending t_{N-1} alone (exact mode's
-//        j = 0 commit shape), and the target decode runs the ready branch at (a)'s output position.
-// Exact mode's own arms, (d) after a j = 0 and after a j >= 2 commit, are J1-X cells (TF.1d, TF.2d) and
-// land with that slice. N is the first position >= 3 whose state after t_{N-1} is forced with a canonical
-// first token other than t_N, so (c') exists there and that token is TF.5's pin.
+//   (c)  the verb after a span: a decode, an exact call over off's own tokens up to the next choice (the
+//        next position with an empty forced chain), the choice's decode, a second such call, then the
+//        target decode on the ready branch at a choice;
+//   (c') the verb with default options (the forced chain as the draft) at budget 2 after N decodes: the
+//        chain's head is not t_N, so the call commits the pending t_{N-1} alone (exact mode's j = 0 commit
+//        shape), and the target decode runs the ready branch at (a)'s output position.
+// Release 1.18.0 removed canonical mode, which these two arms were written against (its §5.6 drain and its
+// budget-1 pending-only commit); the arms keep their shapes -- a ready branch after committed spans, and
+// the j = 0 commit -- through the verb's default (exact) mode. Exact mode's host-draft arms, (d) after a
+// j = 0 and after a j >= 2 commit, are J1-X cells (TF.1d, TF.2d). N is the first position >= 3 whose state
+// after t_{N-1} is forced with a chain head other than t_N, so (c') exists there and that token is TF.5's
+// pin.
 // ===================================================================================================
 
 enum class TfArm { kLayer, kReady, kCanonSpan, kCanonPending, kExact0, kExact2 };
@@ -462,8 +529,8 @@ const char* TfArmName(TfArm a) {
 	switch (a) {
 	case TfArm::kLayer: return "(a) layer branch";
 	case TfArm::kReady: return "(b) first token after the prompt";
-	case TfArm::kCanonSpan: return "(c) canonical after a span";
-	case TfArm::kCanonPending: return "(c') canonical pending-only at N";
+	case TfArm::kCanonSpan: return "(c) ready after exact spans";
+	case TfArm::kCanonPending: return "(c') default-options j = 0 at N";
 	case TfArm::kExact0: return "(d0) exact, j = 0 at N";
 	case TfArm::kExact2: return "(d2) exact, j >= 2 at N";
 	}
@@ -517,6 +584,7 @@ struct TfCtx {
 	int32_t pin = -1;    // legal at the state after t_{N-1}, != t_N
 	int32_t pin_b = -1;  // legal at the start state, != t_0 (-1: none)
 	int32_t pin_c = -1;  // legal at arm (c)'s target state, != the model's token there (-1: none)
+	std::vector<bool> free;  // free[i]: the state before stream[i] has an empty forced chain (a choice)
 };
 
 sslm_decode_params TfParams(const Engine& e, const TfCfg& c, int32_t order) {
@@ -530,7 +598,8 @@ sslm_status TfDecode(const Engine& e, const TfCfg& c, sslm_seq s, int32_t order,
 	*out = -100;
 	return sslm_decode_step_v2(e.m, &s, 1, &p, c.ws ? e.ws : nullptr, out);
 }
-// The canonical verb with the decode's own params (NULL under greedy, §5.8), and the cfg's workspace.
+// The verb with default options (NULL: exact mode, the forced chain as the draft), the decode's own params
+// (NULL under greedy, §5.8), and the cfg's workspace.
 sslm_status TfVerb(const Engine& e, const TfCfg& c, sslm_seq s, int32_t budget, int32_t order, int32_t* count) {
 	const sslm_decode_params p = TfParams(e, c, order);
 	std::vector<int32_t> buf(size_t(budget), -7);
@@ -582,15 +651,19 @@ sslm_seq TfNewBound(const Engine& e, const TfCfg& c, sslm_kv_pool* pool = nullpt
 	}
 	return s;
 }
-bool TfDrain(const Engine& e, const TfCfg& c, sslm_seq s) {
-	for (int guard = 0; guard < 16; ++guard) {
-		int32_t n = 0;
-		TfChainHead(e, s, &n);
-		if (n == 0) return true;
-		int32_t count = -1;
-		if (n < 0 || TfVerb(e, c, s, 64, 2, &count) != SSLM_OK) return false;
-	}
-	return false;
+// Arm (c)'s spans: an exact call whose draft is off's own stream from *pos up to the next choice (the next
+// position whose forced chain is empty), with t_{*pos - 1} pending. Every drafted token must be confirmed;
+// *pos advances to the choice.
+bool TfSpan(const Engine& e, const TfCtx& x, sslm_seq s, size_t* pos) {
+	std::vector<int32_t> d;
+	for (size_t q = *pos; q < x.stream.size() && q < x.free.size() && (d.empty() || !x.free[q]); ++q)
+		d.push_back(x.stream[q]);
+	int32_t count = -1;
+	if (d.empty() || *pos + d.size() >= x.free.size() || !x.free[*pos + d.size()] ||
+	    TfExact(e, x.cfg, s, int32_t(d.size()) + 1, d, 2, &count) != SSLM_OK || count != int32_t(d.size()))
+		return false;
+	*pos += d.size();
+	return true;
 }
 // The arm's sequence, resting at the target decode's entry. Null on a setup failure.
 sslm_seq TfBuild(const Engine& e, const TfCtx& x, TfArm arm, sslm_kv_pool* pool = nullptr) {
@@ -603,11 +676,18 @@ sslm_seq TfBuild(const Engine& e, const TfCtx& x, TfArm arm, sslm_kv_pool* pool 
 	case TfArm::kLayer:
 	case TfArm::kCanonPending:
 		for (int i = 0; i < x.n && ok; ++i) ok = TfDecode(e, x.cfg, s, 2, &t) == SSLM_OK && t >= 0;
-		if (ok && arm == TfArm::kCanonPending) ok = TfVerb(e, x.cfg, s, 1, 2, &count) == SSLM_OK && count == 0;
+		if (ok && arm == TfArm::kCanonPending) ok = TfVerb(e, x.cfg, s, 2, 2, &count) == SSLM_OK && count == 0;
 		break;
-	case TfArm::kCanonSpan:
-		ok = TfDrain(e, x.cfg, s) && TfDecode(e, x.cfg, s, 2, &t) == SSLM_OK && t >= 0 && TfDrain(e, x.cfg, s);
+	case TfArm::kCanonSpan: {
+		// Each decode must emit off's own token at its position, so the next span's draft is the model's own.
+		size_t pos = 0;
+		for (int span = 0; span < 2 && ok; ++span) {
+			ok = TfDecode(e, x.cfg, s, 2, &t) == SSLM_OK && pos < x.stream.size() && t == x.stream[pos];
+			++pos;
+			ok = ok && TfSpan(e, x, s, &pos);
+		}
 		break;
+	}
 	case TfArm::kExact0:
 	case TfArm::kExact2: {
 		// N decodes (t_{N-1} pending), then an exact call that commits p alone (j = 0: the draft is x.pin, the
@@ -682,9 +762,11 @@ TfCtx TfMakeCtx(Engine& e, const TfCfg& c) {
 	sslm_seq s = TfNewBound(e, c);
 	if (!s) return x;
 	for (int i = 0; i < 64; ++i) {
-		int32_t t = -100;
+		int32_t t = -100, chain = 0;
+		TfChainHead(e, s, &chain);
 		if (TfDecode(e, c, s, 2, &t) != SSLM_OK || t < 0) break;
 		x.stream.push_back(t);
+		x.free.push_back(chain == 0);
 	}
 	sslm_seq_release(s);
 	for (int n = 3; n + 1 < static_cast<int>(x.stream.size()) && x.n < 0; ++n) {
@@ -1429,7 +1511,7 @@ void RunXAllocCells(Engine& e, TfVerdicts* v, long* trials) {
 				return;
 			}
 		}
-		// TF.1d, first: exact mode's resting blob before the target decode equals canonical mode's pending-only
+		// TF.1d, first: exact mode's resting blob before the target decode equals the default-options j = 0
 		// commit at the same output position ((c'), §11.5 "(d)'s blob equals (a)'s"). (d0) at N; (d2) at N + j.
 		std::vector<int32_t> d2;
 		for (size_t q = size_t(x.n); q < x.stream.size() && d2.size() < 7; ++q) d2.push_back(x.stream[q]);
@@ -1453,7 +1535,7 @@ void RunXAllocCells(Engine& e, TfVerdicts* v, long* trials) {
 			if (exact_blob.empty() || twin_blob.empty() || exact_blob != twin_blob)
 				v->Red("TF.1d", std::string(TfArmName(arm)) + ", " + cn + ": the exact commit's resting blob " +
 				                    (exact_blob.empty() || twin_blob.empty() ? std::string("did not build")
-				                                                             : TfFields(exact_blob) + " is not canonical "
+				                                                             : TfFields(exact_blob) + " is not the default-options "
 				                                                               "(c')'s at the same position " +
 				                                                               TfFields(twin_blob)));
 		}
@@ -1569,6 +1651,18 @@ int main() {
 		Decoded ref_next;
 		long total = 0;
 		{
+			// The verb's draft: the model's own next token at damped order 2 from the setup state.
+			sslm_seq s = e.Setup();
+			if (!s) return 1;
+			const sslm_decode_params p2 = e.Damped(2);
+			int32_t t1 = -100;
+			const sslm_status ds = sslm_decode_step_v2(e.m, &s, 1, &p2, e.ws, &t1);
+			sslm_seq_release(s);
+			CHECK_MSG(ds == SSLM_OK && t1 >= 0, "the verb's draft: decode@2 status %d token %d", static_cast<int>(ds), t1);
+			if (ds != SSLM_OK || t1 < 0) return 1;
+			e.verb_draft = t1;
+		}
+		{
 			sslm_seq s = e.Setup();
 			if (!s) return 1;
 			int32_t count = -1;
@@ -1585,9 +1679,11 @@ int main() {
 			sslm_seq_release(s);
 		}
 		CHECK_MSG(total > 0, "the verb call made no allocation to fail");
+		const OffRun off = OffFromSetup(e, kNextDecodes);
+		CHECK_MSG(off.blob.size() == size_t(kNextDecodes), "off's run from the setup state did not build");
 		for (long k = 0; k < total; ++k) {
 			++trials;
-			RunTrial("verb", k, &failed, [&] { return Trial(e, k, ref_after, ref_next); });
+			RunTrial("verb", k, &failed, [&] { return Trial(e, k, ref_after, ref_next, off); });
 		}
 		// Fix round 4: the damped decode step's own allocations, at a re-keying order and at the live one.
 		for (int32_t order : {2, 3}) {
