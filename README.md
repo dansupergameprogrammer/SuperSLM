@@ -14,7 +14,12 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **[1.18.0](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.18.0)**. The GPU
+Current release: **[1.18.1](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.18.1)**, a GPU fix release. A
+process that loads the library from a DLL (an Unreal Engine editor with the SuperSLM-Unreal plugin, for example) no longer
+crashes as it exits after GPU work: no D3D12 object is released by a static destructor any more. See the
+[1.18.1 release note](docs/releases/1.18.1.md).
+
+In 1.18.0 the GPU
 runs several tokens through the model in one pass (multi-row): prompts are read in fewer frames, and exact
 skip-ahead comes to the GPU, with every token and saved byte equal to the one-token path's. Canonical jump-forward is
 removed; NULL options and mode 0 now select exact mode. On the CPU, an opt-in parallel-for bit threads multi-token

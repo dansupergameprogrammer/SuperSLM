@@ -2,6 +2,21 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
+## [1.18.1] - 2026-10-31
+
+A GPU fix release. No token, save format, status, verb or shader changes. `SPX1` prefix blobs are bound to the engine
+version, so rebuild prefix caches made by 1.18.0 (1.18.1 refuses them with `SSLM_RESTORE_PRODUCER_MISMATCH`).
+`docs/releases/1.18.1.md` is the release note.
+
+- **No D3D12 object is released by a static destructor.** The process's GPU device, the two pipeline caches, the
+  shared root signature and the descriptor-table probe's pipeline live until the process ends. In a DLL host the
+  static destructors run at the DLL's process detach, after the D3D12 runtime has torn down, and the device's last
+  release failed fast there (`0xC0000409`, `FAST_FAIL_FATAL_APP_EXIT`): the Unreal Engine editor and its commandlets
+  crashed on a normal exit after GPU work. A context's own device is released at `sslm_gpu_context_destroy`, as
+  before.
+- **Tests:** `tests/ci/check_gpu_no_exit_destructors.py`, a lint for static-storage objects that hold a D3D12 object
+  by value, runs in the tests workflow; its red suite runs in `pytest tests/ci/`.
+
 ## [1.18.0] - 2026-10-28
 
 Multi-row GPU dispatch (GPU Exact), the removal of canonical jump-forward, and threaded batched passes on the CPU.
