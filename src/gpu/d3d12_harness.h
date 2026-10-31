@@ -1140,10 +1140,19 @@ public:
 // mutex. A setup that failed for any other reason (SetupFailure::Other) is final, for the life of
 // the process. Once `available` is true nothing here writes the Device again, so the fast path
 // below takes no lock.
+//
+// The Device is never destroyed. Its destructor would run among the static destructors at process
+// exit, which in a DLL host (the editor's modular plugin) is the DLL's process detach, after the
+// D3D12 runtime has torn down its own state: the last device release then fails fast (0xC0000409,
+// FAST_FAIL_FATAL_APP_EXIT, raised in D3D12NotifyDeviceDeletion). The OS reclaims the device at exit.
 struct DeviceHolder {
 	std::mutex mutex;
-	Device device;
+	union {
+		Device device;
+	};
 	bool setup_attempted = false;
+	DeviceHolder() noexcept : device() {}
+	~DeviceHolder() {}
 };
 
 // Plan §4.4 (*The ledger term never constructs the device*): the holder lives at namespace scope,
@@ -1409,7 +1418,9 @@ struct CachedPipeline {
 // Every B1 shader shares this exact root-signature shape (Sec11 B1: a single
 // scalar-argument buffer in, a single scalar-result buffer out).
 inline CachedPipeline& GetOrBuildPipeline(const std::string& name) {
-	static std::map<std::string, CachedPipeline> cache;
+	// Never destroyed, as the process device (DeviceHolder above): released at exit it would call
+	// into a torn-down D3D12 runtime.
+	static auto& cache = *new std::map<std::string, CachedPipeline>();
 	auto it = cache.find(name);
 	if (it != cache.end()) return it->second;
 	Device& dev = GetDevice();
@@ -1428,7 +1439,7 @@ inline CachedPipeline& GetOrBuildPipeline(const std::string& name) {
 // distinct cache from GetOrBuildPipeline's B1-shaped one-SRV-one-UAV pool
 // above, since the two families use different root signatures.
 inline CachedPipeline& GetOrBuildComposedPipeline(const std::string& name) {
-	static std::map<std::string, CachedPipeline> cache;
+	static auto& cache = *new std::map<std::string, CachedPipeline>();  // never destroyed, as above
 	// ONE shared root-signature object across every composed-pipeline PSO --
 	// not a fresh MakeRootSigComposed() per shader. D3D12's command list binds
 	// root parameters against whatever root signature was last set via
@@ -1438,7 +1449,7 @@ inline CachedPipeline& GetOrBuildComposedPipeline(const std::string& name) {
 	// per-site dispatch shape), so every PSO here MUST share the identical
 	// root-signature object the command list has bound, not merely a
 	// structurally-identical distinct one.
-	static ComPtr<ID3D12RootSignature> s_shared_root_sig;
+	static auto& s_shared_root_sig = *new ComPtr<ID3D12RootSignature>();  // never destroyed, as the cache
 	auto it = cache.find(name);
 	if (it != cache.end()) return it->second;
 	Device& dev = GetDevice();

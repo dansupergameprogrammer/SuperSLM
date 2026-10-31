@@ -5348,8 +5348,10 @@ bool RunDescriptorTableBind(const int8_t* const* array_pointers, const size_t* a
 	auto readback = dev.MakeBuffer(total_elements * 4, D3D12_HEAP_TYPE_READBACK,
 	                                D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
 
-	static Microsoft::WRL::ComPtr<ID3D12RootSignature> s_root_sig;
-	static Microsoft::WRL::ComPtr<ID3D12PipelineState> s_pso;
+	// Never destroyed, as the process device (d3d12_harness.h, DeviceHolder): released at exit they
+	// would call into a torn-down D3D12 runtime.
+	static auto& s_root_sig = *new Microsoft::WRL::ComPtr<ID3D12RootSignature>();
+	static auto& s_pso = *new Microsoft::WRL::ComPtr<ID3D12PipelineState>();
 	if (!s_root_sig) {
 		s_root_sig = dev.MakeRootSigDescriptorTable();
 		auto cso = harness::ReadFile(harness::ShaderPath("descriptor_table_readback"));
