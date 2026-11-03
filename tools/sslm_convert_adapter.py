@@ -1581,6 +1581,12 @@ def build_merged_checkpoint(adapter_dir, out_dir, *, verbose: bool = True) -> Pa
     cfg = pipeline.load_config(checkpoint_dir / "config.json")
     tensors = pipeline._open_checkpoint_tensors(checkpoint_dir)
     present = set(tensors.keys())
+    # Engine 1.19: the same tied-head rule `pipeline.load_model` applies. A tied config's
+    # `lm_head.weight` is dropped when it is a stored copy of the embedding (same dtype, shape
+    # and bytes) and refused with `TiedLmHeadMismatch` otherwise. Without this call the map
+    # below never names a tied `lm_head.weight`, so a differing head was silently replaced by
+    # the embedding in the merged checkpoint (code review 1.19, finding 2).
+    present = pipeline._drop_tied_duplicate_lm_head(checkpoint_dir, cfg, tensors, present)
     names = pipeline._upstream_names(cfg, present=present)  # upstream -> ours
     # T-2543 C-1: the adapter's own key set must be built under the SAME namespace the
     # base checkpoint actually carries, not a hardcoded "model." literal. Before this fix,

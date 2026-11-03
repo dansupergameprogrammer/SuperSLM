@@ -24,11 +24,11 @@ release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB
   refuses, with no file written: a base that is not intact, already has an SCM1 section, or has no TOKENIZER section;
   a checkpoint whose tokenizer differs from the base's; a bad schema name; and anything the compiler refuses.
   `--limits-json` replaces named limits.
-- **Proven on a real artifact.** On the 0.5B model with an array schema attached, on an AMD and an NVIDIA GPU and two
-  CPUs: 10/10 generated documents valid, CPU and GPU streams identical, save/restore at every array byte, and exact
-  jump-forward and the masked finish both identical to plain decode on 10/10 (CPU; the GPU full finish is a third
-  witness). (Canonical jump-forward, removed in 1.18.0, closed arrays early there.) See
-  `tests/array-s2/RESULTS.md`.
+- **Array proof on a real artifact: pending the 1.19 box rerun.** `tests/array-s2/RESULTS.md` holds the run on the
+  0.5B model taken on the engine at `897b9bb4` (1.16.0-based), before the 1.18 merge. The 1.19 rerun
+  (`tests/array-s2/box_run.py`) runs every step again on the merged engine, adds a GPU Exact jump-forward arm and a
+  GPU multi-row arm (prompt and `SSLM_GPU_ROWS_EXACT_DRAFT` chunks), each required to give documents identical to
+  plain GPU decode on the 10 prompts, and drops the canonical arm, which since 1.18.0 runs Exact.
 - **The clean stop at the schema's end** (closes 1.18.0's known issue). A `-2` at `SSLM_OK` now has a stated meaning
   that callers read, not infer. Read the accepting bit right after it: on the CPU `sslm_stats().schema_accepting`
   or `sslm_seq_forced_tokens`' `out_accepting`; on the GPU `SslmGpuSeqSchemaAcceptingForG5Bridge` or
@@ -37,9 +37,10 @@ release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB
   and layer index are kept, a retry reproduces the same `-2`, and the sequence can be saved, restored, reset or have
   its adapter changed. An `SSLM_GPU_ROWS_EXACT_DRAFT` chunk whose draft runs through the schema's last token closes
   as a clean stop; draft tokens past it are not admitted.
-- **Tests:** clean-stop cells `CS.E1`-`CS.E7` in `superslm_tests` (`tests/schema_fast_decode/sfd_cells_cleanstop.inc`:
-  greedy, damped, sliced, batched, jump-forward, save/restore and lifecycle, and the dead-end seam), and GPU cells
-  `sfdg_cell_cs_g1`-`g9` (`tests/schema-fast-decode-gpu/`: whole and sliced tokens, multi-row closes, jump-forward,
+- **Tests:** clean-stop cells `CS.E1`-`CS.E8` in `superslm_tests` (`tests/schema_fast_decode/sfd_cells_cleanstop.inc`:
+  greedy, damped, sliced, batched, jump-forward, a jump-forward draft that runs past the closing token, save/restore
+  and lifecycle, and the dead-end seam), and GPU cells `sfdg_cell_cs_g1`-`g10` (`tests/schema-fast-decode-gpu/`:
+  whole and sliced tokens, multi-row closes, jump-forward, a jump-forward draft past the closing token,
   `SLM5`/`SLM6` save/restore, the dead-end seam, and CPU/GPU agreement), built by `build.bat`.
 
 ### Fixed
@@ -51,8 +52,10 @@ release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB
   `embed_tokens.weight`, the converter ignores it and the result is byte-identical to converting without it. Any
   other `lm_head.weight` on a tied config is refused with `TiedLmHeadMismatch`, which names both tensors and what
   differs (dtype, shape or stored bytes; the comparison is on stored bytes, so `-0.0` against `+0.0` or a BF16
-  embedding re-stored as F32 is refused). Before, every tied checkpoint carrying `lm_head.weight` was refused as an
-  unmapped tensor. Untied checkpoints are unchanged.
+  embedding re-stored as F32 is refused). Single-file and sharded checkpoints, and both tensor namespaces, take the
+  same rule, and so does `tools/sslm_convert_adapter.py --fallback=merge`, which reads the adapter's base checkpoint
+  directly. Before, every tied checkpoint carrying `lm_head.weight` was refused as an unmapped tensor, and the merge
+  path replaced a differing head with the embedding without a word. Untied checkpoints are unchanged.
 - **The QK-norm conversion flow resolves `--capture` and `--verifier` against the working directory**
   (`tools/t2700_fused_k_calibration.py flow`), before any use. `--capture ./name` ran a same-named program from
   `PATH` instead, because the leading `./` was dropped. A bare name is the file in the working directory when one

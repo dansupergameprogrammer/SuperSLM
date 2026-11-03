@@ -20,15 +20,24 @@ struct WalkResult {
 	std::vector<uint32_t> states;   // walk state after each admitted token (GPU only; CPU has no query)
 };
 
-enum class GenMode { Plain, JumpCanonical, JumpExact };
+// Plain: one decode call per token. JumpExact: Exact jump-forward (the forced chain as the draft) after each
+// produced token, then decode (CPU: sslm_seq_jump_forward; GPU: sslm_gpu_seq_jump_forward). MultiRow (GPU only):
+// the prompt read in SSLM_GPU_ROWS_PROMPT chunks of up to SSLM_GPU_MAX_ROWS rows, then every decode step an
+// SSLM_GPU_ROWS_EXACT_DRAFT chunk [pending token, forced chain...], on a model mapped with the head on the device.
+// Every mode must produce the plain decode's document. Canonical jump-forward was removed in 1.18.0, so it has no
+// mode here: NULL jump options now select Exact.
+enum class GenMode { Plain, JumpExact, MultiRow };
 
 // One constrained greedy generation from a prompt, ending at the schema's dead end or max_tokens.
 struct GenResult {
 	std::vector<int32_t> ids;    // the document's tokens, in output order (forced tokens included)
 	std::string end;             // "dead_end", "max_tokens", or "error:<call> <status>"
 	int32_t accepting = -1;      // accepting flag where the run ended
-	int64_t forced = 0;          // forced_token_count (canonical jump-forward) at the end
-	int64_t jump_calls = 0;      // jump-forward calls that admitted at least one token
+	int64_t forced = 0;          // CPU: sslm_stats' forced_token_count at the end
+	int64_t jump_calls = 0;      // JumpExact: verb calls that kept at least one draft token; MultiRow: EXACT_DRAFT
+	                             // chunks that committed at least one draft row
+	int64_t drafts = 0;          // JumpExact and MultiRow: draft tokens kept (committed past the pending token)
+	int64_t widest = 0;          // MultiRow: the most rows any chunk (PROMPT or EXACT_DRAFT) committed
 	double ms = 0.0;             // wall time from the first decode call to the end
 	// GPU only, one entry per decode-step call (the last is the call that found the dead end):
 	// its wall time, and superslm_gpu::LastCallTiming().gpu_busy_ms after it -- the GPU timestamp
@@ -103,8 +112,8 @@ std::vector<RestoreResult> CpuTfRestores(CpuSession* s, const std::vector<int32_
 bool CpuSeamAvailable();
 
 // GPU side (adapter 0). The slice size comes from ARRAY_S2_GPU_LAYERS_PER_SLICE (array_s2_gpu.cpp);
-// `head_on_device` maps with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE (`gputime` only; every check maps
-// with default residency, the output head on the host).
+// `head_on_device` maps with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE (`gputime`, and `gen gpu multirow`, whose
+// EXACT_DRAFT chunks need it; every other check maps with default residency, the output head on the host).
 struct GpuOptions {
 	bool head_on_device = false;
 };
@@ -113,7 +122,9 @@ GpuSession* GpuOpen(const uint8_t* bytes, size_t n, const std::string& schema, M
                     const GpuOptions& opt = GpuOptions{});
 void GpuClose(GpuSession* s);
 WalkResult GpuWalk(GpuSession* s, const std::vector<int32_t>& ids);
-GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_tokens);
+// `mode` MultiRow needs a session opened with GpuOptions::head_on_device (EXACT_DRAFT requires the device head).
+GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_tokens,
+                 GenMode mode = GenMode::Plain);
 std::vector<RestoreResult> GpuRestores(GpuSession* s, const std::vector<int32_t>& prompt,
                                        const std::vector<int32_t>& ref, const std::vector<int32_t>& after,
                                        const RestoreOptions& opt, Trace* unbroken, std::string* error);

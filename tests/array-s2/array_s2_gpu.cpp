@@ -1,5 +1,6 @@
 // array_s2_gpu.cpp -- the GPU side of the S2 array harness, on the shipped GPU surface
 // (superslm/gpu_1p0.h and its G5 schema bridge). See array_s2_shared.h for the interface.
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <memory>
@@ -210,12 +211,132 @@ WalkResult GpuWalk(GpuSession* s, const std::vector<int32_t>& ids) {
 	return r;
 }
 
-GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_tokens) {
+namespace {
+
+constexpr int32_t kJumpBudget = 64;
+// SslmGpuJumpOptions::mode takes sslm_abi.h's values, which this TU cannot include: SSLM_JUMP_EXACT is 1.
+constexpr int32_t kJumpExact = 1;
+
+// The forced chain from the walk state (the GPU twin of sslm_seq_forced_tokens): its full length, or -1 on a
+// failed query; up to `cap` ids into `out`.
+int32_t ForcedChain(GpuSession* s, SslmGpuSequenceHandle* seq, int32_t cap, std::vector<int32_t>* out) {
+	out->assign(static_cast<size_t>(cap > 0 ? cap : 1), -1);
+	int32_t count = 0, accepting = 0;
+	if (sslm_gpu_seq_forced_tokens(s->ctx, seq, cap > 0 ? out->data() : nullptr, cap, &count, &accepting) != SSLM_OK)
+		return -1;
+	out->resize(static_cast<size_t>(std::min(count, cap)));
+	return count;
+}
+
+// Advances the open row chunk by `s->budget` dispatches per submission until it closes. Returns the closing
+// sslm_gpu_ready's status (or the step's, on a refused step).
+SslmGpuStatus CloseChunk(GpuSession* s, SslmGpuSequenceHandle* seq) {
+	for (int guard = 0; guard < 4096; ++guard) {
+		SslmGpuStatus st = sslm_decode_step_gpu(s->ctx, seq, nullptr, s->budget);
+		if (st != SSLM_OK) return st;
+		int32_t ready = 0;
+		SslmGpuStatus out_status = SSLM_OK;
+		while (!ready) {
+			st = sslm_gpu_ready(s->ctx, seq, /*block=*/1, &ready, &out_status);
+			if (st != SSLM_OK) return st;
+		}
+		if (out_status != SSLM_OK) return out_status;
+		int32_t open = -1;
+		st = sslm_gpu_seq_rows_open(seq, &open);
+		if (st != SSLM_OK) return st;
+		if (open == 0) return SSLM_OK;
+	}
+	return SSLM_DEVICE_LOST;
+}
+
+// One row chunk of `kind` over `rows`, opened and closed. `*committed` receives sslm_gpu_seq_last_rows_committed.
+std::string RunChunk(GpuSession* s, SslmGpuSequenceHandle* seq, int32_t kind, const std::vector<int32_t>& rows,
+                     int32_t* admitted, int32_t* committed) {
+	SslmGpuRowsSpec spec{sizeof(SslmGpuRowsSpec), kind, rows.data(), static_cast<int32_t>(rows.size()), 0u};
+	*admitted = 0;
+	*committed = 0;
+	SslmGpuStatus st = sslm_gpu_seq_embed_rows(s->ctx, seq, &spec, admitted);
+	if (st != SSLM_OK) return Err("sslm_gpu_seq_embed_rows", st);
+	st = CloseChunk(s, seq);
+	if (st != SSLM_OK) return Err("row chunk close", st);
+	st = sslm_gpu_seq_last_rows_committed(seq, committed);
+	if (st != SSLM_OK) return Err("sslm_gpu_seq_last_rows_committed", st);
+	return "";
+}
+
+// GenMode::MultiRow. The prompt is read in SSLM_GPU_ROWS_PROMPT chunks of up to SSLM_GPU_MAX_ROWS rows and its
+// last row finished with the finish bridge; then every step is one SSLM_GPU_ROWS_EXACT_DRAFT chunk whose rows are
+// the pending token and the forced chain after it (up to SSLM_GPU_MAX_ROWS - 1 drafts; a one-row chunk when the
+// state is unforced). Each close commits rows 0..a-1: the a-1 drafts after the pending token are output tokens, and
+// sslm_gpu_seq_rows_produced is the token after them (-2 at the schema's end).
+void GenMultiRow(GpuSession* s, SslmGpuSequenceHandle* seq, const std::vector<int32_t>& prompt, int32_t max_tokens,
+                 GenResult* r) {
+	for (size_t i = 0; i < prompt.size(); i += SSLM_GPU_MAX_ROWS) {
+		const size_t n = std::min<size_t>(SSLM_GPU_MAX_ROWS, prompt.size() - i);
+		const std::vector<int32_t> rows(prompt.begin() + static_cast<std::ptrdiff_t>(i),
+		                                prompt.begin() + static_cast<std::ptrdiff_t>(i + n));
+		int32_t admitted = 0, committed = 0;
+		r->end = RunChunk(s, seq, SSLM_GPU_ROWS_PROMPT, rows, &admitted, &committed);
+		if (r->end.empty() && (admitted != static_cast<int32_t>(n) || committed != admitted))
+			r->end = "error:prompt chunk admitted " + std::to_string(admitted) + " committed " + std::to_string(committed) +
+			         " of " + std::to_string(n);
+		if (!r->end.empty()) return;
+		r->widest = std::max<int64_t>(r->widest, committed);
+	}
+	const auto t0 = std::chrono::steady_clock::now();
+	int32_t t = -1;
+	SslmGpuStatus st = SslmGpuSeqFinishTokenForG5Bridge(s->ctx, seq, &t);
+	if (st != SSLM_OK) {
+		r->end = Err("SslmGpuSeqFinishTokenForG5Bridge", st);
+		return;
+	}
+	r->end = "max_tokens";
+	std::vector<int32_t> chain;
+	while (t != -2 && static_cast<int32_t>(r->ids.size()) < max_tokens) {
+		r->ids.push_back(t);
+		if (static_cast<int32_t>(r->ids.size()) >= max_tokens) break;
+		if (ForcedChain(s, seq, SSLM_GPU_MAX_ROWS - 1, &chain) < 0) {
+			r->end = "error:sslm_gpu_seq_forced_tokens";
+			return;
+		}
+		std::vector<int32_t> rows{t};
+		rows.insert(rows.end(), chain.begin(), chain.end());
+		int32_t admitted = 0, committed = 0;
+		r->end = RunChunk(s, seq, SSLM_GPU_ROWS_EXACT_DRAFT, rows, &admitted, &committed);
+		if (!r->end.empty()) return;
+		if (committed < 1 || committed > admitted) {
+			r->end = "error:exact chunk admitted " + std::to_string(admitted) + " committed " + std::to_string(committed);
+			return;
+		}
+		r->widest = std::max<int64_t>(r->widest, committed);
+		if (committed > 1) ++r->jump_calls;
+		r->drafts += committed - 1;
+		for (int32_t k = 1; k < committed; ++k) r->ids.push_back(rows[static_cast<size_t>(k)]);
+		st = sslm_gpu_seq_rows_produced(seq, &t);
+		if (st != SSLM_OK) {
+			r->end = Err("sslm_gpu_seq_rows_produced", st);
+			return;
+		}
+		r->end = "max_tokens";
+	}
+	if (t == -2) r->end = "dead_end";
+	r->ms = MsSince(t0);
+}
+
+}  // namespace
+
+GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_tokens, GenMode mode) {
 	GenResult r;
 	SslmGpuSequenceHandle* seq = nullptr;
 	SslmGpuStatus st = NewBoundSeq(s, &seq);
 	if (st != SSLM_OK) {
 		r.end = Err("bind", st);
+		return r;
+	}
+	if (mode == GenMode::MultiRow) {
+		GenMultiRow(s, seq, prompt, max_tokens, &r);
+		r.accepting = Accepting(s, seq);
+		sslm_gpu_seq_release(s->ctx, seq);
 		return r;
 	}
 	st = SslmGpuSeqPrefillPromptForG5Bridge(s->ctx, seq, prompt.data(), static_cast<int32_t>(prompt.size()),
@@ -225,11 +346,37 @@ GenResult GpuGen(GpuSession* s, const std::vector<int32_t>& prompt, int32_t max_
 		sslm_gpu_seq_release(s->ctx, seq);
 		return r;
 	}
-	// No per-token queries here: `gputime` times this loop.
+	SslmGpuJumpOptions exact{};
+	exact.struct_size = sizeof(exact);
+	exact.mode = kJumpExact;  // no draft: the forced chain after the pending token
+	std::vector<int32_t> forced(kJumpBudget), chain;
+	// No per-token queries in Plain: `gputime` times this loop.
 	const auto t0 = std::chrono::steady_clock::now();
 	int32_t last = prompt.back();
 	r.end = "max_tokens";
 	while (static_cast<int32_t>(r.ids.size()) < max_tokens) {
+		if (mode == GenMode::JumpExact && !r.ids.empty()) {
+			const int32_t count = ForcedChain(s, seq, 0, &chain);
+			if (count < 0) {
+				r.end = "error:sslm_gpu_seq_forced_tokens";
+				break;
+			}
+			if (count > 0) {
+				int32_t got = 0;
+				st = sslm_gpu_seq_jump_forward(s->ctx, seq, last, kJumpBudget, &exact, forced.data(), kJumpBudget, &got);
+				if (st != SSLM_OK) {
+					r.end = Err("sslm_gpu_seq_jump_forward", st);
+					break;
+				}
+				if (got > 0) {
+					++r.jump_calls;
+					r.drafts += got;
+					r.ids.insert(r.ids.end(), forced.begin(), forced.begin() + got);
+					last = forced[static_cast<size_t>(got - 1)];  // ignored: the verb leaves the sequence ready
+				}
+				if (static_cast<int32_t>(r.ids.size()) >= max_tokens) break;
+			}
+		}
 		int32_t t = -1;
 		const auto ts = std::chrono::steady_clock::now();
 		st = SslmGpuSeqDecodeStepForG5Bridge(s->ctx, seq, last, s->budget, &t);

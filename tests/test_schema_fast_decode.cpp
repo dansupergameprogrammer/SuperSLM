@@ -4869,7 +4869,7 @@ void Cell_TF_4b() {
 // J1-X (plan rev 1.3.3 §5.10, §11.4): the exact jump-forward cells.
 #include "schema_fast_decode/sfd_cells_x.inc"
 
-// Engine 1.19, the clean stop at the schema's end: the CPU cells E1-E7 (the -2 contract's pins).
+// Engine 1.19, the clean stop at the schema's end: the CPU cells E1-E8 (the -2 contract's pins).
 #include "schema_fast_decode/sfd_cells_cleanstop.inc"
 
 // Q6C.7 [Q6 C] One thread, no hook (the box's 1-thread jump-forward-on arm; A/B 2026-10-20): the §5.6 host
@@ -5069,6 +5069,7 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("CS.E5", Cell_CS_E5);
 	run("CS.E6", Cell_CS_E6);
 	run("CS.E7", Cell_CS_E7);
+	run("CS.E8", Cell_CS_E8);
 	std::printf("schema fast-decode (M1, J1, TF, J1-X, clean stop) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
 	checks += GChecks;
 	failures += GFailures;

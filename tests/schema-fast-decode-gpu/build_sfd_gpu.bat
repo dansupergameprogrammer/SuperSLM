@@ -79,7 +79,7 @@ call :exe sfdg_cell_g12_6 G1J
 call :exe sfdg_cell_g12_7 G1J
 call :exe sfdg_cell_g12_10 G1J
 call :exe schema_fast_decode_gpu_p2_ref G1J "%ENG%\tools\"
-rem Engine 1.19, the clean stop at the schema's end: cells G1-G9 (sfdg_cleanstop.h).
+rem Engine 1.19, the clean stop at the schema's end: cells G1-G10 (sfdg_cleanstop.h).
 call :exe sfdg_cell_cs_g1 CS
 call :exe sfdg_cell_cs_g2 CS
 call :exe sfdg_cell_cs_g3 CS
@@ -89,6 +89,7 @@ call :exe sfdg_cell_cs_g6 CS
 call :exe sfdg_cell_cs_g7 CS
 call :exe sfdg_cell_cs_g8 CS
 call :exe sfdg_cell_cs_g9 CS
+call :exe sfdg_cell_cs_g10 CS
 echo SFDG BUILD: %NLINKED% linked, %NRED% red by link, %NCOMPILE% red by compile
 exit /b 0
 

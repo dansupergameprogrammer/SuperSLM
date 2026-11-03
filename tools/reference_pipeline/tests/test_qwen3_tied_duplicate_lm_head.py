@@ -365,3 +365,213 @@ def test_untied_checkpoint_keeps_its_own_lm_head_even_when_byte_identical_to_the
     model = pipeline.load_model(checkpoint)
     assert "lm_head" in model.weights
     assert np.array_equal(np.asarray(model.weights["lm_head"]), np.asarray(model.weights["embed"]))
+
+
+# ==============================================================================
+# Engine 1.19 fold (coverage audit gaps 1 and 2): where the difference sits, and how the
+# checkpoint is stored
+# ==============================================================================
+
+# The compare chunk the cells below inject in place of the production 16 MiB, so a tensor of
+# a few hundred bytes spans many chunks. The guard cell proves the injection reaches the
+# comparison; without it a chunk cell would pass vacuously on a one-chunk tensor.
+_SMALL_CHUNK = 64
+
+
+class _RecordingBytes:
+    """A byte sequence that records each slice the comparison takes of it."""
+
+    def __init__(self, raw):
+        self._raw = np.frombuffer(bytes(raw), dtype=np.uint8)
+        self.slices = []
+
+    def __len__(self):
+        return len(self._raw)
+
+    def __getitem__(self, key):
+        self.slices.append((key.start, key.stop))
+        return self._raw[key]
+
+
+def test_the_injected_compare_chunk_is_the_one_the_comparison_uses(monkeypatch):
+    """Guard for the chunk cells: with `_STORED_COMPARE_CHUNK` patched, the comparison reads
+    the tensor in slices no wider than the patched chunk and reads every slice up to the end
+    when the bytes agree."""
+    pipeline = require(MODULE)
+    monkeypatch.setattr(pipeline, "_STORED_COMPARE_CHUNK", _SMALL_CHUNK)
+    size = _SMALL_CHUNK * 5 + 7
+    left, right = _RecordingBytes(bytes(size)), _RecordingBytes(bytes(size))
+    assert pipeline._first_differing_byte(left, right) is None
+    assert len(left.slices) == 6
+    assert all(min(stop, size) - start <= _SMALL_CHUNK for start, stop in left.slices)
+    assert left.slices[-1][1] >= size
+
+
+def _byte_flipped_at(offset):
+    def build(embed):
+        raw = bytearray(embed["raw"])
+        raw[offset] ^= 0x01
+        return _entry(embed["dtype"], embed["shape"], raw)
+    return build
+
+
+def _planted_offsets(embed_size):
+    """`{case: offset}`: the last byte (a ragged final chunk, since the embedding is not a
+    multiple of the chunk), the first byte past chunk 1, and the last byte of chunk 1."""
+    assert embed_size % _SMALL_CHUNK != 0 and embed_size > 3 * _SMALL_CHUNK, embed_size
+    return {"last-byte": embed_size - 1, "first-byte-past-chunk-1": _SMALL_CHUNK,
+            "last-byte-of-chunk-1": _SMALL_CHUNK - 1}
+
+
+@pytest.mark.parametrize("case", ["last-byte", "first-byte-past-chunk-1",
+                                  "last-byte-of-chunk-1"])
+def test_a_head_differing_only_deep_in_the_tensor_is_refused_at_the_planted_byte(
+        case, tmp_path, monkeypatch):
+    """Audit gap 1. A tied head equal to the embedding everywhere except one byte, placed
+    where a prefix or first-chunk comparison would not look, is refused by
+    `TiedLmHeadMismatch`; the message names both tensors and reports the planted offset."""
+    pipeline = require(MODULE)
+    monkeypatch.setattr(pipeline, "_STORED_COMPARE_CHUNK", _SMALL_CHUNK)
+    tensors = _backbone(**_VARIANTS["qwen3-bf16"])
+    embed = tensors[EMBED]
+    offset = _planted_offsets(len(embed["raw"]))[case]
+    checkpoint = _write_checkpoint(
+        tmp_path / "checkpoint", _with_lm_head(tensors, _byte_flipped_at(offset)(embed)),
+        tie_word_embeddings=True)
+    with pytest.raises(pipeline.TiedLmHeadMismatch) as caught:
+        pipeline.load_model(checkpoint)
+    message = str(caught.value)
+    assert LM_HEAD in message and EMBED in message, message
+    assert f"first at byte {offset})" in message, message
+
+
+def _shard_split(tensors, lm_head_shard_name, rest_shard_name):
+    """`{shard filename: {name: entry}}`: `lm_head.weight` alone in its own shard, every
+    other tensor (the embedding included) in the other."""
+    shards = {rest_shard_name: {}, lm_head_shard_name: {}}
+    for name, entry in tensors.items():
+        shards[lm_head_shard_name if name == LM_HEAD else rest_shard_name][name] = entry
+    return {name: entries for name, entries in shards.items() if entries}
+
+
+def _write_sharded_checkpoint(checkpoint_dir, tensors, *, tie_word_embeddings):
+    """The same checkpoint `_write_checkpoint` writes, stored as an index plus two shards,
+    with `lm_head.weight` in a different shard from the embedding (as a sharded checkpoint
+    that stores the head last does)."""
+    checkpoint_dir = _write_checkpoint(checkpoint_dir, tensors,
+                                       tie_word_embeddings=tie_word_embeddings)
+    (checkpoint_dir / "model.safetensors").unlink()
+    first, second = "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"
+    weight_map = {}
+    for shard_name, entries in _shard_split(tensors, second, first).items():
+        header, payload, offset = {}, bytearray(), 0
+        for name, entry in entries.items():
+            header[name] = {"dtype": entry["dtype"], "shape": list(entry["shape"]),
+                            "data_offsets": [offset, offset + len(entry["raw"])]}
+            payload += entry["raw"]
+            offset += len(entry["raw"])
+            weight_map[name] = shard_name
+        header["__metadata__"] = {"format": "pt"}
+        header_bytes = json.dumps(header).encode("utf-8")
+        with open(checkpoint_dir / shard_name, "wb") as handle:
+            handle.write(len(header_bytes).to_bytes(8, "little"))
+            handle.write(header_bytes)
+            handle.write(bytes(payload))
+    (checkpoint_dir / "model.safetensors.index.json").write_text(
+        json.dumps({"metadata": {"total_size": sum(len(e["raw"]) for e in tensors.values())},
+                    "weight_map": weight_map}), encoding="utf-8")
+    return checkpoint_dir
+
+
+def _bare(tensors):
+    """The same tensors under the bare namespace (`embed_tokens.weight`, no `model.`)."""
+    return {(name[len("model."):] if name.startswith("model.") else name): entry
+            for name, entry in tensors.items()}
+
+
+def test_the_sharded_writer_puts_the_head_and_the_embedding_in_different_shards(tmp_path):
+    """Guard for the sharded cells: the checkpoint is read through the sharded reader, and
+    the head and the embedding come from different shard files."""
+    pipeline = require(MODULE)
+    tensors = _backbone(**_VARIANTS["qwen3-bf16"])
+    checkpoint = _write_sharded_checkpoint(tmp_path / "checkpoint",
+                                           _with_lm_head(tensors, tensors[EMBED]),
+                                           tie_word_embeddings=True)
+    assert not (checkpoint / "model.safetensors").exists()
+    reader = pipeline._open_checkpoint_tensors(checkpoint)
+    assert type(reader).__name__ == "_ShardedSafeTensors"
+    index = json.loads((checkpoint / "model.safetensors.index.json").read_text())
+    assert index["weight_map"][LM_HEAD] != index["weight_map"][EMBED]
+    assert reader.stored(LM_HEAD)[2].tobytes() == reader.stored(EMBED)[2].tobytes()
+
+
+def test_sharded_tied_checkpoint_with_byte_identical_lm_head_converts_exactly_as_if_it_were_absent(
+        tmp_path, tmp_path_factory):
+    """Audit gap 2. The identical duplicate in its own shard is accepted, and the `.sslm` and
+    cache equal those of the single-file, head-free twin."""
+    _checkpoint, absent_cache, absent_sslm = _absent_twin("qwen3-bf16", tmp_path_factory)
+    tensors = _backbone(**_VARIANTS["qwen3-bf16"])
+    checkpoint = _write_sharded_checkpoint(tmp_path / "checkpoint",
+                                           _with_lm_head(tensors, tensors[EMBED]),
+                                           tie_word_embeddings=True)
+    cache, sslm = _convert(checkpoint, tmp_path / "out")
+    assert sslm == absent_sslm, "the sharded duplicate head changed the converted .sslm"
+    assert _cache_contents(cache) == _cache_contents(absent_cache)
+
+
+@pytest.mark.parametrize("case", ["one-bit-flipped", "signed-zero", "last-byte"])
+def test_sharded_tied_checkpoint_with_a_differing_lm_head_is_refused_by_the_named_error(
+        case, tmp_path):
+    """Audit gap 2. A differing head in its own shard is refused by `TiedLmHeadMismatch`,
+    naming both tensors and the planted offset. `signed-zero` is value-equal and
+    byte-different."""
+    pipeline = require(MODULE)
+    tensors = _setup_zero(_backbone(**_VARIANTS["qwen3-bf16"]))
+    embed = tensors[EMBED]
+    if case == "last-byte":
+        lm_head, offset = _byte_flipped_at(len(embed["raw"]) - 1)(embed), len(embed["raw"]) - 1
+    else:
+        lm_head, offset = _differing_heads()[case](embed)[0], 0 if case == "one-bit-flipped" else 1
+    checkpoint = _write_sharded_checkpoint(tmp_path / "checkpoint",
+                                           _with_lm_head(tensors, lm_head),
+                                           tie_word_embeddings=True)
+    with pytest.raises(pipeline.TiedLmHeadMismatch) as caught:
+        pipeline.load_model(checkpoint)
+    message = str(caught.value)
+    assert LM_HEAD in message and EMBED in message, message
+    assert f"first at byte {offset})" in message, message
+
+
+_BARE_EMBED = "embed_tokens.weight"
+
+
+def test_bare_namespace_tied_checkpoint_with_byte_identical_lm_head_converts_as_if_absent(
+        tmp_path):
+    """Audit gap 2, bare namespace. A tied checkpoint whose backbone carries no `model.`
+    prefix and whose `lm_head.weight` is a byte copy of `embed_tokens.weight` converts to the
+    same `.sslm` and cache as its own head-free bare twin."""
+    tensors = _bare(_backbone(**_VARIANTS["qwen3-bf16"]))
+    absent = _write_checkpoint(tmp_path / "absent", tensors, tie_word_embeddings=True)
+    absent_cache, absent_sslm = _convert(absent, tmp_path / "out-absent")
+    duplicate = _write_checkpoint(tmp_path / "duplicate",
+                                  _with_lm_head(tensors, tensors[_BARE_EMBED]),
+                                  tie_word_embeddings=True)
+    cache, sslm = _convert(duplicate, tmp_path / "out-duplicate")
+    assert sslm == absent_sslm
+    assert _cache_contents(cache) == _cache_contents(absent_cache)
+
+
+@pytest.mark.parametrize("case", ["one-bit-flipped", "signed-zero"])
+def test_bare_namespace_tied_checkpoint_with_a_differing_lm_head_is_refused(case, tmp_path):
+    """Audit gap 2, bare namespace. The comparison finds the bare embedding: a differing head
+    is refused by `TiedLmHeadMismatch` naming `embed_tokens.weight` without a prefix."""
+    pipeline = require(MODULE)
+    tensors = _bare(_setup_zero(_backbone(**_VARIANTS["qwen3-bf16"])))
+    lm_head, _prop = _differing_heads()[case](tensors[_BARE_EMBED])
+    checkpoint = _write_checkpoint(tmp_path / "checkpoint", _with_lm_head(tensors, lm_head),
+                                   tie_word_embeddings=True)
+    with pytest.raises(pipeline.TiedLmHeadMismatch) as caught:
+        pipeline.load_model(checkpoint)
+    message = str(caught.value)
+    assert f"{LM_HEAD}, which is not a stored copy of {_BARE_EMBED}:" in message, message
+    assert "byte" in message, message

@@ -1,6 +1,6 @@
-# Engine 1.19, the clean stop at the schema's end: CTest wiring for the GPU cells G1-G9 (sfdg_cleanstop.h,
-# sfdg_cell_cs_g1.cpp .. sfdg_cell_cs_g9.cpp). Included from CMakeLists.txt's WIN32 GPU block when BUILD_TESTING is on
-# and the compiler is MSVC (the flags below are MSVC's). The CPU cells E1-E7 run inside superslm_tests
+# Engine 1.19, the clean stop at the schema's end: CTest wiring for the GPU cells G1-G10 (sfdg_cleanstop.h,
+# sfdg_cell_cs_g1.cpp .. sfdg_cell_cs_g10.cpp). Included from CMakeLists.txt's WIN32 GPU block when BUILD_TESTING is on
+# and the compiler is MSVC (the flags below are MSVC's). The CPU cells E1-E8 run inside superslm_tests
 # (tests/schema_fast_decode/sfd_cells_cleanstop.inc).
 #
 # The engine is compiled once with the schema fast-decode GPU suite's seam definitions (build_sfd_gpu.bat's), and each
@@ -16,7 +16,7 @@ target_include_directories(superslm_sfdg_cs_engine PRIVATE tests)
 target_compile_options(superslm_sfdg_cs_engine PRIVATE /W4 /fp:precise)
 target_link_libraries(superslm_sfdg_cs_engine PUBLIC d3d12 dxgi dxguid shlwapi psapi)
 add_dependencies(superslm_sfdg_cs_engine superslm_gpu_shaders)
-foreach(_sslm_cs_cell 1 2 3 4 5 6 7 8 9)
+foreach(_sslm_cs_cell 1 2 3 4 5 6 7 8 9 10)
 	set(_sslm_cs_target sfdg_cell_cs_g${_sslm_cs_cell})
 	add_executable(${_sslm_cs_target} tests/schema-fast-decode-gpu/${_sslm_cs_target}.cpp)
 	target_link_libraries(${_sslm_cs_target} PRIVATE superslm_sfdg_cs_engine)

@@ -1,4 +1,4 @@
-// Engine 1.19, the clean stop at the schema's end: the CPU cells E1-E7 of the design note's §4 (the contract's pins).
+// Engine 1.19, the clean stop at the schema's end: the CPU cells E1-E7 of the design note's §4 (the contract's pins), and E8 (coverage audit gap 8).
 // Included by tests/test_schema_fast_decode.cpp inside its anonymous namespace, after the J1-X cells, so it shares
 // the suite's F-SFD fixture, rig, blob reader, reference tables and seams, and runs wherever the suite runs (the
 // full suite, the forced-tier suites and the scalar-forced standalone).
@@ -24,6 +24,7 @@
 //          the NULL-options host loop.
 //   CS.E6  save and restore across the end (SSB5 from a plain holder, SSB6 from a budget holder).
 //   CS.E7  a non-accepting dead end (the degenerate-row seam at a choice state): -2 with accepting 0.
+//   CS.E8  jump-forward with a draft that runs past the closing token: the tail kept through it and nothing after.
 
 // Both accepting reads, which must agree; -1 when either call failed, -9 when they disagree.
 int32_t CsAccepting(sslm_model m, sslm_seq s) {
@@ -385,4 +386,58 @@ void Cell_CS_E7() {
 #else
 	CHECK_MSG(false, "[CS.E7] the suite's library lacks SUPERSLM_CPU_G5_FINISH_ROW_FAULT_INJECTION (CMakeLists.txt)");
 #endif
+}
+
+// CS.E8 jump-forward with a draft that runs past the closing token (coverage audit 1.19, gap 8). From the decode-only
+// run's state after token k (token k - 1 pending), an EXACT draft of the true tail through the closing token, then
+// the closing token again, then a special token. Nothing is legal after the closing token, so the verb returns
+// SSLM_OK and keeps exactly the true tail: the overrun is never committed. The next decode is -2 with accepting 1, the
+// context is the prompt plus the decode-only stream (L tokens), and the end state equals the decode-only run's at its
+// -2. Tails of 1, 2 and 5 tokens.
+void Cell_CS_E8() {
+	const Sfd& f = GetSfd();
+	if (!f.ok) return;
+	CHECK_MSG(!f.specials.empty(), "[CS.E8] the fixture's tokenizer declares no special token");
+	if (f.specials.empty()) return;
+	const int32_t special = *f.specials.begin();
+	for (const CsCase& c : CsCases(f)) {
+		const CsRun whole = CsGreedyEnd(f, c);
+		const OffRun off = DecodeOnly(f.m1->m, c.schema, *c.prompt);
+		CHECK_MSG(off.ok && off.dead_end && off.stream == whole.stream, "[CS.E8] %s: the decode-only run did not end as "
+		          "E1's (%zu tokens)", c.schema, off.stream.size());
+		if (!off.ok || !off.dead_end || off.stream.empty()) continue;
+		const size_t L = off.stream.size();
+		for (size_t d : {size_t(1), size_t(2), size_t(5)}) {
+			if (d >= L) continue;
+			const size_t k = L - d;  // tokens decoded; stream[k-1] pending, the true tail stream[k..L)
+			Rig rig(f.m1->m, 1, 16);
+			sslm_seq s = rig.Restore(off.blob_at[k]);
+			if (!s) continue;
+			const std::vector<int32_t> tail(off.stream.begin() + static_cast<std::ptrdiff_t>(k), off.stream.end());
+			std::vector<int32_t> draft = tail;
+			draft.push_back(off.stream.back());
+			draft.push_back(special);
+			const sslm_decode_params g = rig.Greedy();
+			const Jump j = JumpDraft(rig.m, s, static_cast<int32_t>(draft.size()) + 1, &g, rig.W(), draft);
+			CHECK_MSG(j.st == SSLM_OK && j.forced == tail, "[CS.E8] %s, tail of %zu: the verb gave %d, kept %s from the "
+			          "draft %s; want OK and exactly the tail %s", c.schema, d, static_cast<int>(j.st), Str(j.forced).c_str(),
+			          Str(draft).c_str(), Str(tail).c_str());
+			const Blob mid = rig.State(s);
+			CHECK_MSG(mid.ok && mid.ready == 1 && CsAccepting(rig.m, s) == 1 &&
+			              mid.ctx == static_cast<int64_t>(c.prompt->size() + L),
+			          "[CS.E8] %s, tail of %zu: after the verb ready %u accepting %d context %lld; want 1, 1 and the prompt "
+			          "%zu + %zu", c.schema, d, mid.ready, CsAccepting(rig.m, s), static_cast<long long>(mid.ctx),
+			          c.prompt->size(), L);
+			int32_t t = -100;
+			const sslm_status st = rig.Decode1(s, g, rig.W(), &t);
+			const std::vector<uint8_t> end = rig.Save(s);
+			CHECK_MSG(st == SSLM_OK && t == -2 && CsAccepting(rig.m, s) == 1, "[CS.E8] %s, tail of %zu: the next decode gave "
+			          "%d/%d accepting %d, want OK, -2, 1", c.schema, d, static_cast<int>(st), t, CsAccepting(rig.m, s));
+			CHECK_MSG(ParseBlob(end).ctx == static_cast<int64_t>(c.prompt->size() + L), "[CS.E8] %s, tail of %zu: context "
+			          "%lld at the end, want the prompt %zu + %zu", c.schema, d,
+			          static_cast<long long>(ParseBlob(end).ctx), c.prompt->size(), L);
+			CHECK_MSG(end == whole.end_blob, "[CS.E8] %s, tail of %zu: the end state differs from the decode-only run's at "
+			          "its -2", c.schema, d);
+		}
+	}
 }
