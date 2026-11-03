@@ -68,8 +68,9 @@ release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB
   `superslm_tests`, as CMake does (before, the link failed with `LNK2019` on `RunBatchedThreadingCells`). The T-2807
   X2 export-slot check's consumer calls all 55 C verbs, including the 1.14.0 and 1.15.0 prefix save/restore and
   jump-forward verbs it had missed. The schema fast-decode GPU tools (P2.16 reference, jump-forward bench, GX.3
-  bench) are compiled and linked by `build.bat`, and `tests\t3094-multicommand-s0` runs there as a reported,
-  non-gating red suite, so both build-recipe checks pass.
+  bench) are compiled and linked by `build.bat`. `tests\t3094-multicommand-s0`, a red suite by design for work not
+  yet built, is allowlisted with its reason rather than run on every build, so both build-recipe checks pass.
+  `requirements.txt` now declares `capstone`, which the FP-free scan imports.
 
 ## [1.18.1] - 2026-10-31
 

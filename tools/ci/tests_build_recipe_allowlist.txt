@@ -1,0 +1,3 @@
+# tools/ci/check_tests_have_build_recipe.py's allowlist. Format: `<suite-dir-name>  # <reason>`.
+# Every entry is a justified exception, reported on every run, never silently dropped.
+t3094-multicommand-s0  # red suite by design: its S0 product cells assert multi-command converter behaviour not built yet (see test_s0_red.py); run it directly with pytest when that arc starts, then wire it and drop this line

@@ -35,3 +35,7 @@ jinja2~=3.1.4
 # already had, uncaught until this suite ran anywhere it was not already installed
 # ambient-globally (nothing in ctest or CI ran this suite before T-2919).
 pydantic~=2.8.2
+# 1.19 box pass 1 (workhorse): tests/ci/check_fp_free_scan.py imports capstone directly to
+# disassemble the built objects; CI installed it ad hoc (.github/workflows/tests.yml) and a box
+# without it could not run the scan. Bounded to the 5.x line until verified against a newer major.
+capstone>=5.0,<6
