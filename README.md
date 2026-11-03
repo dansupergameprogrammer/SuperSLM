@@ -14,7 +14,12 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-Current release: **[1.18.1](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.18.1)**, a GPU fix release. A
+Current release: **[1.19.0](https://github.com/dansupergameprogrammer/SuperSLM/releases/tag/v1.19.0)**. Schemas can
+contain JSON arrays, and a reply that completes its document stops cleanly: the engine's `-2` with the accepting bit
+set means the document is finished, not a fault. The Qwen3 converter accepts a checkpoint that stores a byte-identical
+copy of a tied head. See the [1.19.0 release note](docs/releases/1.19.0.md).
+
+In 1.18.1, a GPU fix release, a
 process that loads the library from a DLL (an Unreal Engine editor with the SuperSLM-Unreal plugin, for example) no longer
 crashes as it exits after GPU work: no D3D12 object is released by a static destructor any more. See the
 [1.18.1 release note](docs/releases/1.18.1.md).

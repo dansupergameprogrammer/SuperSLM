@@ -2,10 +2,10 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
-## [1.19.0] - unreleased
+## [1.19.0] - 2026-11-03
 
 JSON arrays in schema-constrained generation, and a clean stop at the schema's end. `docs/releases/1.19.0.md` is the
-release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB6`, `SLM5`, `SLM6`, `SPX1`) changes.
+release note. No ABI, struct layout, status or save format (`SSB5`, `SSB6`, `SLM5`, `SLM6`, `SPX1`) changes.
 
 ### Added
 
