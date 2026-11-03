@@ -217,7 +217,11 @@ def _assert_flow_used(log: Path, real, out: Path):
     for role, expected_count in (("capture", 3), ("verifier", 3)):
         ran = [Path(path) for logged_role, path in launches if logged_role == role]
         assert len(ran) == expected_count, (role, launches)
-        assert all(path == real[role].resolve() for path in ran), (role, ran)
+        expected = real[role].resolve()
+        if _WINDOWS:
+            # The log records the script that ran: the `.cmd` wrapper's sibling `-impl.py` (see _executable).
+            expected = expected.with_name(f"{expected.stem}-impl.py")
+        assert all(path == expected for path in ran), (role, ran)
     assert out.is_file(), "the flow did not publish its final artifact"
     assert json.loads((out.parent / "work" / "flow-report.json").read_text(encoding="utf-8"))
 

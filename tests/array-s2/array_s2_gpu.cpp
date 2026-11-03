@@ -224,7 +224,7 @@ int32_t ForcedChain(GpuSession* s, SslmGpuSequenceHandle* seq, int32_t cap, std:
 	int32_t count = 0, accepting = 0;
 	if (sslm_gpu_seq_forced_tokens(s->ctx, seq, cap > 0 ? out->data() : nullptr, cap, &count, &accepting) != SSLM_OK)
 		return -1;
-	out->resize(static_cast<size_t>(std::min(count, cap)));
+	out->resize(static_cast<size_t>((std::min)(count, cap)));
 	return count;
 }
 
