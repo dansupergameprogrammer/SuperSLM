@@ -281,7 +281,8 @@ void GenMultiRow(GpuSession* s, SslmGpuSequenceHandle* seq, const std::vector<in
 			r->end = "error:prompt chunk admitted " + std::to_string(admitted) + " committed " + std::to_string(committed) +
 			         " of " + std::to_string(n);
 		if (!r->end.empty()) return;
-		r->widest = std::max<int64_t>(r->widest, committed);
+		// `widest` counts EXACT_DRAFT closes only: prompt chunks are always wide, so counting them would let
+		// gen_gpu_arms_engaged pass on an arm that never committed a multi-row draft.
 	}
 	const auto t0 = std::chrono::steady_clock::now();
 	int32_t t = -1;
