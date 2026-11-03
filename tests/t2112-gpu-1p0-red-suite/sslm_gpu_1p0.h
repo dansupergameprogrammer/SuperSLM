@@ -138,7 +138,10 @@ typedef enum SslmGpuStatus {
     SSLM_GPU_PREFIX_REJECTED,
     SSLM_GPU_PREFIX_SCHEMA_MISMATCH,
     /* Precached prefixes (1.16.0), appended LAST: 30. */
-    SSLM_RESTORE_PRODUCER_MISMATCH
+    SSLM_RESTORE_PRODUCER_MISMATCH,
+    /* Schema skip-ahead on the GPU (1.17.0), appended LAST: 31, 32. */
+    SSLM_GPU_FORCED_TABLE_ABSENT,
+    SSLM_GPU_CONTEXT_CAP_EXCEEDED
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */

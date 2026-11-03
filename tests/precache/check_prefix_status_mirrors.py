@@ -29,6 +29,15 @@ def main() -> None:
                  "t2139_gate_c_real_suite_side_check_compiles",
                  "t2141_gate_c_t2138_suite_side_must_accept_compiles"):
         assert gate in cmake, f"Gate C compile entry {gate} is absent"
+    # Schema skip-ahead on the GPU (1.17.0): the two names appended after the producer status, in every
+    # mirror above, at 31 and 32.
+    for added, ordinal in (("SSLM_GPU_FORCED_TABLE_ABSENT", 31), ("SSLM_GPU_CONTEXT_CAP_EXCEEDED", 32)):
+        assert re.search(rf"X\({added}\)", text["public X-macro"]), f"public {added} absent"
+        for name in ("G5 mirror", "Gate C identity mirror"):
+            assert re.search(rf"\b{added}\s*=\s*{ordinal}\b", text[name]), f"{name} lacks {added} = {ordinal}"
+        assert re.search(rf"\b{status}\s*,.*?\b{added}\s*,.*?\bSSLM_STATUS_NEXT_FREE\b", positional, re.S), (
+            f"T2138 positional mirror lacks {added} before its sentinel")
+        assert added in text["API documentation"], f"API documentation lacks {added}"
     print("prefix status mirrors: public macro, three mirrors, docs, Gate C entries present")
 
 

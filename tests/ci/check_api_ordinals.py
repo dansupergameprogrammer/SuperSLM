@@ -19,9 +19,12 @@ import sys
 
 # Recorded floors (plan 7.17): the statements counted at the anchor, plus the new status once.
 # Rev 1.18.4 (G11): the new status's floor is 2, its paired sentence and its own-line statement.
-FLOORS = {"SSLM_KV_BUDGET_EXCEEDED": 2, "SSLM_RESTORE_PRODUCER_MISMATCH": 2}
+FLOORS = {"SSLM_KV_BUDGET_EXCEEDED": 2, "SSLM_RESTORE_PRODUCER_MISMATCH": 2,
+          # Schema skip-ahead on the GPU (1.17.0): each new status once, in docs/api.md's status list.
+          "SSLM_GPU_FORCED_TABLE_ABSENT": 1, "SSLM_GPU_CONTEXT_CAP_EXCEEDED": 1}
 # The new status and the ordinal the release states it at.
-REQUIRED = {"SSLM_RESTORE_PRODUCER_MISMATCH": 30}
+REQUIRED = {"SSLM_RESTORE_PRODUCER_MISMATCH": 30, "SSLM_GPU_FORCED_TABLE_ABSENT": 31,
+            "SSLM_GPU_CONTEXT_CAP_EXCEEDED": 32}
 
 _ORDINAL = re.compile(r"\bordinal\s+(\d+)\b", re.I)
 _BACKTICKED = re.compile(r"`(SSLM_[A-Z0-9_]+)`")

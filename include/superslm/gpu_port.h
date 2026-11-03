@@ -490,6 +490,53 @@ struct GpuCallTiming {
 	double readback_ms = 0.0;
 };
 GpuCallTiming LastCallTiming();
+// Multi-row GPU plan 10.4 (ruling 45a): the process's monotonic total, in microseconds, of the GPU-measured busy time
+// of every call that published a timing to LastCallTiming() (each call's own `gpu_busy_ms`: one-row and widened
+// slices, every member of sslm_decode_step_batch_gpu, which submits and drains its members one at a time, and the
+// catch paths' "as far as it got" publishes) plus every widened logits stage (LastLogitsStageTiming()'s `gpu_ms`, its
+// own submission), plus (ruling 46) every one-row device-logits finish (RunDeviceLogits: the M = 1 path) and every
+// device K/V restore an Exact close or an Exact chunk's rollback submits, each between a timestamp pair of its own.
+// A caller takes the difference across the calls it made; beside another thread's calls the difference includes
+// theirs. Instrumentation only: not part of the C ABI, and nothing in the engine reads it.
+//
+// Ruling 46 (46a) on LastCallTiming(): a finish bridge call that does not drive (the standalone finish, and the
+// decode bridge's ready shortcut) is its own call, and when its finish submits on the device it publishes that
+// submission's timing as the last call's (record, submit-wait, GPU and read-back of the logits submission; one
+// per-dispatch entry). A host-path finish submits nothing and publishes nothing. A device finish or K/V restore inside
+// a call that already published (the decode bridge's finish after its drive; the M = 1 Exact close's finish and an
+// Exact close's restore inside sslm_gpu_ready; a rollback's restore) adds its four times to that published timing
+// instead (AddToLastCallTimingNoThrow). The widened logits stage stays on LastLogitsStageTiming() alone.
+double CumulativeGpuBusyUs();
+// The engine's publish sites add each measured submission here (internal; never a caller's).
+void AddCumulativeGpuBusyMs(double gpu_ms) noexcept;
+// Ruling 46 (internal; never a caller's): a standalone finish's own timing, published as the last call's and counted;
+// and a submission that publishes no timing of its own, counted and added to the last published call's.
+void PublishOwnCallTimingNoThrow(const GpuCallTiming& timing) noexcept;
+void AddToLastCallTimingNoThrow(const GpuCallTiming& extra) noexcept;
+
+// Multi-row GPU plan §4.7 (MR5), ruling 27: the GPU time of the most recent widened logits stage -- the logits
+// sites an Exact close (sslm_gpu_seq_embed_rows with SSLM_GPU_ROWS_EXACT_DRAFT) or a jump verb's Exact pass runs
+// for its rows on a device-resident head, in one submission -- between a timestamp before its first row's work and
+// one after its last row's read-back copy, on the GPU's own clock. That stage alone: not the layers, not the host's
+// narrowing and argmax. `rows` is the stage's row count; `stages` counts the stages run in this process (0: none
+// yet). gpu_ms is 0.0 when the queue reports no timestamp frequency. A process-wide diagnostic, like
+// LastCallTiming(): with several threads it is whichever stage published last.
+// The stage runs on an Exact close of two or more rows; a one-row EXACT_DRAFT close takes Off's own one-row logits
+// call and no stage (ruling 37), so g(1) comes from the measured table (gpu_rows_cost_table.h); that call's GPU time
+// goes to CumulativeGpuBusyUs() and the close's LastCallTiming() (ruling 46), never to this record.
+// Ruling 33 S7: the same record carries the host side of the most recent Exact close (an EXACT_DRAFT close at any M,
+// or a jump pass's close): host_finish_ms is the wall time, on the closing thread, of its rows' host finishes (final_norm,
+// then each row's logits path, narrowing, mask and argmax), excluding the widened stage's submission and wait;
+// host_rows is how many rows it finished; closes counts the Exact closes in this process.
+struct GpuLogitsStageTiming {
+	double gpu_ms = 0.0;
+	uint32_t rows = 0;
+	uint64_t stages = 0;
+	double host_finish_ms = 0.0;
+	uint32_t host_rows = 0;
+	uint64_t closes = 0;
+};
+GpuLogitsStageTiming LastLogitsStageTiming();
 
 // The ceiling-division formula
 // `ComputeGpuGemmSiteGroupPlan` (below) uses to turn an output width into a group count --
@@ -729,6 +776,18 @@ void ClearT2169ChunkRecordingTailBadAllocFaultInjection();
 // report a removed device, and is consumed by it. Defined in gpu_1p0.cpp.
 void ArmPrefillGuardDeviceRemovedQueryInjection();
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+
+#if defined(SUPERSLM_GPU_TEST_SEAMS)
+// S-GCHUNKFAULT (schema fast-decode plan rev 1.4.4 §11.0, G1-J): a per-thread slot that
+// SubmitChunkToFullDepthForG5Bridge reads before each sub-chunk. When `at` equals the sub-chunk's index (0 = the
+// first), the slot is disarmed and the call returns `status` without recording that sub-chunk. Only
+// sslm_gpu_seq_jump_forward fills it, for its own pass (gpu_1p0.cpp), and empties it after.
+struct ChunkFaultForTest {
+	int32_t at = -1;
+	superslm::SslmForwardStatus status = superslm::SslmForwardStatus::Ok;
+};
+ChunkFaultForTest& ChunkFaultSlotForTest();
+#endif
 
 // T-2866's own `ArmGpuFinishDegenerateLogitRowInjection` (gpu_1p0.cpp, plan Sec3.10.1/Sec3.10.2)
 // is declared `extern "C"` at global scope, not here: it matches the test author's own
@@ -1098,6 +1157,9 @@ enum class SslmGpuStatus : uint32_t;
 //     what is faulted).
 void SslmGpuAllocCounterResetForTest() noexcept;
 uint32_t SslmGpuAllocCountForTest() noexcept;
+// Multi-row plan cell 1.1: the bytes of the device buffers (and the multi-row row sets' descriptor heaps) the
+// library holds now, counted where they are created and uncounted when D3D12 destroys them.
+uint64_t SslmGpuLiveDeviceBytesForTest() noexcept;
 void ArmGpuAllocFaultAtOccurrence(uint32_t k, long hr) noexcept;
 bool SslmGpuAllocInBundleForTest(uint32_t k) noexcept;
 // The next removed-device query the fault classifier makes (harness::DeviceReportedRemoved,

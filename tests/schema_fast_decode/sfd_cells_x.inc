@@ -91,7 +91,8 @@ struct XSpec {
 	int32_t page = 0;           // 0: F-SFD's own page size; else pinned (2 in every page-count cell)
 	bool full_finish = false;   // S-BOUND 0: the model without the exactness predicate (cell 5.X5)
 	int hook = 0;               // 0 none; 1 bit 1 at max_tasks 4 (Q6 C's split); 2 bit 1 at max_tasks 1;
-	                            // 3 bit 1 at max_tasks 4 on real threads; 4 the same at max_tasks 8
+	                            // 3 bit 1 at max_tasks 4 on real threads; 4 the same at max_tasks 8;
+	                            // 5 bits 0 and 1 at max_tasks 4 on real threads (tiled-matmul slice 2)
 	sslm_adapter adapter = nullptr;
 	int max_out = 320;
 	std::string Name() const {
@@ -131,7 +132,9 @@ struct XEnv {
 		if (ok && sp.hook) {
 			hook.max_tasks = sp.hook == 2 ? 1 : sp.hook == 4 ? 8 : 4;
 			hook.threads = sp.hook >= 3;
-			for (int i = 0; i < workspaces && ok; ++i) ok = Install(rig->W(i), &hook, SSLM_PARALLEL_FOR_MATVEC);
+			const uint32_t bits = sp.hook == 5 ? SSLM_PARALLEL_FOR_PREFILL | SSLM_PARALLEL_FOR_MATVEC
+			                                   : SSLM_PARALLEL_FOR_MATVEC;
+			for (int i = 0; i < workspaces && ok; ++i) ok = Install(rig->W(i), &hook, bits);
 		}
 	}
 	sslm_workspace W(const XSpec& sp, int i = 0) const { return sp.ws ? rig->W(i) : nullptr; }
@@ -1180,9 +1183,9 @@ void Cell_X_2_1() {
 	    {"mode -1", XOpts(-1, nullptr, 0)},
 	    {"exact, draft_count -1", XOpts(SSLM_JUMP_EXACT, draft, -1)},
 	    {"exact, NULL draft with draft_count 3", XOpts(SSLM_JUMP_EXACT, nullptr, 3)},
-	    {"canonical, a draft", XOpts(SSLM_JUMP_CANONICAL, draft, 0)},
-	    {"canonical, draft_count 2", XOpts(SSLM_JUMP_CANONICAL, nullptr, 2)},
-	    {"canonical, draft and count", XOpts(SSLM_JUMP_CANONICAL, draft, 2)},
+	    {"default (mode 0), a draft", XOpts(SSLM_JUMP_DEFAULT, draft, 0)},
+	    {"default (mode 0), draft_count 2", XOpts(SSLM_JUMP_DEFAULT, nullptr, 2)},
+	    {"default (mode 0), draft and count", XOpts(SSLM_JUMP_DEFAULT, draft, 2)},
 	};
 	for (const Case& c : cases) {
 		{
@@ -2150,6 +2153,60 @@ void Cell_X_8_1() {
 	}
 }
 
+// 8.X1b [tiled-matmul plan slice 2] Under bits 0 and 1, with every batched projection above the (lowered)
+// minimum multiply-adds, the exact verb keeps Q6 C's split: for M <= 7, exactly j + 1 one-row passes (no row past
+// the first mismatch, box 2026-10-26); for M >= 8, one batched pass of M rows, which threads (`run` is called from
+// it). The run equals off and the one-thread run.
+void Cell_X_8_1b() {
+	if (!XLive("8.X1b")) return;
+	const Sfd& f = GetSfd();
+	superslm::test::SetMinMacsPerTask(1);
+	bool any_split = false, any_batched = false;
+	for (const char* schema : {kPotion, kLongKey}) {
+		for (int32_t budget : {2, 4, 7, 9}) {
+			for (XDraft kind : {XDraft::kPerfect, XDraft::kWrongAt}) {
+				XSpec one, both;
+				one.schema = both.schema = schema;
+				both.hook = 5;
+				const XOff off = RunOff(f, one);
+				XPlan plan;
+				plan.kind = kind;
+				plan.budget = budget;
+				const XRun r1 = RunExact(f, one, off, plan);
+				superslm::test::ResetBatchedRunCalls();
+				const XRun rb = RunExact(f, both, RunOff(f, both), plan);
+				const size_t batched_runs = superslm::test::BatchedRunCalls();
+				X_EQUALS_OFF("8.X1b bits 0 and 1", rb, both, plan);
+				CHECK_MSG(r1.stream == rb.stream, "[8.X1b %s] the threaded run's stream differs from one thread's",
+				          XWhat(both, plan).c_str());
+				bool big = false;
+				for (const XVerbRec& v : rb.verbs) {
+					const size_t m = 1 + v.draft.size();
+					if (v.draft.empty()) continue;
+					const size_t j1 = size_t(std::max(v.j.count, 0)) + 1;
+					bool shape = true;
+					if (m <= kQ6cSplitMax) {
+						any_split = true;
+						shape = v.passes.size() == j1;
+						for (const sfd::LayerRowsEntry& e : v.passes) shape = shape && e.kind == sfd::kLayerRowsBatched && e.rows == 1;
+					} else {
+						big = any_batched = true;
+						shape = v.passes.size() == 1 && v.passes[0].rows == m;
+					}
+					CHECK_MSG(shape, "[8.X1b %s] the call at %zu (M %zu, j %d): S-LAYERROWS %s; want %s",
+					          XWhat(both, plan).c_str(), v.pos, m, v.j.count, Q6cShape(v.passes).c_str(),
+					          m <= kQ6cSplitMax ? "j + 1 one-row passes" : "one pass of M rows");
+				}
+				CHECK_MSG(!big || batched_runs > 0, "[8.X1b %s] a pass of 8 or more rows made no batched run call",
+				          XWhat(both, plan).c_str());
+			}
+		}
+	}
+	CHECK_MSG(any_split && any_batched, "[8.X1b] no verb call of %s rows carried a draft (the cell would test nothing)",
+	          any_split ? "8 or more" : "2 to 7");
+	superslm::test::ResetMinMacsPerTask();
+}
+
 // 8.X2 [J1-X; XE29] Save and restore between calls in each resting shape (pending after a decode; ready after an
 // admitting call); prefix adoption on a whole-reserve adopter; and a budget adopter after a budget prefix adopt
 // (shared leading pages, page size 2: shared_pages and the mapped counts equal off's). Each equals an
@@ -2216,8 +2273,9 @@ void Cell_X_8_2() {
 	}
 }
 
-// 8.X3 [J1-X] A decode batch of four: one in exact mode between verb calls, one canonical (drained), one off, one
-// unbound. Each equals its solo run.
+// 8.X3 [J1-X] A decode batch of four: one in exact mode between verb calls, one with NULL options (drained), one
+// off, one unbound. Each equals its solo run. MRX (ruling 23): NULL options select Exact (no caller draft), so the
+// drained member is relabelled from "canonical"; its drain stops at a call that keeps no drafted token.
 void Cell_X_8_3() {
 	if (!XLive("8.X3")) return;
 	const Sfd& f = GetSfd();
@@ -2227,7 +2285,7 @@ void Cell_X_8_3() {
 	sslm_seq s[4] = {rig.NewSeq(kPotion), rig.NewSeq(kPotion), rig.NewSeq(kPotion), rig.NewSeq(nullptr)};
 	for (sslm_seq q : s)
 		if (!q || !rig.PromptOk(q, f.prompt_potion)) return;
-	// the solo runs of the canonical and unbound sequences
+	// the solo runs of the NULL-options and unbound sequences
 	std::vector<int32_t> solo_canon, solo_unbound;
 	{
 		Rig r2(f.m1->m);
@@ -2246,7 +2304,7 @@ void Cell_X_8_3() {
 	bool done[4] = {false, false, false, false};
 	const sslm_decode_params g = rig.Greedy();
 	for (int step = 0; step < 300; ++step) {
-		// canonical: drain before each decode
+		// NULL options (exact): drain before each decode
 		if (!done[1]) {
 			for (int guard = 0; guard < 16; ++guard) {
 				if (QueryForced(rig.m, s[1], 0).count == 0) break;
@@ -2256,6 +2314,7 @@ void Cell_X_8_3() {
 					done[1] = true;
 					break;
 				}
+				if (j.count == 0) break;
 			}
 		}
 		std::vector<sslm_seq> batch;
@@ -2292,7 +2351,7 @@ void Cell_X_8_3() {
 	}
 	CHECK_MSG(got[0] == off.stream, "[8.X3] the exact sequence's stream %s; its solo (off) %s", Str(got[0]).c_str(),
 	          Str(off.stream).c_str());
-	CHECK_MSG(got[1] == solo_canon, "[8.X3] the canonical sequence's stream differs from its solo run");
+	CHECK_MSG(got[1] == solo_canon, "[8.X3] the NULL-options (exact) sequence's stream differs from its solo run");
 	CHECK_MSG(got[2] == off.stream, "[8.X3] the off sequence's stream differs from its solo run");
 	CHECK_MSG(std::vector<int32_t>(got[3].begin(), got[3].begin() + long(std::min(got[3].size(), solo_unbound.size()))) ==
 	              solo_unbound,
@@ -2567,7 +2626,9 @@ void Cell_X_9_1() {
 
 // 9.X2 [J1-X] The ABI inventory carries sslm_jump_options and sslm_jump_mode; sslm_seq_jump_forward keeps its
 // ordinal in the verb list; the status list's entry count equals the base this
-// line builds on: main's 30 plus the merged precached-prefixes line's SSLM_RESTORE_PRODUCER_MISMATCH, 31 (as 9.2).
+// line builds on: main's 30 plus the merged precached-prefixes line's SSLM_RESTORE_PRODUCER_MISMATCH, 31, plus the
+// two GPU names rev 1.4 §7.3 appends, SSLM_GPU_FORCED_TABLE_ABSENT at 31 and
+// SSLM_GPU_CONTEXT_CAP_EXCEEDED at 32: 33 entries (as 9.2).
 // J1 and J1-X ship together as 1.15.0, so this cell checks no version; 9.2's receipt reads it at the release commit
 // (plan rev 1.3.7, section 17.13).
 void Cell_X_9_2() {
@@ -2592,7 +2653,8 @@ void Cell_X_9_2() {
 #define SFD_X_COUNT_STATUS(name) ++n;
 	SSLM_STATUS_ENUM_LIST(SFD_X_COUNT_STATUS)
 #undef SFD_X_COUNT_STATUS
-	CHECK_MSG(n == 31, "[9.X2] the status list has %d entries; main plus precached prefixes has 31", n);
+	CHECK_MSG(n == 33, "[9.X2] the status list has %d entries; main plus precached prefixes plus the two GPU "
+	          "skip-ahead names has 33", n);
 }
 
 // ==========================================================================================================

@@ -1,0 +1,7 @@
+artifact D:\_scratch\sfd-1p17-kit\kit-1p17-5060-x\model\qwen2.5-0.5b-instruct-cap4096-aex-pr.sslm layers 24 tasks 4 bits 3
+pass M 2 depth 41 ms_median 31.415 ms_q1 31.198 ms_q3 31.513 r_median 0.000 one_row_ms_median 37.431 d_ms_median -5.998
+pass M 4 depth 41 ms_median 44.112 ms_q1 43.987 ms_q3 44.593 r_median 0.000 one_row_ms_median 73.815 d_ms_median -29.527
+pass M 8 depth 41 ms_median 67.360 ms_q1 66.894 ms_q3 68.088 r_median 0.000 one_row_ms_median 146.347 d_ms_median -80.216
+pass M 16 depth 41 ms_median 112.985 ms_q1 112.185 ms_q3 114.430 r_median 0.000 one_row_ms_median 292.479 d_ms_median -179.486
+pass M 32 depth 41 ms_median 203.706 ms_q1 202.812 ms_q3 204.480 r_median 0.000 one_row_ms_median 583.171 d_ms_median -380.312
+pass M 64 depth 41 ms_median 405.954 ms_q1 403.675 ms_q3 406.925 r_median 0.000 one_row_ms_median 1171.940 d_ms_median -766.417

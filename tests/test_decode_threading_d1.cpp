@@ -972,8 +972,10 @@ void TestSettersCell22() {
 		bool accept;
 	};
 	const Case cases[] = {
-	    {0u, 4, true},           {2u, 4, true},           {1u, 4, false},  // bit 0 rejected on a D1-only engine
-	    {3u, 4, false},          {4u, 4, false},          {0x80000000u, 4, false}, {0xFFFFFFFFu, 4, false},
+	    // Tiled-matmul slice 2 implements bit 0 (SSLM_PARALLEL_FOR_PREFILL), so 1 and 3 are accepted; bit 2
+	    // and up stay rejected.
+	    {0u, 4, true},           {2u, 4, true},           {1u, 4, true},
+	    {3u, 4, true},           {4u, 4, false},          {0x80000000u, 4, false}, {0xFFFFFFFFu, 4, false},
 	    {2u, -1, false},         {2u, 257, false},        {2u, 0, true},   {2u, 1, true},
 	    {2u, 256, true},
 	};
@@ -1663,7 +1665,7 @@ void TestCompositionCell81() {
 	}
 }
 
-// ---- 8.2: each bit alone (F7), the D1-only half ---------------------------------------------------------
+// ---- 8.2: each bit alone (F7), the bit-1 half (bit 0 alone: test_batched_threading.cpp) -----------------
 
 void TestEachBitAloneCell82() {
 	SeamScope scope(kSeam8K);
@@ -1673,8 +1675,8 @@ void TestEachBitAloneCell82() {
 	if (!rig.ok) return;
 	TestHook hook;
 	sslm_parallel_for pf = hook.Pf(1u);
-	CHECK_MSG(sslm_workspace_set_parallel_for(rig.ws[0], &pf) == SSLM_INVALID_ARGUMENT,
-	          "8.2: bit 0 must be rejected on a D1-only engine");
+	CHECK_MSG(sslm_workspace_set_parallel_for(rig.ws[0], &pf) == SSLM_OK,
+	          "8.2: bit 0 must be accepted on an engine with tiled slice 2");
 	rig.Install(&hook, SSLM_PARALLEL_FOR_MATVEC);
 	sslm_seq s = rig.NewSeq();
 	const std::vector<int32_t> eight = Prompt(8);

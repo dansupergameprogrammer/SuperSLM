@@ -33,6 +33,7 @@
 #include "submission_ledger.h"
 #include "gpu_inflight_token.h"
 #include "gpu_resource_state_tracker.h"
+#include "debug_layer_mode.h"
 
 namespace superslm_gpu {
 namespace harness {
@@ -74,6 +75,50 @@ struct GpuTestSeamState {
 inline GpuTestSeamState& TestSeamState() {
 	static GpuTestSeamState state;
 	return state;
+}
+
+// Multi-row plan cell 1.1 (MR3): the bytes of the device objects the harness holds now
+// (SslmGpuLiveDeviceBytesForTest). TrackLiveDeviceBytesForTest adds `bytes` and attaches a private-data
+// token to `obj` whose final Release, when D3D12 destroys the object, subtracts them again.
+inline std::atomic<int64_t>& LiveDeviceBytesForTest() {
+	static std::atomic<int64_t> bytes{0};
+	return bytes;
+}
+class LiveDeviceBytesToken final : public IUnknown {
+public:
+	explicit LiveDeviceBytesToken(int64_t bytes) : bytes_(bytes) {}
+	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override {
+		if (out == nullptr) return E_POINTER;
+		if (IsEqualIID(riid, IID_IUnknown)) {
+			*out = static_cast<IUnknown*>(this);
+			AddRef();
+			return S_OK;
+		}
+		*out = nullptr;
+		return E_NOINTERFACE;
+	}
+	ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
+	ULONG STDMETHODCALLTYPE Release() override {
+		const ULONG r = --refs_;
+		if (r == 0) {
+			LiveDeviceBytesForTest() -= bytes_;
+			delete this;
+		}
+		return r;
+	}
+
+private:
+	std::atomic<ULONG> refs_{1};
+	int64_t bytes_;
+};
+inline void TrackLiveDeviceBytesForTest(ID3D12Object* obj, uint64_t bytes) {
+	// {5D1F0C0E-6B53-4C2B-9E61-1A7C3D2B4E01}: this seam's private-data slot.
+	static const GUID kSlot = {0x5d1f0c0e, 0x6b53, 0x4c2b, {0x9e, 0x61, 0x1a, 0x7c, 0x3d, 0x2b, 0x4e, 0x01}};
+	if (obj == nullptr) return;
+	LiveDeviceBytesToken* token = new LiveDeviceBytesToken(static_cast<int64_t>(bytes));
+	LiveDeviceBytesForTest() += static_cast<int64_t>(bytes);
+	if (FAILED(obj->SetPrivateDataInterface(kSlot, token))) LiveDeviceBytesForTest() -= static_cast<int64_t>(bytes);
+	token->Release();  // the object holds the token's only remaining reference (or none, on failure)
 }
 #endif
 
@@ -230,6 +275,14 @@ struct Device final : public SubmissionDevice {
 	// open.
 	bool debug_layer_enabled = false;
 	ComPtr<ID3D12InfoQueue> debug_info_queue;
+	// Schema fast-decode plan rev 1.4.1 §7.3 (G1-F, cell G0.1): the value Init() read from
+	// SSLM_GPU_ENABLE_DEBUG_LAYER (0 when unset or anything but 1 or 2), whether it asked for
+	// GPU-based validation, and the banner it printed (empty when it printed none). Value 1 is the
+	// layer plus GPU-based validation, as before; value 2 is the layer only, with no
+	// SetEnableGPUBasedValidation call -- the box driver's setting for the 2080 SUPER (§10).
+	int debug_layer_mode = 0;
+	bool gpu_based_validation_requested = false;
+	std::string debug_layer_banner;
 
 	// Pops every message currently queued in the debug layer's own message buffer (oldest first)
 	// and prints each to stderr as "# D3D12 VALIDATION [severity] category: description". Returns
@@ -465,28 +518,35 @@ private:
 		// zero performance cost, matching this file's own established SSLM_GPU_ADAPTER_INDEX
 		// convention for a diagnostic-only, opt-in override.
 		{
-			char buf[8] = {0};
-			DWORD n = GetEnvironmentVariableA("SSLM_GPU_ENABLE_DEBUG_LAYER", buf, sizeof(buf));
-			if (n > 0 && buf[0] == '1') {
+			char buf[32] = {0};
+			const DWORD n = GetEnvironmentVariableA("SSLM_GPU_ENABLE_DEBUG_LAYER", buf, sizeof(buf));
+			// Schema fast-decode plan rev 1.4.1 §7.3: debug_layer_mode.h holds the values' meaning and
+			// the banners. Value 2 enables the layer only; value 1 keeps its meaning.
+			const char* raw = (n > 0 && n < sizeof(buf)) ? buf : (n > 0 ? "?" : nullptr);
+			const int mode = debug_layer::ParseMode(raw);
+			debug_layer_mode = mode;
+			bool interface_ok = false;
+			bool gbv_available = false;
+			if (mode != 0) {
 				ComPtr<ID3D12Debug> debug0;
 				if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug0)))) {
+					interface_ok = true;
 					debug0->EnableDebugLayer();
-					ComPtr<ID3D12Debug1> debug1;
-					if (SUCCEEDED(debug0.As(&debug1))) {
-						debug1->SetEnableGPUBasedValidation(TRUE);
+					if (debug_layer::RequestsGpuBasedValidation(mode)) {
+						ComPtr<ID3D12Debug1> debug1;
+						if (SUCCEEDED(debug0.As(&debug1))) {
+							debug1->SetEnableGPUBasedValidation(TRUE);
+							gbv_available = true;
+							gpu_based_validation_requested = true;
+						}
 					}
-					std::fprintf(stderr, "# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer%s enabled\n",
-					             debug1 ? " + GPU-based validation" : " enabled (GPU-based validation unavailable)");
 					// T-2192 O2: remembered so the info-queue query below (which needs `dev`, not
 					// created yet at this point in Init()) knows whether to run at all.
 					debug_layer_enabled = true;
-				} else {
-					std::fprintf(stderr,
-					              "# SSLM_GPU_ENABLE_DEBUG_LAYER=1 requested but D3D12GetDebugInterface "
-					              "failed -- the Windows 'Graphics Tools' optional feature is likely not "
-					              "installed on this machine; proceeding WITHOUT the debug layer\n");
 				}
 			}
+			debug_layer_banner = debug_layer::Banner(raw, mode, interface_ok, gbv_available);
+			if (!debug_layer_banner.empty()) std::fputs(debug_layer_banner.c_str(), stderr);
 		}
 		ComPtr<IDXGIFactory6> factory;
 		if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) {
@@ -590,7 +650,7 @@ private:
 		if (debug_layer_enabled) {
 			if (FAILED(dev.As(&debug_info_queue))) {
 				std::fprintf(stderr,
-				              "# SSLM_GPU_ENABLE_DEBUG_LAYER=1: ID3D12InfoQueue unavailable on this "
+				              "# SSLM_GPU_ENABLE_DEBUG_LAYER: ID3D12InfoQueue unavailable on this "
 				              "device -- validation messages will not be drainable through "
 				              "DrainDebugLayerMessages()\n");
 			}
@@ -690,6 +750,9 @@ public:
 		if (SUCCEEDED(hr)) state_tracking::OnCreate(out->Get(), bytes, heap, state, at);
 #endif
 		if (SUCCEEDED(hr) && debug_layer_enabled) NameBufferBySite(out->Get(), at, heap);
+#if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION)
+		if (SUCCEEDED(hr)) TrackLiveDeviceBytesForTest(out->Get(), bytes);
+#endif
 		return hr;
 	}
 
@@ -914,8 +977,12 @@ public:
 	              "paged-KV plan §4 item 1 records the composed root signature at 60 DWORDs");
 	static_assert(kComposedRootSignatureDwords <= 64, "D3D12 caps a root signature at 64 DWORDs");
 
-	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
-		D3D12_ROOT_PARAMETER ps[1 + kComposedResourceBindingCount + 1]{};
+	// The composed signature's root parameters, 0 through kComposedRootParamKvPageConstants. Filled here
+	// once and serialized by MakeRootSigComposed below; the multi-row plan's widened recorder
+	// (multirow_wide.inl, built only under SUPERSLM_MULTIROW_WIDE) serializes the same parameters with
+	// one descriptor table appended, so the two signatures cannot drift on any shared parameter.
+	static constexpr UINT kComposedRootParamCount = 1 + kComposedResourceBindingCount + 1;
+	static void FillComposedRootParams(D3D12_ROOT_PARAMETER (&ps)[kComposedRootParamCount]) {
 		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 		// T-2432 (Track A step 9): grown 27 -> 28. The 28th value (index 27) carries Q_WIDTH
 		// (num_attention_heads * head_dim) for q_proj_gemm_site.hlsl/o_proj_gemm_site.hlsl
@@ -982,9 +1049,13 @@ public:
 		static_assert(kComposedRootParamKvPageTable == 1 + kComposedResourceBindingCount - 1 &&
 		                  kComposedRootParamKvPageConstants == 1 + kComposedResourceBindingCount,
 		              "the G2 parameters follow the 14 pre-G2 descriptors, in this order");
+	}
 
+	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
+		D3D12_ROOT_PARAMETER ps[kComposedRootParamCount]{};
+		FillComposedRootParams(ps);
 		D3D12_ROOT_SIGNATURE_DESC rs{};
-		rs.NumParameters = 1 + kComposedResourceBindingCount + 1;
+		rs.NumParameters = kComposedRootParamCount;
 		rs.pParameters = ps;
 		ComPtr<ID3DBlob> blob, err;
 		HRESULT hr = D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
@@ -1069,10 +1140,19 @@ public:
 // mutex. A setup that failed for any other reason (SetupFailure::Other) is final, for the life of
 // the process. Once `available` is true nothing here writes the Device again, so the fast path
 // below takes no lock.
+//
+// The Device is never destroyed. Its destructor would run among the static destructors at process
+// exit, which in a DLL host (the editor's modular plugin) is the DLL's process detach, after the
+// D3D12 runtime has torn down its own state: the last device release then fails fast (0xC0000409,
+// FAST_FAIL_FATAL_APP_EXIT, raised in D3D12NotifyDeviceDeletion). The OS reclaims the device at exit.
 struct DeviceHolder {
 	std::mutex mutex;
-	Device device;
+	union {
+		Device device;
+	};
 	bool setup_attempted = false;
+	DeviceHolder() noexcept : device() {}
+	~DeviceHolder() {}
 };
 
 // Plan §4.4 (*The ledger term never constructs the device*): the holder lives at namespace scope,
@@ -1105,6 +1185,33 @@ inline const SubmissionLedger* SingletonLedgerIfConstructed() noexcept {
 }
 
 inline bool Device::IsProcessSingleton() const noexcept { return this == &g_device_holder.device; }
+
+// Schema fast-decode plan rev 1.4.2 §7.3 (G1-F, cell G0.1; strike N3): the test-only read of what
+// the process device's Init() did with SSLM_GPU_ENABLE_DEBUG_LAYER. Sets the device up (GetDevice)
+// and copies the mode, whether GPU-based validation was asked for, whether the layer is on, whether
+// `debug_info_queue` exists, and the banner. Compiled only into the test-seam configuration.
+#if defined(SUPERSLM_GPU_TEST_SEAMS)
+struct DebugLayerReportForTest {
+	bool device_available = false;
+	int mode = 0;
+	bool gpu_based_validation_requested = false;
+	bool layer_enabled = false;
+	bool info_queue_present = false;
+	std::string banner;
+};
+inline DebugLayerReportForTest ReadDebugLayerReportForTest() {
+	Device& d = GetDevice();
+	DebugLayerReportForTest r;
+	r.device_available = d.available.load(std::memory_order_acquire);
+	if (!r.device_available) return r;
+	r.mode = d.debug_layer_mode;
+	r.gpu_based_validation_requested = d.gpu_based_validation_requested;
+	r.layer_enabled = d.debug_layer_enabled;
+	r.info_queue_present = d.debug_info_queue != nullptr;
+	r.banner = d.debug_layer_banner;
+	return r;
+}
+#endif
 
 #if defined(SUPERSLM_GPU_ALLOC_FAULT_INJECTION) || defined(SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION)
 #define SUPERSLM_GPU_QUEUE_GATE_SEAM 1
@@ -1311,7 +1418,9 @@ struct CachedPipeline {
 // Every B1 shader shares this exact root-signature shape (Sec11 B1: a single
 // scalar-argument buffer in, a single scalar-result buffer out).
 inline CachedPipeline& GetOrBuildPipeline(const std::string& name) {
-	static std::map<std::string, CachedPipeline> cache;
+	// Never destroyed, as the process device (DeviceHolder above): released at exit it would call
+	// into a torn-down D3D12 runtime.
+	static auto& cache = *new std::map<std::string, CachedPipeline>();
 	auto it = cache.find(name);
 	if (it != cache.end()) return it->second;
 	Device& dev = GetDevice();
@@ -1330,7 +1439,7 @@ inline CachedPipeline& GetOrBuildPipeline(const std::string& name) {
 // distinct cache from GetOrBuildPipeline's B1-shaped one-SRV-one-UAV pool
 // above, since the two families use different root signatures.
 inline CachedPipeline& GetOrBuildComposedPipeline(const std::string& name) {
-	static std::map<std::string, CachedPipeline> cache;
+	static auto& cache = *new std::map<std::string, CachedPipeline>();  // never destroyed, as above
 	// ONE shared root-signature object across every composed-pipeline PSO --
 	// not a fresh MakeRootSigComposed() per shader. D3D12's command list binds
 	// root parameters against whatever root signature was last set via
@@ -1340,7 +1449,7 @@ inline CachedPipeline& GetOrBuildComposedPipeline(const std::string& name) {
 	// per-site dispatch shape), so every PSO here MUST share the identical
 	// root-signature object the command list has bound, not merely a
 	// structurally-identical distinct one.
-	static ComPtr<ID3D12RootSignature> s_shared_root_sig;
+	static auto& s_shared_root_sig = *new ComPtr<ID3D12RootSignature>();  // never destroyed, as the cache
 	auto it = cache.find(name);
 	if (it != cache.end()) return it->second;
 	Device& dev = GetDevice();

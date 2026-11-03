@@ -176,6 +176,9 @@ typedef enum sslm_status {
      * entry for the budget-holder limit contract. */
     SSLM_KV_BUDGET_EXCEEDED,
     SSLM_RESTORE_PRODUCER_MISMATCH,
+    /* Schema skip-ahead on the GPU (1.17.0): mirrored in the SAME commit; see the production header. */
+    SSLM_GPU_FORCED_TABLE_ABSENT,
+    SSLM_GPU_CONTEXT_CAP_EXCEEDED,
 
     /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, F1) -- the enum's own final member, no
      * explicit value, auto-valuing to one past this header's own last explicit member and moving

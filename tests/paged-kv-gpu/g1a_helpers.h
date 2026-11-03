@@ -176,7 +176,8 @@ inline const char* GpuStatusName(SslmGpuStatus s) {
 	                                "SSLM_GPU_RESIDENCY_FLAGS_INVALID", "SSLM_GPU_KV_BUDGET_EXCEEDED",
 	                                "SSLM_GPU_KV_POOL_EXHAUSTED", "SSLM_GPU_KV_POOL_TOO_LARGE",
 	                                "SSLM_GPU_HOLDER_MODE_MISMATCH", "SSLM_GPU_PREFIX_REJECTED",
-	                                "SSLM_GPU_PREFIX_SCHEMA_MISMATCH", "SSLM_RESTORE_PRODUCER_MISMATCH"};
+	                                "SSLM_GPU_PREFIX_SCHEMA_MISMATCH", "SSLM_RESTORE_PRODUCER_MISMATCH",
+	                                "SSLM_GPU_FORCED_TABLE_ABSENT", "SSLM_GPU_CONTEXT_CAP_EXCEEDED"};
 	const uint32_t i = static_cast<uint32_t>(s);
 	return i < sizeof k / sizeof k[0] ? k[i] : "UNKNOWN_STATUS";
 }

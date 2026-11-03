@@ -30,7 +30,18 @@ five-condition token-DFA forced test equals the character DFA on every state (§
 reference chain's bytes equal F; POTION's start chain is the 3 tokens {" intent ":" (cell 8.6 (i));
 LONGKEY's start text encodes to at least 16 tokens (§11.0).
 
-Usage: python tools/gen_schema_fast_decode_fixture.py OUT_DIR
+With --untied (plan rev 1.4.1 §11.0, audit G-5), it also writes
+
+  fsfd_untied.sslm  F-SFD with tie_word_embeddings false and an lm_head distinct from embed_weights: the
+                    negated embedding (each code -e, with -(-128) clipped to 127). Every other tensor,
+                    scale and section is F-SFD's, so the layers compute the same hidden state and only
+                    the head differs. Precondition, a hard failure: at one choice state or more (two or
+                    more legal ids) of POTION or UTF8ENUM, reached by the state's path after the potion
+                    prompt, the reference pipeline's (forward_dynamic) masked greedy choice under lm_head differs from its
+                    choice under embed_weights (cell G6.4 needs a state where finishing from the wrong
+                    head picks a different token).
+
+Usage: python tools/gen_schema_fast_decode_fixture.py OUT_DIR [--untied]
 """
 
 import collections
@@ -40,6 +51,8 @@ import os
 import struct
 import sys
 import time
+
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "reference_pipeline"))
@@ -88,6 +101,48 @@ def strip_qk_norm(model):
     return dataclasses.replace(
         model, weights={k: v for k, v in model.weights.items() if keep(k)},
         weight_scales={k: v for k, v in model.weight_scales.items() if keep(k)})
+
+
+POTION_PROMPT = b"Customer: I would like to buy a health potion, please.\nOrder:"
+
+
+def untie(model):
+    """F-SFD's model with its own lm_head: the negated embedding, clipped to int8."""
+    embed = np.asarray(model.weights["embed"], dtype=np.int16)
+    head = np.clip(-embed, -128, 127).astype(np.int8)
+    weights = dict(model.weights)
+    weights["lm_head"] = head
+    scales = dict(model.weight_scales)
+    if "embed" in scales:
+        scales["lm_head"] = scales["embed"]
+    return dataclasses.replace(model, config=dataclasses.replace(model.config, tie_word_embeddings=False),
+                               weights=weights, weight_scales=scales)
+
+
+def check_untied_precondition(tied, untied, t, infos):
+    """The first choice state where the two heads choose differently, or a hard failure."""
+    prompt = encode_bytes(t, POTION_PROMPT)
+    tried = 0
+    for name, info in infos:
+        if name not in ("potion_shop_order", "utf8enum"):
+            continue
+        mp = info["mp"]
+        for s in range(info["n"]):
+            row = mp.transitions.get(s, {})
+            if len(row) < 2:
+                continue
+            tokens = list(prompt) + list(info["path"][s])
+            legal = sorted(row)
+            # The W8A8-dynamic forward, the engine's arithmetic (the static `forward` has no scales for it).
+            a = np.asarray(P.forward_dynamic(tied, tokens)[-1], dtype=np.int64)[legal]
+            b = np.asarray(P.forward_dynamic(untied, tokens)[-1], dtype=np.int64)[legal]
+            tried += 1
+            ta, tb = legal[int(np.argmax(a))], legal[int(np.argmax(b))]
+            if ta != tb:
+                print(f"--untied precondition: {name} state {s} ({len(legal)} legal ids): "
+                      f"embed_weights picks {ta}, lm_head picks {tb} ({tried} states tried)")
+                return name, s
+    raise SystemExit(f"--untied precondition failed: the heads agree at all {tried} choice states")
 
 
 # ---- TOK1, parsed back (tests/sslm_tokenizer_fixtures.h ParseTokenizerBlob's layout) -------------
@@ -277,10 +332,12 @@ def schema_reference(name, schema, t, vocab, special):
 
 
 def main(argv):
-    if len(argv) != 2:
+    untied_too = "--untied" in argv[1:]
+    args = [a for a in argv[1:] if a != "--untied"]
+    if len(args) != 1:
         print(__doc__.strip().splitlines()[-1], file=sys.stderr)
         return 2
-    out_dir = argv[1]
+    out_dir = args[0]
     os.makedirs(out_dir, exist_ok=True)
     start = time.time()
 
@@ -318,6 +375,21 @@ def main(argv):
     with open(path, "wb") as f:
         f.write(data)
     print(f"wrote {path}: {len(data)} bytes, fingerprint={fingerprint}")
+
+    if untied_too:
+        untied = untie(model)
+        check_untied_precondition(model, untied, t, infos)
+        u_sections, _ = C.build_sections(untied, enable_damped_greedy=True)
+        u_flags = C.artifact_flags_for_model(untied) | F.DAMPED_GREEDY_CONSTANTS_FLAG
+        u_sections.append(F.Section(F.SectionType.TOKENIZER, tok_blob))
+        u_sections.append(F.Section(F.SectionType.UNICODE_TABLES, uni_blob))
+        u_sections.append(F.Section(F.SectionType.SCHEMA_MASKS,
+                                    _serialize_scm1([(n, i["mp"]) for n, i in infos], VOCAB)))
+        u_data, u_fingerprint = F.build_artifact(u_sections, flags=u_flags)
+        u_path = os.path.join(out_dir, "fsfd_untied.sslm")
+        with open(u_path, "wb") as f:
+            f.write(u_data)
+        print(f"wrote {u_path}: {len(u_data)} bytes, fingerprint={u_fingerprint}")
 
     lines = ["SFDREF 1"]
     for name, i in infos:

@@ -10,18 +10,33 @@
 //        runs first through SslmGpuSeqPrefillPromptForG5Bridge, because the schema-content bridge checks every token
 //        against the walk state and has no pre-walked prefix (the CPU verb's `prewalked_prefix`).
 //
-// The forced chain is the library's own: the CPU model's forced-next table (the §11.0 read seam ForcedTableEntry, built
-// at map from SCM1 and TOK1), followed through the SCM1 transitions, from the GPU sequence's walk state. The CPU model is
-// only read: no CPU decode runs. The prompt is tokenized by the CPU ABI (sslm_tokenize), as the CPU bench does.
+// The forced chain is the library's own: since engine 1.17.0, sslm_gpu_seq_forced_tokens at the GPU sequence's walk state
+// (the CPU map's builder; before, the CPU table through the test seam ForcedTableEntry). The CPU model is only read: no
+// CPU decode runs. The prompt is tokenized by the CPU ABI (sslm_tokenize), as the CPU bench does.
 //
 // Timed: generation only, from the first call after the prompt prefill to the stop (the prompt prefill is untimed and
-// identical in both arms). Per run: wall ms, the sum of superslm_gpu::LastCallTiming().gpu_busy_ms over the run's
-// layer-loop submissions (the finish's logits are not in it), submissions, tokens, ms per token, the token stream and
-// its FNV-1a 64 digest. Per pair, R = off / on wall.
+// identical in both arms). Per run: wall ms, the GPU busy time of the run (the delta of superslm_gpu::CumulativeGpuBusyUs()
+// across it: every layer-loop submission and, with --device-head, every finish's logits submission, each once, in every
+// arm alike; ruling 46 -- a per-call sum of LastCallTiming() would now take the decode bridge's finish in on its driving
+// calls only, and a finish-only call publishes its own), submissions, tokens, ms per token, the token stream and its
+// FNV-1a 64 digest. Per pair, R = off / on wall.
 //
-// Usage: sslm_schema_fast_decode_gpu_jf_bench <model.sslm> [--pairs 15] [--warmup 1] [--max-new 64] [--device-head] [--json PATH]
+// Usage: sslm_schema_fast_decode_gpu_jf_bench <model.sslm> [--pairs 15] [--warmup 1] [--max-new 64] [--device-head]
+//            [--pair A,B] [--json PATH]
+//        sslm_schema_fast_decode_gpu_jf_bench <model.sslm> --streams ARM[,ARM...] [--utterances FILE] [--max-new 64]
+//            [--device-head] [--json PATH]
 // --device-head maps the model with SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE (the packaged example's residency): each finish
 // computes the logits row on the device. Without it the host computes it (LogitsSiteParallel over all V rows).
+//
+// Schema fast-decode plan rev 1.4.4 §10 (GB2, GB3; slices G1-M and G1-J) adds two things:
+//   - the arm `fused:N`: the §5.6 host loop through engine 1.17.0's sslm_gpu_seq_jump_forward at chunk_budget N
+//     (canonical), reading the chain with sslm_gpu_seq_forced_tokens: while a chain is reported, the verb with the
+//     pending token (or -1), clipped to max-new; then one decode bridge call, which finishes the last admitted row.
+//     --pair A,B times any two of off, on and fused:N (default off,on). The masked finish (G1-M) needs no arm of
+//     its own: `off` is it at a 1.17.0 build, and `off` at a pre-1.17.0 build is "off today" (GB3);
+//   - --streams: no timing. Each arm runs once on each prompt: the bench's own prompt, then one per line of
+//     --utterances (customer lines, wrapped as the example wraps them). The JSON records each stream, its FNV-1a 64
+//     digest and its stop, for GB2's comparison with the CPU's streams (GB2c).
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -37,7 +52,6 @@
 #include "superslm/model.h"
 #include "superslm/schema_masks.h"
 #include "superslm/sslm_abi.h"
-#include "schema_fast_decode/sfd_api.h"
 
 
 namespace {
@@ -116,6 +130,27 @@ struct Run {
 	std::string stop;
 };
 
+std::string ExamplePrompt(const std::string& utterance) {
+	return "<|im_start|>system\nYou work the counter of a potion shop. Record the customer's order as JSON.<|im_end|>\n"
+	       "<|im_start|>user\n" + utterance + "<|im_end|>\n<|im_start|>assistant\n";
+}
+bool HasFlag(int argc, char** argv, const char* name) {
+	for (int i = 2; i < argc; ++i)
+		if (std::strcmp(argv[i], name) == 0) return true;
+	return false;
+}
+std::vector<std::string> SplitComma(const std::string& s) {
+	std::vector<std::string> out;
+	size_t a = 0;
+	while (a <= s.size()) {
+		const size_t b = s.find(',', a);
+		out.push_back(s.substr(a, b == std::string::npos ? std::string::npos : b - a));
+		if (b == std::string::npos) break;
+		a = b + 1;
+	}
+	return out;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -127,9 +162,7 @@ int main(int argc, char** argv) {
 	const int warmup = std::atoi(Arg(argc, argv, "--warmup", "1"));
 	const int max_new = std::atoi(Arg(argc, argv, "--max-new", "64"));
 	const char* json_path = Arg(argc, argv, "--json", nullptr);
-	bool device_head = false;
-	for (int i = 2; i < argc; ++i)
-		if (std::strcmp(argv[i], "--device-head") == 0) device_head = true;
+	const bool device_head = HasFlag(argc, argv, "--device-head");
 
 	// The artifact, once, aligned: the CPU ABI maps it (tokenizer, forced table) and the GPU maps its view.
 	std::FILE* f = std::fopen(argv[1], "rb");
@@ -167,32 +200,20 @@ int main(int argc, char** argv) {
 		return 2;
 	}
 
-	const std::string prompt_text =
-	    "<|im_start|>system\nYou work the counter of a potion shop. Record the customer's order as JSON.<|im_end|>\n"
-	    "<|im_start|>user\nHello! Could I get two health potions, please?<|im_end|>\n<|im_start|>assistant\n";
-	int32_t n = 0;
-	sslm_tokenize(cpu, prompt_text.c_str(), nullptr, &n);
-	std::vector<int32_t> prompt(static_cast<size_t>(n > 0 ? n : 1));
-	if (sslm_tokenize(cpu, prompt_text.c_str(), prompt.data(), &n) != SSLM_OK) Die("sslm_tokenize", 0);
-	prompt.resize(static_cast<size_t>(n));
-
-	// The forced chain from walk state `w`: next_forced(w) from the library's table, then the SCM1 transition.
-	auto chain_from = [&](uint32_t w) {
-		std::vector<int32_t> out;
-		for (size_t guard = 0; guard < 4096; ++guard) {
-			int32_t tok = -1;
-			uint32_t f_len = 0;
-			const sslm_status st = superslm::test::sfd::ForcedTableEntry(cpu, static_cast<int32_t>(schema_index), w, &tok, &f_len);
-			if (st != SSLM_OK) Die("ForcedTableEntry", static_cast<int>(st));
-			if (tok < 0) break;
-			out.push_back(tok);
-			uint32_t nx = 0;
-			if (!table.Transition(*entry, w, static_cast<uint32_t>(tok), &nx)) break;
-			w = nx;
-		}
-		return out;
+	auto tokenize = [&](const std::string& text) {
+		int32_t n = 0;
+		sslm_tokenize(cpu, text.c_str(), nullptr, &n);
+		std::vector<int32_t> ids(static_cast<size_t>(n > 0 ? n : 1));
+		if (sslm_tokenize(cpu, text.c_str(), ids.data(), &n) != SSLM_OK) Die("sslm_tokenize", 0);
+		ids.resize(static_cast<size_t>(n));
+		return ids;
 	};
+	const std::string prompt_text = ExamplePrompt("Hello! Could I get two health potions, please?");
+	std::vector<int32_t> prompt = tokenize(prompt_text);
 
+	// The forced chain at the sequence's walk state. Engine 1.17.0 reads it with sslm_gpu_seq_forced_tokens, whose
+	// table is the CPU map's own builder's (G1-F), so the ids equal the CPU table's (ForcedTableEntry, which earlier
+	// builds of this bench read through the CPU test seam). Defined after `ctx` and `seq`, below.
 	GpuContextConfig cfg{};
 	GpuResidencyConfig rcfg{};
 	if (device_head) rcfg.flags |= SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE;
@@ -208,8 +229,15 @@ int main(int argc, char** argv) {
 	SslmGpuSequenceHandle* seq = nullptr;
 	Ok(sslm_gpu_seq_create(ctx, model, static_cast<int64_t>(view.config.context_cap), &seq), "sslm_gpu_seq_create");
 	constexpr uint32_t kWhole = 0xFFFFFFFFu;
+	auto chain_from = [&](uint32_t /*w: the sequence's own walk state*/) {
+		std::vector<int32_t> out(4096);
+		int32_t count = 0, acc = 0;
+		Ok(sslm_gpu_seq_forced_tokens(ctx, seq, out.data(), static_cast<int32_t>(out.size()), &count, &acc), "forced tokens");
+		out.resize(static_cast<size_t>(std::min<int32_t>(count, static_cast<int32_t>(out.size()))));
+		return out;
+	};
 
-	auto start = [&]() {
+	auto start = [&]() {  // reads `prompt`, which --streams sets per prompt
 		Ok(sslm_gpu_seq_reset(ctx, seq), "reset");
 		Ok(SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, gpu_schema), "set schema");
 		Ok(SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq, prompt.data(), static_cast<int32_t>(prompt.size()), kWhole), "prompt");
@@ -220,7 +248,6 @@ int main(int argc, char** argv) {
 		return a != 0;
 	};
 	auto timing = [&](Run& r) {
-		r.gpu += superslm_gpu::LastCallTiming().gpu_busy_ms;
 		++r.submits;
 	};
 	// The off arm: one decode step per token. The first finishes the prompt's last token.
@@ -229,6 +256,7 @@ int main(int argc, char** argv) {
 		start();
 		int32_t next = 0;
 		const auto t0 = Clock::now();
+		const double gpu0 = superslm_gpu::CumulativeGpuBusyUs();
 		for (int i = 0; i < max_new; ++i) {
 			int32_t tok = -1;
 			Ok(SslmGpuSeqDecodeStepForG5Bridge(ctx, seq, next, kWhole, &tok), "off decode");
@@ -245,6 +273,7 @@ int main(int argc, char** argv) {
 			}
 		}
 		r.wall = MsSince(t0);
+		r.gpu = (superslm_gpu::CumulativeGpuBusyUs() - gpu0) / 1000.0;
 		if (r.stop.empty()) r.stop = "max-new";
 		return r;
 	};
@@ -254,6 +283,7 @@ int main(int argc, char** argv) {
 		start();
 		int32_t pending = -1;  // a produced token that is walked but not yet run
 		const auto t0 = Clock::now();
+		const double gpu0 = superslm_gpu::CumulativeGpuBusyUs();
 		for (int i = 0; i < max_new && static_cast<int>(r.stream.size()) < max_new;) {
 			const std::vector<int32_t> chain = chain_from(SslmGpuSeqWalkStateForG5Bridge(seq));
 			int32_t next = pending;
@@ -293,20 +323,143 @@ int main(int argc, char** argv) {
 			}
 		}
 		r.wall = MsSince(t0);
+		r.gpu = (superslm_gpu::CumulativeGpuBusyUs() - gpu0) / 1000.0;
 		if (r.stop.empty()) r.stop = "max-new";
 		return r;
 	};
 
+	// The fused arm (1.17.0): the §5.6 loop through the GPU verb at chunk_budget `budget`.
+	auto run_fused = [&](int32_t budget) {
+		Run r;
+		start();
+		int32_t pending = -1;  // a produced token, walked, not yet embedded
+		std::vector<int32_t> forced(static_cast<size_t>(budget));
+		const auto t0 = Clock::now();
+		const double gpu0 = superslm_gpu::CumulativeGpuBusyUs();
+		while (static_cast<int>(r.stream.size()) < max_new) {
+			bool accepted = false;
+			for (int guard = 0; guard < 4096; ++guard) {
+				int32_t count = 0, acc = 0;
+				Ok(sslm_gpu_seq_forced_tokens(ctx, seq, nullptr, 0, &count, &acc), "fused query");
+				const int32_t pend = pending >= 0 ? 1 : 0;
+				const int32_t room = max_new - static_cast<int32_t>(r.stream.size()) + pend;
+				const int32_t b = std::min(budget, room);
+				// At b = 1 with a pending token the call admits the pending row alone, as the CPU's RunOn does at budget 1
+				// (§5.6; engine code review N1); the chain's rows then follow one per call.
+				if (count == 0 || b < 1) break;
+				int32_t got = 0;
+				Ok(sslm_gpu_seq_jump_forward(ctx, seq, pending, b, nullptr, forced.data(), budget, &got), "fused verb");
+				r.submits += (pend + got + 3) / 4 - 1;  // sub-chunks beyond the one timing() counts
+				timing(r);
+				pending = -1;  // admitted: the next decode only finishes
+				for (int32_t i = 0; i < got; ++i) r.stream.push_back(forced[static_cast<size_t>(i)]);
+				if (accepting()) {
+					accepted = true;
+					break;
+				}
+			}
+			if (accepted) {
+				r.stop = "accepting";
+				break;
+			}
+			if (static_cast<int>(r.stream.size()) >= max_new) break;
+			int32_t ready = 0;
+			Ok(sslm_gpu_seq_ready_for_logits(ctx, seq, &ready), "fused ready");
+			int32_t tok = -1;
+			Ok(SslmGpuSeqDecodeStepForG5Bridge(ctx, seq, pending < 0 ? 0 : pending, kWhole, &tok), "fused decode");
+			if (!ready && pending >= 0) timing(r);  // the decode ran the pending row's layers
+			if (tok == -2) {
+				r.stop = "deadend";
+				break;
+			}
+			r.stream.push_back(tok);
+			pending = tok;
+			if (accepting()) {
+				r.stop = "accepting";
+				break;
+			}
+		}
+		r.wall = MsSince(t0);
+		r.gpu = (superslm_gpu::CumulativeGpuBusyUs() - gpu0) / 1000.0;
+		if (r.stop.empty()) r.stop = "max-new";
+		return r;
+	};
+	auto run_arm = [&](const std::string& a) -> Run {
+		if (a == "off") return run_off();
+		if (a == "on") return run_on();
+		if (a.rfind("fused:", 0) == 0) {
+			const int32_t b = std::atoi(a.c_str() + 6);
+			if (b < 1) Die("fused:N needs N >= 1", b);
+			return run_fused(b);
+		}
+		std::fprintf(stderr, "unknown arm %s (off, on, fused:N)\n", a.c_str());
+		std::exit(2);
+	};
+
+	if (const char* streams = Arg(argc, argv, "--streams", nullptr)) {
+		const std::vector<std::string> arms = SplitComma(streams);
+		std::vector<std::string> texts{prompt_text};
+		if (const char* up = Arg(argc, argv, "--utterances", nullptr)) {
+			std::FILE* uf = std::fopen(up, "rb");
+			if (!uf) {
+				std::fprintf(stderr, "cannot open %s\n", up);
+				return 2;
+			}
+			std::string line;
+			for (int c = std::fgetc(uf);; c = std::fgetc(uf)) {
+				if (c == EOF || c == '\n') {
+					while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+					if (!line.empty()) texts.push_back(ExamplePrompt(line));
+					line.clear();
+					if (c == EOF) break;
+				} else {
+					line += static_cast<char>(c);
+				}
+			}
+			std::fclose(uf);
+		}
+		std::string rows;
+		for (size_t pi = 0; pi < texts.size(); ++pi) {
+			prompt = tokenize(texts[pi]);
+			std::printf("prompt %zu (%zu tokens):", pi, prompt.size());
+			rows += std::string(pi ? "," : "") + "{\"index\":" + std::to_string(pi) + ",\"prompt\":" + JIds(prompt) + ",\"arms\":[";
+			for (size_t ai = 0; ai < arms.size(); ++ai) {
+				const Run r = run_arm(arms[ai]);
+				char d[32];
+				std::snprintf(d, sizeof d, "%016llx", static_cast<unsigned long long>(Fnv(r.stream)));
+				std::printf(" %s %s/%zu/%s", arms[ai].c_str(), d, r.stream.size(), r.stop.c_str());
+				rows += std::string(ai ? "," : "") + "{\"arm\":\"" + arms[ai] + "\",\"stop\":\"" + r.stop + "\",\"tokens\":" +
+				        std::to_string(r.stream.size()) + ",\"digest\":\"" + d + "\",\"stream\":" + JIds(r.stream) + "}";
+			}
+			std::printf("\n");
+			rows += "]}";
+		}
+		sslm_gpu_seq_release(ctx, seq);
+		sslm_gpu_model_unmap(ctx, model);
+		sslm_gpu_context_destroy(ctx);
+		if (json_path) {
+			std::FILE* o = std::fopen(json_path, "wb");
+			if (!o) return 4;
+			const std::string js = std::string("{\"mode\":\"gpu-streams\",\"logits_head\":\"") + (device_head ? "device" : "host") +
+			                       "\",\"max_new\":" + std::to_string(max_new) + ",\"prompts\":[" + rows + "]}";
+			std::fwrite(js.data(), 1, js.size(), o);
+			std::fclose(o);
+		}
+		return 0;
+	}
+
+	const std::vector<std::string> pair_arms = SplitComma(Arg(argc, argv, "--pair", "off,on"));
+	if (pair_arms.size() != 2) Die("--pair needs two arms", static_cast<int>(pair_arms.size()));
 	std::vector<Run> offs, ons;
 	std::vector<double> ratio;
 	for (int p = 0; p < warmup + pairs; ++p) {
 		Run a, b;
 		if (p % 2 == 0) {
-			a = run_off();
-			b = run_on();
+			a = run_arm(pair_arms[0]);
+			b = run_arm(pair_arms[1]);
 		} else {
-			b = run_on();
-			a = run_off();
+			b = run_arm(pair_arms[1]);
+			a = run_arm(pair_arms[0]);
 		}
 		if (p < warmup) continue;
 		offs.push_back(a);
@@ -344,14 +497,14 @@ int main(int argc, char** argv) {
 	std::printf("prompt tokens %zu, schema potion_shop_order (index %zu), whole-token depth, logits head on the %s, %d pairs after "
 	            "%d warm-up\n",
 	            prompt.size(), schema_index, device_head ? "device" : "host", pairs, warmup);
-	const std::string ja = arm("off", offs), jb = arm("on", ons);
+	const std::string ja = arm(pair_arms[0].c_str(), offs), jb = arm(pair_arms[1].c_str(), ons);
 	const Stat r = Summarize(ratio);
-	std::printf("off / on wall: %.4f [%.4f, %.4f]\n", r.median, r.lo, r.hi);
+	std::printf("%s / %s wall: %.4f [%.4f, %.4f]\n", pair_arms[0].c_str(), pair_arms[1].c_str(), r.median, r.lo, r.hi);
 	if (json_path) {
 		std::FILE* o = std::fopen(json_path, "wb");
 		if (!o) return 4;
 		const std::string js = std::string("{\"mode\":\"gpu-jf\",\"logits_head\":\"") + (device_head ? "device" : "host") +
-		                       "\",\"pairs\":" + std::to_string(pairs) + ",\"warmup\":" +
+		                       "\",\"pair\":\"" + pair_arms[0] + "," + pair_arms[1] + "\",\"pairs\":" + std::to_string(pairs) + ",\"warmup\":" +
 		                       std::to_string(warmup) + ",\"prompt_tokens\":" + std::to_string(prompt.size()) +
 		                       ",\"prompt\":" + JIds(prompt) + ",\"arms\":[" + ja + "," + jb + "],\"ratio_off_over_on\":" +
 		                       JStat(r) + "}";

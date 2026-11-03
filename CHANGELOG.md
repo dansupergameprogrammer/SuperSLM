@@ -2,6 +2,145 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
+## [1.18.1] - 2026-10-31
+
+A GPU fix release. No token, save format, status, verb or shader changes. `SPX1` prefix blobs are bound to the engine
+version, so rebuild prefix caches made by 1.18.0 (1.18.1 refuses them with `SSLM_RESTORE_PRODUCER_MISMATCH`).
+`docs/releases/1.18.1.md` is the release note.
+
+- **No D3D12 object is released by a static destructor.** The process's GPU device, the two pipeline caches, the
+  shared root signature and the descriptor-table probe's pipeline live until the process ends. In a DLL host the
+  static destructors run at the DLL's process detach, after the D3D12 runtime has torn down, and the device's last
+  release failed fast there (`0xC0000409`, `FAST_FAIL_FATAL_APP_EXIT`): the Unreal Engine editor and its commandlets
+  crashed on a normal exit after GPU work. A context's own device is released at `sslm_gpu_context_destroy`, as
+  before.
+- **Tests:** `tests/ci/check_gpu_no_exit_destructors.py`, a lint for static-storage objects that hold a D3D12 object
+  by value, runs in the tests workflow; its red suite runs in `pytest tests/ci/`.
+
+## [1.18.0] - 2026-10-28
+
+Multi-row GPU dispatch (GPU Exact), the removal of canonical jump-forward, and threaded batched passes on the CPU.
+`docs/releases/1.18.0.md` is the release note. No save format (`SLM5`, `SLM6`, `SPX1`) changes. Multi-row GPU dispatch
+is certified on the AMD Radeon RX 7900 XT; the NVIDIA RTX 5060 kernel-equality run passed.
+
+### Removed
+
+- **Canonical jump-forward, on the CPU and the GPU** (deprecated in 1.17.0). Canonical is removed; mode 0 is now
+  `SSLM_JUMP_DEFAULT`, which selects Exact, as do NULL options.
+  - `SSLM_JUMP_CANONICAL` is gone from `sslm_abi.h`. Its value 0 is now the default, so a zero-initialised
+    `sslm_jump_options` or `SslmGpuJumpOptions` keeps working and selects Exact. `SSLM_JUMP_EXACT` keeps its value, 1.
+    Any other mode is refused as malformed options, as before (`SSLM_INVALID_ARGUMENT` on the CPU,
+    `SSLM_SEQUENCE_KV_BUFFER_MISMATCH` on the GPU).
+  - On the CPU, `sslm_seq_jump_forward` with NULL options, or with mode 0, now runs exact mode with the forced chain
+    as its draft. A caller's draft still takes `SSLM_JUMP_EXACT`; a draft with mode 0 is refused, as it was.
+  - On the GPU, `sslm_gpu_seq_jump_forward` runs Exact on multi-row dispatch (below). 1.17.0's refusal of
+    `SSLM_JUMP_EXACT` with `SSLM_SEQUENCE_REJECTED` is gone.
+  - Saves made by 1.15.0-1.17.0 after a canonical jump still restore. The restored sequence continues under
+    whatever mode the caller asks for.
+  - The multi-row branch's provisional `SSLM_GPU_ROWS_SCHEMA_FORCED` kind and `SSLM_GPU_ROWS_FIRST_PREWALKED` flag
+    of `sslm_gpu_seq_embed_rows` were never released and are removed. Kind 1 is reserved, and a spec with kind 1 or
+    flag bit 0x1 is refused as a bad spec.
+
+### Added
+
+- **Multi-row GPU passes.** `sslm_gpu_seq_embed_rows` opens a row chunk of up to `SSLM_GPU_MAX_ROWS` (8) tokens on
+  a sequence (`SslmGpuRowsSpec`, kind `SSLM_GPU_ROWS_PROMPT` or `SSLM_GPU_ROWS_EXACT_DRAFT`). It is host-only; the
+  decode step (and a batch member) then runs the chunk's layers as one widened dispatch per site, in the same layer
+  slices as a one-row token, and the close commits the rows. `sslm_gpu_seq_rows_abandon` restores the state before
+  the chunk; `sslm_gpu_seq_rows_open` and `sslm_gpu_seq_last_rows_committed` read the chunk's state. A batch call
+  takes members with chunks open. A save with a chunk open is refused with the appended `SSLM_GPU_ROWS_CHUNK_OPEN`
+  (ordinal 33), nothing written. It is GPU-only: no CPU call can return it, so it is not appended to the CPU's
+  `SSLM_STATUS_ENUM_LIST`, which still ends at 32. Every result is byte-identical to the one-row path's: K/V rows, final hidden
+  state, save blob and statuses.
+- **Exact on the GPU.** `sslm_gpu_seq_jump_forward` runs Exact: p and the draft (the caller's, or the forced chain)
+  go through the layers in passes of up to 8 rows, each row is finished with the decode bridge's own finish, and the
+  rows up to the first mismatch are kept. The stream and every saved byte equal the plain GPU decode loop's.
+- **`SSLM_GPU_ROWS_EXACT_DRAFT`** for `sslm_gpu_seq_embed_rows` (kind 2): `[p, draft...]`, closed by the same check,
+  and **`sslm_gpu_seq_rows_produced`**, which reads the token the close produced (-2 at a schema dead end). A model
+  mapped without the device logits head refuses the kind with `SSLM_SEQUENCE_REJECTED`. A guard refusal of the
+  close changes nothing.
+- **The GPU prompt bridge in passes of up to 8 rows (MR3e).** `SslmGpuSeqPrefillForG5Bridge` runs the prompt as
+  multi-row passes, each submitted in slices of floor(`dispatch_budget` / dispatches per layer) layers, so a
+  frame-sized budget gives layer-sliced submissions. Below one layer of budget, or with `SSLM_GPU_MULTIROW_PROMPT=0`
+  set before `sslm_gpu_context_create`, it is 1.17.0's one-row path. Results are byte-identical either way. A
+  guard refusal restores the device's own K/V rows.
+- **Threaded batched passes on the CPU (tiled-matmul plan, slice 2).** A new opt-in bit,
+  `SSLM_PARALLEL_FOR_PREFILL` (bit 0 of `sslm_parallel_for.reserved`), splits every projection of a pass of two or
+  more rows across the host's parallel-for hook: prompt prefill, prefix prefill, and `sslm_seq_jump_forward`'s
+  passes. The tiled kernel still reads each weight panel once for all the pass's rows; the split is by output
+  columns, in blocks of 32, capped by a minimum of 4 Mi multiply-adds per task (`docs/api.md` gives the rule).
+  Tokens and saved state are byte-identical with the bit on or off, on every tier. All scratch is allocated on the
+  calling thread before `run`, and no task allocates. A `run` that breaks its exactly-once contract fails the call
+  with `SSLM_INVALID_ARGUMENT`, nothing of that pass admitted and the saturation counts as they were.
+  - The jump-forward keeps Q6 C's one-row split at 2 to 7 rows under bit 1, with or without bit 0: its check stops
+    at the first mismatch, so one-row passes compute no rejected row (measured on a 16-core CPU: with the batched
+    pass threaded instead, Exact with its default draft ran at 0.86x of plain decoding, against 0.98x with the
+    split). At 8 rows or more it runs the threaded batched pass.
+  - Both CPU setters now accept bit 0 (and bits 0 and 1 together); bit 2 and above are still refused. The GPU
+    setter accepts and ignores it.
+- **GPU timing for embedders (internal, `gpu_port.h`).** `superslm_gpu::LastLogitsStageTiming()` brackets the
+  widened logits stage with its own GPU timestamps (an Exact close of two or more rows on the device-head path runs
+  exactly one stage; a one-row close keeps the one-row logits call), and carries the close's host-finish time
+  (`host_finish_ms`, `host_rows`, `closes`). `superslm_gpu::CumulativeGpuBusyUs()` is a process-wide counter of
+  GPU-measured busy time that every call advances, each batch member, the one-row finish, the M = 1 close's finish,
+  the standalone finish and the K/V restore of refused rows included. `gpu_rows_cost_table.h` carries the measured
+  row-cost ratios r(M) and g(M) (RX 7900 XT, 0.5B and 1.5B) that an embedder prices a multi-row pass with.
+
+### Changed
+
+- `SSLM_GPU_CONTEXT_CAP_EXCEEDED` (32) is also returned by `sslm_gpu_seq_embed_rows` with no headroom before the
+  context cap (nothing admitted, nothing written).
+- No CPU symbol, struct layout or save format changes.
+
+### Known issues
+
+- On a card that slows under sustained load, a 2 ms frame budget can run up to about 20% over for a stretch.
+- A schema-end dead end (no legal continuation) stays a fault until 1.19.0.
+
+## [1.17.0] - 2026-10-26
+
+Schema skip-ahead on the GPU, and the RTX 50-series fix. `docs/releases/1.17.0.md` is the release note. Three GPU
+verbs, the ready getter, one struct and two appended GPU statuses are added; no save format (`SLM5`, `SLM6`, `SPX1`)
+changes, and the GPU masked finish changes no GPU token. Stream equality with the CPU, per mode, is certified on the
+NVIDIA RTX 5060 and the AMD Radeon RX 7900 XT only.
+
+- **Forced-text query.** `sslm_gpu_model_map` builds the forced-next table with the CPU map's builder, and
+  `sslm_gpu_seq_forced_tokens` returns the CPU's ids for the same walk state. A model without a table returns the
+  appended `SSLM_GPU_FORCED_TABLE_ABSENT` (ordinal 31).
+- **GPU masked finish.** Under a bound schema the decode bridge's finish scores only the legal rows, for a host head
+  or a device head tied to the embedding. **Untied device-head models get no GPU masked finish in 1.17.0**: they keep
+  the device logits.
+- **New exit on tied device-head models:** a parallel-for hook that does not run every task now makes the bound
+  finish return `SSLM_GPU_PARALLEL_FOR_INCOMPLETE` (token -1, walk unchanged, ready flag set, so a retry finishes the
+  same row). The host-head finish already had this exit.
+- **Jump-forward, canonical.** `sslm_gpu_seq_jump_forward` admits the pending token and the forced chain in one pass,
+  `sslm_gpu_seq_embed_schema_token` embeds a token with the walk, and `sslm_gpu_seq_ready_for_logits` reads the ready
+  flag. A call that would pass the context cap admits the rows that fit and returns the appended
+  `SSLM_GPU_CONTEXT_CAP_EXCEEDED` (ordinal 32). A failure in the pass restores the entry state and returns
+  `SSLM_GPU_ALLOCATION_FAILED` for an allocation failure (device or host) and `SSLM_DEVICE_LOST` for any other
+  fault. The walked embed refuses a mid-token sequence. **The GPU verb refuses `SSLM_JUMP_EXACT` in 1.17.0 with
+  `SSLM_SEQUENCE_REJECTED`.**
+- **Canonical mode changes answers, not only tokens. Use exact mode where answers matter.** Canonical writes the
+  forced text with the tokenizer's own split instead of the model's, and the model then continues from tokens it
+  would not have chosen. On a user's schema-heavy workload of 44 lines on the CPU (1.16.0), exact mode was 0.46 s a line
+  with all 44 answers identical to off (0.63 s), and canonical was 0.44 s but changed 8 of the 44 answers and lowered
+  accuracy. On array schemas (not convertible before 1.19.0) canonical closes an array after its first item. On the
+  GPU, 1.17.0 has canonical only: exact runs as off there until multi-row GPU dispatch (1.18.0). Nothing jumps unless
+  the host calls a jump-forward verb, and on the CPU verb NULL options select canonical, so pass `SSLM_JUMP_EXACT`.
+  **Canonical mode is deprecated: 1.18.0 removes it on the CPU and the GPU.**
+- **CPU C ABI:** the two status names are appended to `SSLM_STATUS_ENUM_LIST`, so the CPU and GPU enums keep one
+  ordinal space. No CPU call returns either.
+- **Two claims, kept apart.** Stream equality per mode is claimed on the GPUs where the box's exactness rules ran. The
+  plugin README's "GPU determinism is not claimed" stays as it is.
+- **Fixed: wrong GPU results on NVIDIA RTX 50-series (Blackwell).** On Blackwell, the driver's shader backend drops
+  the carry from the low 32 bits into the high 32 bits of a native 64-bit integer add in some kernels. The same DXIL
+  is correct on the RTX 2080 SUPER. It hit `SaturatingAdd64Gpu_`, which derives the softmax site's i-exp scale
+  constants, so every GPU forward diverged from the CPU at the first attention layer. The open-time witness refused
+  the device, and 59 checks of the GPU suite failed. `SaturatingAdd64Gpu_` now forms the sum from two 32-bit halves
+  with an explicit carry. It is bit-identical to the native add wherever that add is computed correctly. On an
+  RTX 5060 (drivers 32.0.16.1088 and 32.0.16.2101) the full suite passes (326,326 checks with the fix on 1.15.0;
+  326,327 on 1.17.0, 0 failures) and the witness accepts the device. Results on the RTX 2080 SUPER are unchanged.
+
 ## [1.16.0] - 2026-10-25
 
 Frozen-prefix save and restore on the GPU. `docs/releases/1.16.0.md` is the release note, and

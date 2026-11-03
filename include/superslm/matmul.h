@@ -95,6 +95,35 @@ void GemmInt8AccumulateColsWidened(const int16_t* activations16, size_t widened_
                                    size_t out_channels, size_t j_begin, size_t j_end,
                                    int64_t* out_acc);
 
+// Tiled-matmul plan slice 2 (§5.3): the per-task form of GemmInt8AccumulateCols, for a column split
+// across the host's parallel-for hook. Every buffer is the caller's, made on the calling thread before
+// `run` (PlanColsTasks says which), so a task allocates nothing and cannot throw.
+struct ColsTaskPlan {
+	bool tiled = false;         // the call's path: the tiled kernel, or the one-cell-at-a-time loop
+	size_t widened_stride = 0;  // tiled: in_channels rounded up to even (the widened rows' stride)
+	size_t pack_bytes = 0;      // tiled: the packed-panel scratch one task needs; 0 on the loop
+};
+
+// The path a call of `num_tokens` rows takes (DispatchGemmPath on the active tier), and what each
+// task of it needs. On the tiled path it also runs the tiled kernel's allocation-fault test seam
+// (cell 5.1), so an injected fault fires here, on the calling thread, before any output is written.
+ColsTaskPlan PlanColsTasks(size_t num_tokens, size_t in_channels);
+
+// The tiled path's activation prep, once per call on the calling thread: `activations16` must hold
+// num_tokens * plan.widened_stride zeroed int16 values on entry (the K pad stays zero).
+void WidenActivationsForCols(const int8_t* activations, size_t num_tokens, size_t in_channels,
+                             int16_t* activations16, size_t widened_stride) noexcept;
+
+// One task: writes exactly columns [j_begin, j_end) of the row-major [num_tokens][out_channels]
+// output, every value GemmInt8Accumulate's. On the tiled path it reads `activations16` (widened by
+// WidenActivationsForCols) and uses `pack` (plan.pack_bytes bytes, this task's alone); on the loop
+// it reads `activations` and neither of the others. Allocates nothing.
+void GemmInt8AccumulateColsTask(const ColsTaskPlan& plan, const int8_t* activations,
+                                const int16_t* activations16, const int8_t* weights,
+                                size_t num_tokens, size_t in_channels, size_t out_channels,
+                                size_t j_begin, size_t j_end, int64_t* out_acc,
+                                int8_t* pack) noexcept;
+
 // The tier GemmInt8AccumulateCols dispatches on. On x64 it is the cached CPUID tier (or the
 // forced one); on any other target it is kScalar.
 enum class GemmTier : int { kScalar = 0, kSse2 = 1, kAvx2 = 2, kAvx512 = 3 };

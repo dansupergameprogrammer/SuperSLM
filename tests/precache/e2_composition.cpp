@@ -108,10 +108,13 @@ void CrossBuild91() {
 PKV_CELL("9.1/E2", "E1", CrossBuild91);
 
 void Ordinals716() {
-    PKV_CHECK_EQ(int(SSLM_STATUS_NEXT_FREE),31);
+    // Schema skip-ahead on the GPU (1.17.0) appends two names after the producer status, which keeps 30.
+    PKV_CHECK_EQ(int(SSLM_STATUS_NEXT_FREE),33);
     PKV_CHECK_EQ(int(SSLM_KV_BUDGET_EXCEEDED),29);
 #ifdef SSLM_HAS_PREFIX_SAVE_ABI
     PKV_CHECK_EQ(int(SSLM_RESTORE_PRODUCER_MISMATCH),30);
+    PKV_CHECK_EQ(int(SSLM_GPU_FORCED_TABLE_ABSENT),31);
+    PKV_CHECK_EQ(int(SSLM_GPU_CONTEXT_CAP_EXCEEDED),32);
 #else
     PKV_CHECK_MSG(false,"7.16 producer mismatch status and prefix ABI macro are absent");
 #endif

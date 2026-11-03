@@ -46,6 +46,48 @@ SslmGpuStatus sslm_gpu_test_only_last_ladder_status(const SslmGpuSequenceHandle*
 SslmGpuStatus sslm_gpu_test_only_prefix_table_entry(const SslmGpuPrefixHandle* prefix, uint32_t i, uint32_t* out_page,
                                                     uint32_t* out_mapped) noexcept;
 
+// Schema fast-decode plan rev 1.4.1 §11.0: the GPU seams of slices G1-F, G1-M and G1-J. Test-only:
+// declared and defined only under SUPERSLM_GPU_TEST_SEAMS, so they are absent from the production library.
+#if defined(SUPERSLM_GPU_TEST_SEAMS)
+// S-GSUB (G1-F): the submissions made so far on `ctx`'s device and on the process's submission device
+// (when it is set up), read from the harness's fence_value_counter(). A cell reads it before and after a
+// call; the difference is the call's submissions. A null argument: SSLM_SEQUENCE_KV_BUFFER_MISMATCH.
+SslmGpuStatus sslm_gpu_test_only_submission_count(SslmGpuContext* ctx, uint64_t* out_count) noexcept;
+// The GPU model's forced-next table, read (G12.4's golden hashes, as the CPU's cell 6.6 reads its own):
+// next_forced(state) (-1 when unforced) and |F(state)| (0 when unforced) of schema `schema_index`.
+// SSLM_GPU_FORCED_TABLE_ABSENT when the model has no table; SSLM_SEQUENCE_KV_BUFFER_MISMATCH for a null
+// argument or an index out of range.
+SslmGpuStatus sslm_gpu_test_only_forced_table_entry(const SslmGpuModelHandle* model, int32_t schema_index,
+                                                    uint32_t state, int32_t* out_next_forced,
+                                                    uint32_t* out_f_len) noexcept;
+// S-GROWS (G1-M): one entry per token finish (SslmGpuSeqFinishTokenForG5Bridge, directly or through the decode
+// bridge), in call order, process-wide: the head rows the finish scored (V for the full finish, n for the
+// legal-row finish) and whether the device logits ran (1) or the host computed the row (0). Reset clears it.
+// An index at or past the count, or a null output: SSLM_SEQUENCE_KV_BUFFER_MISMATCH.
+void sslm_gpu_test_only_rows_log_reset() noexcept;
+size_t sslm_gpu_test_only_rows_log_count() noexcept;
+SslmGpuStatus sslm_gpu_test_only_rows_log_at(size_t i, uint64_t* out_rows, int32_t* out_device_logits) noexcept;
+// S-GBOUND (G1-M): forces the model's LegalRowFinishExact predicate false (force 1) or back to its mapped value
+// (force 0), the GPU twin of S-BOUND. A forced model finishes every bound token with the full finish. Must not
+// race a finish on the model. A null model: SSLM_SEQUENCE_KV_BUFFER_MISMATCH.
+SslmGpuStatus sslm_gpu_test_only_force_full_finish(SslmGpuModelHandle* model, int32_t force) noexcept;
+// S-GCHUNKFAULT (G1-J): arms a single-shot fault for the next sslm_gpu_seq_jump_forward call's pass. Its sub-chunk
+// `sub_chunk` (0 = the first; sub-chunks of 4 rows) is refused before it is recorded, as a failed submission is,
+// with `status`: SSLM_GPU_ALLOCATION_FAILED or SSLM_DEVICE_LOST. Earlier sub-chunks run and commit; the verb's
+// failure exit then restores its entry state. A negative `sub_chunk` disarms. Any other status:
+// SSLM_SEQUENCE_KV_BUFFER_MISMATCH. Only the verb consumes it; the bridges never do.
+SslmGpuStatus sslm_gpu_test_only_arm_chunk_fault(int32_t sub_chunk, SslmGpuStatus status) noexcept;
+// S-GJUMPALLOC (G1-J, engine code review B1): arms a single-shot host std::bad_alloc in the next
+// sslm_gpu_seq_jump_forward call's pass, after its entry snapshot is taken: site 0 before the chunk pre-scan (the
+// prefill snapshot's flag already cleared), 1 after a pooled holder's pages are mapped, 2 after the pass's
+// sub-chunks committed, before the walk and the ready flag move. A negative `site` disarms; any other value,
+// SSLM_SEQUENCE_KV_BUFFER_MISMATCH. Only the verb consumes it.
+SslmGpuStatus sslm_gpu_test_only_arm_jump_host_bad_alloc(int32_t site) noexcept;
+// The context's own harness device (a superslm_gpu::harness::Device*, as void* so this header needs no harness),
+// for the cells' debug-layer report at exit (engine code review N3). Null for a null or destroyed context.
+void* sslm_gpu_test_only_context_device(SslmGpuContext* ctx) noexcept;
+#endif  // SUPERSLM_GPU_TEST_SEAMS
+
 #if defined(SUPERSLM_ENABLE_GPU_API_FAILURE_INJECTION)
 enum class SslmGpuApiFailureInjectionPoint { BeforeHandler, AfterHandler };
 void ArmSslmGpuApiFailureInjection(const char* api_name,

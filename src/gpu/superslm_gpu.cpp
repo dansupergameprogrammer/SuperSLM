@@ -25,6 +25,7 @@
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (T-2035 mlp_act_site upload)
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -37,6 +38,7 @@
 #include <vector>
 
 #include "d3d12_harness.h"
+#include "multirow_wide.h"  // the multi-row recorder (plan rev 1.3.2 §3)
 #include "gpu_call_timing_snapshot.h"
 #include "shaders/kv_page_addr_model.h"
 #include "gpu_kv_pool_geometry.h"  // paged-KV G3: the coverage twin's chunk-wide form
@@ -256,7 +258,8 @@ std::string ShaderPath(const std::string& name) {
 	}
 	// (T-2575, D-SLM6268): refuse a shader binary older than the source it claims to be a
 	// compile of, rather than dispatching it. Every `.cso` this tree ever loads comes through
-	// this one function, so the check has no per-shader enumeration to keep current. The
+	// this one function, so the check has no per-shader enumeration to keep current; the
+	// widened variants' names map to their shaders_wide sources by rule (MR3 review S1). The
 	// refusal is deliberately a hard failure rather than a warning
 	// (`StandardsDocument.md` §4): a warning on a diagnostic path nobody reads is what let a
 	// dead RoPE saturation counter be measured, root-caused and quarantined across two
@@ -364,24 +367,86 @@ const std::string& ShaderSourceDirOrEmpty() {
 	return cached;
 }
 
+namespace {
+
+// (MR3 review S1): the sources a widened binary is compiled from. The multi-row variants
+// (multirow_wide.inl) are loaded by names that have no `<name>.hlsl` beside the one-row
+// sources: `<site>_wide_h<H>` compiles shaders_wide/<site>_wide.hlsl (generated from the
+// one-row shaders/<site>.hlsl), and `<gemm>_gemm_wide_h<H>` compiles
+// shaders_wide/proj_gemm_wide.hlsl. Returns false for a name of neither form. `wide_dir` is
+// shaders_wide beside the one-row source directory.
+bool WidenedShaderSources(const std::string& shader_source_dir, const std::string& shader_name,
+                          std::string* out_wide_dir, std::vector<std::string>* out_sources) {
+	const size_t h = shader_name.rfind("_h");
+	if (h == std::string::npos || h + 2 >= shader_name.size()) return false;
+	for (size_t i = h + 2; i < shader_name.size(); ++i) {
+		if (shader_name[i] < '0' || shader_name[i] > '9') return false;
+	}
+	const std::string stem = shader_name.substr(0, h);
+	const size_t slash = shader_source_dir.find_last_of("\\/");
+	if (slash == std::string::npos) return false;
+	*out_wide_dir = shader_source_dir.substr(0, slash) + "\\shaders_wide";
+	static const std::string kGemm = "_gemm_wide";
+	static const std::string kWide = "_wide";
+	if (stem.size() > kGemm.size() && stem.compare(stem.size() - kGemm.size(), kGemm.size(), kGemm) == 0) {
+		out_sources->push_back(*out_wide_dir + "\\proj_gemm_wide.hlsl");
+		return true;
+	}
+	if (stem.size() > kWide.size() && stem.compare(stem.size() - kWide.size(), kWide.size(), kWide) == 0) {
+		out_sources->push_back(*out_wide_dir + "\\" + stem + ".hlsl");
+		out_sources->push_back(shader_source_dir + "\\" + stem.substr(0, stem.size() - kWide.size()) + ".hlsl");
+		return true;
+	}
+	return false;
+}
+
+}  // namespace
+
 std::string ShaderBinaryStalenessDiagnostic(const std::string& shader_source_dir,
                                              const std::string& shader_name,
                                              const std::string& cso_path) {
 	if (shader_source_dir.empty()) return {};
-	const std::string hlsl_path = shader_source_dir + "\\" + shader_name + ".hlsl";
+	// The binary's own sources: `<name>.hlsl` beside the one-row shaders, or, for a widened
+	// variant, its source in shaders_wide (and the one-row site it is generated from). The
+	// shared headers of every directory searched are sources of every binary compiled there.
+	std::vector<std::string> sources;
+	std::vector<std::string> header_dirs{shader_source_dir};
+	std::string wide_dir;
+	if (WidenedShaderSources(shader_source_dir, shader_name, &wide_dir, &sources)) {
+		header_dirs.push_back(wide_dir);
+	} else {
+		sources.push_back(shader_source_dir + "\\" + shader_name + ".hlsl");
+	}
 	// The source path is ANSI always; the .cso path is UTF-8 exactly when an override is fixed,
 	// because only then does ShaderPath build it from the override (d3d12_harness.h).
-	const uint64_t hlsl_t = ShaderFileWriteTime(hlsl_path, /*utf8=*/false);
-	if (hlsl_t == 0) return {};  // no such source beside the others -- nothing to compare against
+	uint64_t own_t = 0;
+	std::string own_name;
+	for (const std::string& s : sources) {
+		const uint64_t t = ShaderFileWriteTime(s, /*utf8=*/false);
+		if (t > own_t) {
+			own_t = t;
+			own_name = s;
+		}
+	}
+	// No such source -- nothing to compare against. For a widened name this is a tree without
+	// shaders_wide; the one-row source alone is not what it compiles.
+	if (own_t == 0 || ShaderFileWriteTime(sources.front(), /*utf8=*/false) == 0) return {};
 	const uint64_t cso_t = ShaderFileWriteTime(cso_path, /*utf8=*/ShaderDirOverrideActive());
 	if (cso_t == 0) return {};  // absent binary -- ReadFile reports "cannot open shader"
-	std::string newest_header_name;
-	const uint64_t hdr_t = NewestMatchingFileTime(shader_source_dir, "*.hlsli", &newest_header_name);
-	const bool header_wins = hdr_t > hlsl_t;
-	const uint64_t src_t = header_wins ? hdr_t : hlsl_t;
+	uint64_t hdr_t = 0;
+	std::string hdr_name;
+	for (const std::string& d : header_dirs) {
+		std::string name;
+		const uint64_t t = NewestMatchingFileTime(d, "*.hlsli", &name);
+		if (t > hdr_t) {
+			hdr_t = t;
+			hdr_name = d + "\\" + name;
+		}
+	}
+	const bool header_wins = hdr_t > own_t;
+	const uint64_t src_t = header_wins ? hdr_t : own_t;
 	if (cso_t >= src_t) return {};
-	const std::string src_name =
-	    header_wins ? (shader_source_dir + "\\" + newest_header_name) : hlsl_path;
+	const std::string src_name = header_wins ? hdr_name : own_name;
 	return "stale shader binary: " + cso_path + " (compiled " + FormatShaderFileTime(cso_t) +
 	       ") is older than " + src_name + " (modified " + FormatShaderFileTime(src_t) +
 	       "). Recompile the shaders into that directory with dxc before running this "
@@ -696,6 +761,7 @@ LastCallTimingSnapshot<GpuCallTiming> g_last_call_timing_snapshot;
 // allocation failure there is the call's own SSLM_GPU_ALLOCATION_FAILED (gpu_1p0.h), never
 // swallowed into SSLM_OK.
 void PublishCallTimingNoThrow(const GpuCallTiming& timing, std::vector<double> per_dispatch_ms) noexcept {
+	AddCumulativeGpuBusyMs(timing.gpu_busy_ms);  // ruling 45a: counted even when the publish itself fails
 	try {
 		g_last_call_timing_snapshot.Publish(timing, std::move(per_dispatch_ms));
 	} catch (...) {
@@ -1922,6 +1988,45 @@ void RecordOneTokenFullDepthDispatchBody(
 	}
 }
 
+// The SeqState bytes a submission uploads for `seq` (T-2039's dynamic, per-real-hidden_size layout:
+// hidden_codes[H] i32, hidden_scale.m/e i64, layer_index u32, kv_sat_lo/hi u32, context_length i64,
+// sticky_status i64, then the four per-site counter pairs; see SeqScaleOff/.../SeqStickyOff above,
+// matched shader-side by site_common.hlsli's SeqScaleOffGpu family). Extracted unchanged from
+// PrepareGpuLayerLoopChunkOpenState so the multi-row plan's widened recorder (multirow_wide.inl) packs
+// each row exactly as the one-row submission packs its one.
+std::vector<uint8_t> PackGpuSeqStateBytes(const superslm::SequenceLayerState& seq, uint32_t H) {
+	std::vector<uint8_t> seq_bytes(SeqTotalSize(H), 0);
+	for (uint32_t i = 0; i < H; ++i) PutI32At(seq_bytes, i * 4, static_cast<int32_t>(seq.hidden_codes[i]));
+	PutI64At(seq_bytes, SeqScaleOff(H) + 0, seq.hidden_scale.m);
+	PutI64At(seq_bytes, SeqScaleOff(H) + 8, seq.hidden_scale.e);
+	PutI32At(seq_bytes, SeqLayerIdxOff(H), static_cast<int32_t>(seq.layer_index));
+	PutI32At(seq_bytes, SeqSatLoOff(H), static_cast<int32_t>(seq.kv_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqSatHiOff(H), static_cast<int32_t>((seq.kv_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI64At(seq_bytes, SeqCtxLenOff(H), seq.context_length);
+	PutI64At(seq_bytes, SeqStickyOff(H), 0);  // sticky_status = kTagOk
+	// (T-2577, D-SLM6280): the four per-site breakdowns, same lo/hi split as the aggregate
+	// immediately above -- carried forward across calls exactly like the aggregate is (never
+	// zeroed here; a fresh sequence starts at whatever `seq` itself carries, matching
+	// `kv_saturation_count`'s own "caller resets on sequence create" contract).
+	PutI32At(seq_bytes, SeqKvLandingSatLoOff(H),
+	         static_cast<int32_t>(seq.kv_landing_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqKvLandingSatHiOff(H),
+	         static_cast<int32_t>((seq.kv_landing_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqKChannelLandingSatLoOff(H),
+	         static_cast<int32_t>(seq.k_channel_landing_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqKChannelLandingSatHiOff(H),
+	         static_cast<int32_t>((seq.k_channel_landing_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqRopeQSatLoOff(H),
+	         static_cast<int32_t>(seq.rope_q_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqRopeQSatHiOff(H),
+	         static_cast<int32_t>((seq.rope_q_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqRopeKSatLoOff(H),
+	         static_cast<int32_t>(seq.rope_k_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqRopeKSatHiOff(H),
+	         static_cast<int32_t>((seq.rope_k_saturation_count >> 32) & 0xFFFFFFFFu));
+	return seq_bytes;
+}
+
 // T-2169 (Rung 2b-prep, design Sec5.1, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
 // pack-and-residency decision, and the once-per-call root-signature/twelve-SRV-UAV-binding setup,
 // extracted verbatim from RunLayerLoopGpuSubmit's own former inline body -- a mechanical
@@ -1967,6 +2072,18 @@ struct GpuLayerLoopChunkOpenState {
 	// that leaves it false reached no open list, so the recording window's cleanup
 	// (AbandonRecording) leaves the list alone.
 	bool list_opened = false;
+	// Multi-row plan §3.3 (MR1): what the binding block below bound at root parameters 1 (t0), 6 and 7
+	// (t5/t6), 13 and 14 (t8/t9) and kComposedRootParamKvPageTable (t10), and the two b1 page constants
+	// -- the bindings this struct did not otherwise carry. Recorded so a recorder that sets its own root
+	// signature after this call (the widened one, multirow_wide.inl) rebinds exactly what the one-row
+	// body reads. Recording them changes nothing the one-row path binds or records.
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_weights;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_rope_cos;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_rope_sin;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_lora_ab;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_fold;
+	Microsoft::WRL::ComPtr<ID3D12Resource> bound_kv_page_table;
+	uint32_t bound_kv_page_constants[harness::Device::kComposedPageConstantCount] = {};
 };
 
 // The readback's table barrier: when this submission uploaded a pooled holder's table buffer, the
@@ -1982,6 +2099,35 @@ uint32_t TableBackToCommonBarrier(const GpuLayerLoopChunkOpenState& state, D3D12
 	out->Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
 	out->Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	return 1;
+}
+}  // namespace
+
+// MR2 (cell 1.2): set by a widened slice around its call to PrepareGpuLayerLoopChunkOpenState, null otherwise.
+// While set, Prepare takes the buffers it would allocate from it (GpuWidePrepareReuse, multirow_wide.h).
+thread_local GpuWidePrepareReuse* g_wide_prepare_reuse = nullptr;
+namespace {
+Microsoft::WRL::ComPtr<ID3D12Resource> WidePrepareUpload(harness::Device& dev,
+                                                         GpuWidePrepareReuse::Upload GpuWidePrepareReuse::*slot,
+                                                         const void* data, size_t size) {
+	if (g_wide_prepare_reuse == nullptr) return dev.Upload(data, size);
+	GpuWidePrepareReuse::Upload& s = g_wide_prepare_reuse->*slot;
+	const uint8_t* p = static_cast<const uint8_t*>(data);
+	if (s.buf != nullptr && s.bytes.size() == size && std::equal(s.bytes.begin(), s.bytes.end(), p)) return s.buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> buf = dev.Upload(data, size);
+	s.buf = buf;
+	s.bytes.assign(p, p + size);
+	return buf;
+}
+// The kept one-row buffer when its width is `width`, else null (the caller allocates and keeps the new one).
+Microsoft::WRL::ComPtr<ID3D12Resource> WidePrepareKeptUav(Microsoft::WRL::ComPtr<ID3D12Resource> GpuWidePrepareReuse::*slot,
+                                                          uint64_t width) {
+	if (g_wide_prepare_reuse == nullptr) return nullptr;
+	const Microsoft::WRL::ComPtr<ID3D12Resource>& kept = g_wide_prepare_reuse->*slot;
+	return kept != nullptr && kept->GetDesc().Width == width ? kept : nullptr;
+}
+void WidePrepareKeepUav(Microsoft::WRL::ComPtr<ID3D12Resource> GpuWidePrepareReuse::*slot,
+                        const Microsoft::WRL::ComPtr<ID3D12Resource>& buf) {
+	if (g_wide_prepare_reuse != nullptr) g_wide_prepare_reuse->*slot = buf;
 }
 }  // namespace
 
@@ -2380,35 +2526,7 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// context_length i64, sticky_status i64; see SeqScaleOff/.../SeqStickyOff
 	// above, matched shader-side by site_common.hlsli's own SeqScaleOffGpu
 	// family). ---
-	std::vector<uint8_t> seq_bytes(SeqTotalSize(H), 0);
-	for (uint32_t i = 0; i < H; ++i) PutI32At(seq_bytes, i * 4, static_cast<int32_t>(seq.hidden_codes[i]));
-	PutI64At(seq_bytes, SeqScaleOff(H) + 0, seq.hidden_scale.m);
-	PutI64At(seq_bytes, SeqScaleOff(H) + 8, seq.hidden_scale.e);
-	PutI32At(seq_bytes, SeqLayerIdxOff(H), static_cast<int32_t>(seq.layer_index));
-	PutI32At(seq_bytes, SeqSatLoOff(H), static_cast<int32_t>(seq.kv_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqSatHiOff(H), static_cast<int32_t>((seq.kv_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI64At(seq_bytes, SeqCtxLenOff(H), seq.context_length);
-	PutI64At(seq_bytes, SeqStickyOff(H), 0);  // sticky_status = kTagOk
-	// (T-2577, D-SLM6280): the four per-site breakdowns, same lo/hi split as the aggregate
-	// immediately above -- carried forward across calls exactly like the aggregate is (never
-	// zeroed here; a fresh sequence starts at whatever `seq` itself carries, matching
-	// `kv_saturation_count`'s own "caller resets on sequence create" contract).
-	PutI32At(seq_bytes, SeqKvLandingSatLoOff(H),
-	         static_cast<int32_t>(seq.kv_landing_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqKvLandingSatHiOff(H),
-	         static_cast<int32_t>((seq.kv_landing_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqKChannelLandingSatLoOff(H),
-	         static_cast<int32_t>(seq.k_channel_landing_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqKChannelLandingSatHiOff(H),
-	         static_cast<int32_t>((seq.k_channel_landing_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqRopeQSatLoOff(H),
-	         static_cast<int32_t>(seq.rope_q_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqRopeQSatHiOff(H),
-	         static_cast<int32_t>((seq.rope_q_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqRopeKSatLoOff(H),
-	         static_cast<int32_t>(seq.rope_k_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, SeqRopeKSatHiOff(H),
-	         static_cast<int32_t>((seq.rope_k_saturation_count >> 32) & 0xFFFFFFFFu));
+	const std::vector<uint8_t> seq_bytes = PackGpuSeqStateBytes(seq, H);
 
 	// T-2039: LayerScratch's own dynamic, per-real-dims layout (superseding
 	// T-2035's fixed 640-byte assumption, Sec13.5's own named blocker) --
@@ -2764,10 +2882,11 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		g_resident_weights.src_stride = layout.stride;
 		g_resident_weights.generation = model_generation;  // (T-2577)
 	}
-	layout_buf = dev.Upload(layout_bytes.data(), layout_bytes.size());
-	rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
-	model_const_buf = dev.Upload(model_const_bytes.data(), model_const_bytes.size());
-	silu_lut_buf = dev.Upload(silu_lut_bytes.data(), silu_lut_bytes.size());
+	layout_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::layout, layout_bytes.data(), layout_bytes.size());
+	rope_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::rope, rope_info_bytes.data(), rope_info_bytes.size());
+	model_const_buf =
+	    WidePrepareUpload(dev, &GpuWidePrepareReuse::model_const, model_const_bytes.data(), model_const_bytes.size());
+	silu_lut_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::silu, silu_lut_bytes.data(), silu_lut_bytes.size());
 	// T-2113 (B4): reuse the resident buffers on a hit -- `dev.Upload()` on a miss is a
 	// synchronous Map/memcpy/Unmap (`d3d12_harness.h`), fully realized before this call
 	// returns, so a cached resource is always valid content regardless of whether the command
@@ -2794,7 +2913,8 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		g_resident_rope.valid = true;
 		g_resident_rope.generation = model_generation;  // (T-2577)
 	}
-	scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
+	scratch_layout_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::scratch_layout, scratch_layout_bytes.data(),
+	                                       scratch_layout_bytes.size());
 	// Paged-KV plan §4 items 1-2 (G2): the K/V page table the shaders read as KvPageTable (t10) -- the
 	// view's `mapped_pages` entries, one uint physical page each. Uploaded per call on the same
 	// UPLOAD-heap idiom as every other per-call SRV above and kept alive to the fence the same way
@@ -2806,8 +2926,8 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// after its Reset (below). Otherwise the buffer already holds the view's entries and is bound as is.
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_page_table_buf;
 	if (kv_table_resident == nullptr || kv_table_upload) {
-		kv_page_table_buf =
-		    dev.Upload(kv_view.page_table, static_cast<size_t>(kv_view.mapped_pages) * sizeof(uint32_t));
+		kv_page_table_buf = WidePrepareUpload(dev, &GpuWidePrepareReuse::page_table, kv_view.page_table,
+		                                      static_cast<size_t>(kv_view.mapped_pages) * sizeof(uint32_t));
 		upload_keep_alive.push_back(kv_page_table_buf);
 	}
 	if (kv_table_resident != nullptr && kv_table_upload) {
@@ -2826,12 +2946,21 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 		out_state->kv_table_uploaded = kv_table_resident;
 	}
-	seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
+	// A kept SeqState is not re-initialised: no widened shader reads it (GpuWidePrepareReuse).
+	seq_uav = WidePrepareKeptUav(&GpuWidePrepareReuse::seq_uav, seq_bytes.size());
+	if (seq_uav == nullptr) {
+		seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
+		WidePrepareKeepUav(&GpuWidePrepareReuse::seq_uav, seq_uav);
+	}
 	harness::NameBuffer(seq_uav.Get(), L"SuperSLM SeqState");
 	// T-2101: no host content -- see the header comment at `kv_fast_hit`'s own declaration above.
-	scratch_uav = dev.MakeBuffer(scratch_layout.total, D3D12_HEAP_TYPE_DEFAULT,
-	                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-	                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	scratch_uav = WidePrepareKeptUav(&GpuWidePrepareReuse::scratch_uav, scratch_layout.total);
+	if (scratch_uav == nullptr) {
+		scratch_uav = dev.MakeBuffer(scratch_layout.total, D3D12_HEAP_TYPE_DEFAULT,
+		                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+		                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		WidePrepareKeepUav(&GpuWidePrepareReuse::scratch_uav, scratch_uav);
+	}
 	harness::NameBuffer(scratch_uav.Get(), L"SuperSLM LayerScratch");
 	// T-2101 (D-SLM3301/D-SLM3294): device-resident K/V. A cache hit reuses the SAME DEFAULT-heap
 	// buffer every call -- no pack, no upload -- and only needs a state transition back to
@@ -2892,9 +3021,13 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	// assertions pass, because nothing upstream of this call has already
 	// done their job.
 	MaybeThrowInjectedO11AllocFault(kO11AllocInjectionSiteWorkScratchUav);
-	work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
-	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	work_scratch_uav = WidePrepareKeptUav(&GpuWidePrepareReuse::work_scratch_uav, work_total);
+	if (work_scratch_uav == nullptr) {
+		work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
+		                                  D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+		                                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		WidePrepareKeepUav(&GpuWidePrepareReuse::work_scratch_uav, work_scratch_uav);
+	}
 	harness::NameBuffer(work_scratch_uav.Get(), L"SuperSLM WorkScratch");
 
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
@@ -2949,9 +3082,13 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	if (b5_async_swap_srv_rebind) {
 		harness::BindRootSrv(dev.list.Get(), 6, sin_table_buf.Get());
 		harness::BindRootSrv(dev.list.Get(), 7, cos_table_buf.Get());
+		out_state->bound_rope_cos = sin_table_buf;
+		out_state->bound_rope_sin = cos_table_buf;
 	} else {
 		harness::BindRootSrv(dev.list.Get(), 6, cos_table_buf.Get());
 		harness::BindRootSrv(dev.list.Get(), 7, sin_table_buf.Get());
+		out_state->bound_rope_cos = cos_table_buf;
+		out_state->bound_rope_sin = sin_table_buf;
 	}
 	harness::BindRootSrv(dev.list.Get(), 8, scratch_layout_buf.Get());
 	harness::BindRootUav(dev.list.Get(), 9, seq_uav.Get());
@@ -2992,7 +3129,14 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		    static_cast<uint32_t>(std::min<size_t>(kv_view.page_bytes, UINT32_MAX))};
 		dev.list->SetComputeRoot32BitConstants(harness::Device::kComposedRootParamKvPageConstants,
 		                                       harness::Device::kComposedPageConstantCount, page_constants, 0);
+		for (UINT i = 0; i < harness::Device::kComposedPageConstantCount; ++i) {
+			out_state->bound_kv_page_constants[i] = page_constants[i];
+		}
 	}
+	out_state->bound_weights = lw_buf;
+	out_state->bound_lora_ab = adapter_bridge ? adapter_bridge->lora_ab_resident : model_const_buf.Get();
+	out_state->bound_fold = adapter_bridge ? adapter_bridge->fold_resident : model_const_buf.Get();
+	out_state->bound_kv_page_table = kv_table_resident != nullptr ? kv_table_resident : kv_page_table_buf.Get();
 
 	out_state->H = H;
 	out_state->HD = HD;
@@ -4226,7 +4370,17 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 	if (paged_kv != nullptr) paged_local = *paged_kv;
 	const GpuPagedKvBinding* paged_this = paged_kv != nullptr ? &paged_local : nullptr;
 	uint32_t submitted = 0;
+	uint32_t sub_chunk_index = 0;
 	while (submitted < chunk_len) {
+#if defined(SUPERSLM_GPU_TEST_SEAMS)
+		// S-GCHUNKFAULT (schema fast-decode G1-J): the sub-chunk is refused before it is recorded, as a failed
+		// submission is. Armed only by sslm_gpu_seq_jump_forward, for its own pass.
+		if (ChunkFaultForTest& f = ChunkFaultSlotForTest(); f.at >= 0 && static_cast<uint32_t>(f.at) == sub_chunk_index) {
+			f.at = -1;
+			return f.status;
+		}
+#endif
+		++sub_chunk_index;
 		const uint32_t remaining = chunk_len - submitted;
 		const uint32_t this_sub_chunk =
 		    remaining < kT2169TdrSafeMaxChunkTokens ? remaining : kT2169TdrSafeMaxChunkTokens;
@@ -4299,6 +4453,13 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 	}
 	return superslm::SslmForwardStatus::Ok;  // unreachable (chunk_len > 0 always returns inside the loop)
 }
+
+#if defined(SUPERSLM_GPU_TEST_SEAMS)
+ChunkFaultForTest& ChunkFaultSlotForTest() {
+	thread_local ChunkFaultForTest slot;
+	return slot;
+}
+#endif
 
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the FINISH half of the async split --
 // declared in gpu_port.h. Byte-for-byte the tail RunLayerLoopGpu's own synchronous body
@@ -4434,6 +4595,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuInFlightToken&& inflight,
 	// throws into this try's catch (rule 2) before any `seq` field is written, and a prefill's
 	// derived count stays short. Every timing field is final here.
 	g_last_call_timing_snapshot.Publish(rec->timing, std::move(rec->per_dispatch_ms));
+	AddCumulativeGpuBusyMs(rec->timing.gpu_busy_ms);  // ruling 45a: after the publish (a throw publishes in the catch)
 
 	for (uint32_t i = 0; i < H; ++i) {
 		int32_t v = 0;
@@ -4661,6 +4823,38 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 }
 
 GpuCallTiming LastCallTiming() { return g_last_call_timing_snapshot.CopyTiming(); }
+
+// Ruling 46 (gpu_port.h): a standalone finish's own timing, and work added to the last published call's.
+void PublishOwnCallTimingNoThrow(const GpuCallTiming& timing) noexcept {
+	std::vector<double> per_dispatch;
+	try {
+		per_dispatch.push_back(timing.gpu_busy_ms);  // its one dispatch
+	} catch (...) {
+	}
+	PublishCallTimingNoThrow(timing, std::move(per_dispatch));
+}
+void AddToLastCallTimingNoThrow(const GpuCallTiming& extra) noexcept {
+	AddCumulativeGpuBusyMs(extra.gpu_busy_ms);  // counted even when the amendment itself fails
+	try {
+		g_last_call_timing_snapshot.Amend([&](GpuCallTiming& t) {
+			t.record_ms += extra.record_ms;
+			t.submit_wait_ms += extra.submit_wait_ms;
+			t.gpu_busy_ms += extra.gpu_busy_ms;
+			t.readback_ms += extra.readback_ms;
+		});
+	} catch (...) {
+	}
+}
+
+// Ruling 45a (gpu_port.h): nanoseconds, so summing many short submissions loses nothing to rounding.
+namespace {
+std::atomic<uint64_t> g_cumulative_gpu_busy_ns{0};
+}  // namespace
+void AddCumulativeGpuBusyMs(double gpu_ms) noexcept {
+	if (!(gpu_ms > 0.0) || !(gpu_ms < 1.0e9)) return;  // nothing measured (0.0, no timestamp frequency), or not finite
+	g_cumulative_gpu_busy_ns.fetch_add(static_cast<uint64_t>(gpu_ms * 1.0e6 + 0.5), std::memory_order_relaxed);
+}
+double CumulativeGpuBusyUs() { return static_cast<double>(g_cumulative_gpu_busy_ns.load(std::memory_order_relaxed)) / 1000.0; }
 
 // Paged-KV plan §4.4, step G3: the internal layer's drain (gpu_port.h). Reads the singleton
 // through the accessor, so a process with no device returns at once and constructs nothing.
@@ -5154,8 +5348,10 @@ bool RunDescriptorTableBind(const int8_t* const* array_pointers, const size_t* a
 	auto readback = dev.MakeBuffer(total_elements * 4, D3D12_HEAP_TYPE_READBACK,
 	                                D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
 
-	static Microsoft::WRL::ComPtr<ID3D12RootSignature> s_root_sig;
-	static Microsoft::WRL::ComPtr<ID3D12PipelineState> s_pso;
+	// Never destroyed, as the process device (d3d12_harness.h, DeviceHolder): released at exit they
+	// would call into a torn-down D3D12 runtime.
+	static auto& s_root_sig = *new Microsoft::WRL::ComPtr<ID3D12RootSignature>();
+	static auto& s_pso = *new Microsoft::WRL::ComPtr<ID3D12PipelineState>();
 	if (!s_root_sig) {
 		s_root_sig = dev.MakeRootSigDescriptorTable();
 		auto cso = harness::ReadFile(harness::ShaderPath("descriptor_table_readback"));
@@ -5362,5 +5558,9 @@ bool MapModelGpuResidencyWithInjection(uint64_t required_bytes) {
 	}
 	return true;  // every allocation call succeeded (including the N==0 vacuous case)
 }
+
+// Multi-row GPU plan (rev 1.3.2): the widened kernels' host side, the recorder (MR1's smoke one-shot only under
+// SUPERSLM_MULTIROW_WIDE, the multi-row test-seam build).
+#include "multirow_wide.inl"
 
 }  // namespace superslm_gpu

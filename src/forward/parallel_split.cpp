@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <new>
+#include <vector>
 
 #include "superslm/matmul.h"  // GemmInt8AccumulateRow, GemmInt8Accumulate
 #include "../gpu/gpu_inflight_registry.h"  // GpuTaskTrampoline (GPU paged-KV plan G3, decision 81)
@@ -139,6 +140,68 @@ SslmForwardStatus MatvecGroupParallel(const sslm_parallel_for& pf, const ColumnS
 	return RunExactlyOnce(pf, split.task_count, &MatvecTask, &ctx);
 }
 
+// ---- batched projections (tiled-matmul plan slice 2) -----------------------------------------------
+
+#if defined(SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
+namespace {
+std::atomic<size_t> g_min_macs_per_task{kMinMacsPerTask};
+std::atomic<size_t> g_batched_run_calls{0};
+}  // namespace
+size_t MinMacsPerTask() noexcept { return g_min_macs_per_task.load(std::memory_order_relaxed); }
+#else
+size_t MinMacsPerTask() noexcept { return kMinMacsPerTask; }
+#endif
+
+ColumnSplit BatchedGemmSplit(const sslm_parallel_for* pf, size_t m, size_t k, size_t n) noexcept {
+	if (pf == nullptr || pf->run == nullptr || pf->max_tasks < 2 || m < kBatchedMinTokens) return ColumnSplit{};
+	return SplitColumns(n, m * k * n, static_cast<size_t>(pf->max_tasks), /*align=*/32, MinMacsPerTask());
+}
+
+namespace {
+
+// Call-local state one BatchedGemmParallel call hands RunExactlyOnce; on that call's stack.
+struct BatchedTaskCtx {
+	const detail::ColsTaskPlan* plan;
+	const int8_t* activations;
+	const int16_t* activations16;
+	const int8_t* weights;
+	size_t m, k, n;
+	int64_t* out;
+	int8_t* packs;  // task i's scratch is packs + i * plan->pack_bytes
+	size_t cols_per_task;
+};
+
+void BatchedTask(void* ctx, size_t task_index) noexcept {
+	const BatchedTaskCtx& c = *static_cast<const BatchedTaskCtx*>(ctx);
+	const size_t begin = task_index * c.cols_per_task;
+	const size_t end = std::min(c.n, begin + c.cols_per_task);
+	detail::GemmInt8AccumulateColsTask(*c.plan, c.activations, c.activations16, c.weights, c.m, c.k, c.n,
+	                                   begin, end, c.out,
+	                                   c.packs != nullptr ? c.packs + task_index * c.plan->pack_bytes : nullptr);
+}
+
+}  // namespace
+
+SslmForwardStatus BatchedGemmParallel(const sslm_parallel_for& pf, const ColumnSplit& split,
+                                      const int8_t* activations, const int8_t* weights, size_t m,
+                                      size_t k, size_t n, int64_t* out) {
+	// Everything a task touches is made here, before `run` (§5.3: no worker-thread allocation).
+	const detail::ColsTaskPlan plan = detail::PlanColsTasks(m, k);
+	std::vector<int16_t> a16;
+	std::vector<int8_t> packs;
+	if (plan.tiled) {
+		a16.assign(m * plan.widened_stride, int16_t{0});  // zeroed: the K pad stays zero
+		detail::WidenActivationsForCols(activations, m, k, a16.data(), plan.widened_stride);
+		packs.resize(split.task_count * plan.pack_bytes);
+	}
+	BatchedTaskCtx ctx{&plan, activations, a16.empty() ? nullptr : a16.data(), weights, m, k, n, out,
+	                   packs.empty() ? nullptr : packs.data(), split.rows_per_task};
+#if defined(SUPERSLM_ENABLE_MATVEC_TEST_SEAMS)
+	g_batched_run_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
+	return RunExactlyOnce(pf, split.task_count, &BatchedTask, &ctx);
+}
+
 SslmForwardStatus GemmDispatch(const GemmThreading& threading, const int8_t* activations,
                                const int8_t* weights, size_t m, size_t k, size_t n, int64_t* out) {
 	if (m == 1 && threading.row != nullptr) {
@@ -146,6 +209,11 @@ SslmForwardStatus GemmDispatch(const GemmThreading& threading, const int8_t* act
 		if (split.task_count >= 2) {
 			const MatvecPart part{weights, n, out};
 			return MatvecGroupParallel(*threading.row, split, activations, k, &part, 1);
+		}
+	} else if (m >= kBatchedMinTokens && threading.batched != nullptr) {
+		const ColumnSplit split = BatchedGemmSplit(threading.batched, m, k, n);
+		if (split.task_count >= 2) {
+			return BatchedGemmParallel(*threading.batched, split, activations, weights, m, k, n, out);
 		}
 	}
 	GemmInt8Accumulate(activations, weights, m, k, n, out);
@@ -173,6 +241,10 @@ void SetMinRowBytesPerTask(size_t bytes) noexcept {
 void ResetMinRowBytesPerTask() noexcept {
 	g_min_row_bytes_per_task.store(kMinRowBytesPerTask, std::memory_order_relaxed);
 }
+void SetMinMacsPerTask(size_t macs) noexcept { g_min_macs_per_task.store(macs, std::memory_order_relaxed); }
+void ResetMinMacsPerTask() noexcept { g_min_macs_per_task.store(kMinMacsPerTask, std::memory_order_relaxed); }
+size_t BatchedRunCalls() noexcept { return g_batched_run_calls.load(std::memory_order_relaxed); }
+void ResetBatchedRunCalls() noexcept { g_batched_run_calls.store(0, std::memory_order_relaxed); }
 void ArmLayerSiteFault(MatvecFaultSite site, uint32_t layer, MatvecFaultKind kind) noexcept {
 	g_fault.site = site;
 	g_fault.layer = layer;

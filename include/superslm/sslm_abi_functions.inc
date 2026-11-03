@@ -56,11 +56,13 @@ SUPERSLM_API sslm_status sslm_workspace_create(sslm_model model, const sslm_conf
  * - Read by the logits step of the token finish in sslm_decode_step and sslm_decode_step_v2
  *   when this workspace is passed. With SSLM_PARALLEL_FOR_MATVEC set in pf->reserved, also read
  *   by every decode layer's one-row projections and by a prefill or prefix-prefill call that
- *   admits exactly one token (parallel_for.h states the rule). Every other call ignores it.
+ *   admits exactly one token. With SSLM_PARALLEL_FOR_PREFILL set (1.18.0), also read by the
+ *   projections of every prefill, prefix-prefill and jump-forward pass of two or more rows
+ *   (parallel_for.h states both rules). Every other call ignores it.
  *   Tokens are identical with any hook, any max_tasks, any accepted bits, and no hook.
  * - Returns SSLM_INVALID_ARGUMENT, and changes nothing, for: a NULL ws; a pf->reserved bit other
- *   than SSLM_PARALLEL_FOR_MATVEC; pf->max_tasks < 0 or > SSLM_PARALLEL_FOR_MAX_TASKS; pf->run
- *   NULL with pf->max_tasks > 1.
+ *   than SSLM_PARALLEL_FOR_PREFILL and SSLM_PARALLEL_FOR_MATVEC; pf->max_tasks < 0 or
+ *   > SSLM_PARALLEL_FOR_MAX_TASKS; pf->run NULL with pf->max_tasks > 1.
  * - Must not run concurrently with a call using the same workspace (the workspace's existing
  *   rule). pf->host_ctx must outlive every call made with this workspace while the hook is
  *   installed.
@@ -68,8 +70,9 @@ SUPERSLM_API sslm_status sslm_workspace_create(sslm_model model, const sslm_conf
  *   SSLM_INVALID_ARGUMENT. At the finish, the sequence is left resting with its final hidden
  *   state ready for logits and its schema walk and current token unchanged, so a retry recomputes
  *   the finish. In a layer (SSLM_PARALLEL_FOR_MATVEC), it rests at the start of that layer with
- *   the layer's saturation counts put back, and the next call resumes there. A failed prefill
- *   call that admitted nothing leaves the sequence's saturation counts as they were before it. */
+ *   the layer's saturation counts put back, and the next call resumes there. In a batched pass
+ *   (SSLM_PARALLEL_FOR_PREFILL), the prefill or jump-forward call fails with nothing of that pass
+ *   admitted. A failed prefill call that admitted nothing leaves the sequence's saturation counts as they were before it. */
 SUPERSLM_API sslm_status sslm_workspace_set_parallel_for(sslm_workspace ws,
                                                           const sslm_parallel_for* pf);
 
@@ -216,24 +219,21 @@ SUPERSLM_API sslm_status sslm_seq_restore_shared(sslm_model model, sslm_kv_pool*
 SUPERSLM_API sslm_status sslm_seq_forced_tokens(sslm_model model, sslm_seq seq,
                                                 int32_t* out_ids, int32_t cap, int32_t* out_count,
                                                 int32_t* out_accepting);
-/* Admits the pending choice token (one decode_step produced and has not yet embedded), if any, then
- * forced-chain tokens, up to `chunk_budget` tokens in all, in one batched layer pass through the
- * prefill path; writes the admitted *forced* ids to out_forced (cap >= chunk_budget required) and
- * their count to *out_forced_count. `params` (NULL = greedy) is validated exactly as
- * sslm_decode_step_v2 validates it; damped params feed the forced tokens to the anti-LM history.
- * A no-op (OK, count 0) when no schema is bound or the state is unforced. A limit admits a prefix
- * and returns the limit status, as sslm_prefill does. The host loop: call this until
- * sslm_seq_forced_tokens reports 0, then decode_step (docs/api.md gives the contract).
- * `opts` (1.15.0; NULL = canonical, the behaviour above): with mode SSLM_JUMP_EXACT the verb
- * admits the pending token and a draft clipped to chunk_budget - 1 tokens and to the context
- * room, truncated at its first out-of-range, special, byteless or illegal token; checks every
- * drafted token with the decode step's finish; and keeps the pending token and the drafted
- * tokens the model confirms, reporting the confirmed ones in out_forced. It returns SSLM_OK for
- * any draft, and is a no-op (OK, count 0) when there is no pending token, the clipped draft is
- * empty, or the model lacks the exact legal-row finish. The next decode_step produces the
- * model's own next token (docs/api.md). */
+/* Schema jump-forward, verified (exact mode; the only mode since 1.18.0, which removed canonical
+ * mode). Admits the pending choice token (one decode_step produced and has not yet embedded) and a
+ * draft -- `opts->draft`, or with NULL options or no draft the forced chain from the state after the
+ * pending token -- clipped to chunk_budget - 1 tokens and to the context room, truncated at its first
+ * out-of-range, special, byteless or illegal token, in one batched layer pass through the prefill
+ * path. It checks every drafted token with the decode step's finish and keeps the pending token and
+ * the drafted tokens the model confirms, writing the confirmed ids to out_forced (cap >=
+ * chunk_budget required) and their count to *out_forced_count. `params` (NULL = greedy) is
+ * validated exactly as sslm_decode_step_v2 validates it; damped params feed the kept tokens to the
+ * anti-LM history. It returns SSLM_OK for any draft, and is a no-op (OK, count 0) when no schema is
+ * bound, there is no pending token, the clipped draft is empty, or the model lacks the exact
+ * legal-row finish. The next decode_step produces the model's own next token (docs/api.md).
+ * `opts` (1.15.0): NULL, SSLM_JUMP_DEFAULT or SSLM_JUMP_EXACT; see sslm_jump_options. */
 SUPERSLM_API sslm_status sslm_seq_jump_forward(sslm_model model, sslm_seq seq, int32_t chunk_budget,
                                                const sslm_decode_params* params, /* NULL = greedy */
-                                               const sslm_jump_options* opts,     /* NULL = canonical */
+                                               const sslm_jump_options* opts,     /* NULL = exact, no draft */
                                                sslm_workspace ws,
                                                int32_t* out_forced, int32_t cap, int32_t* out_forced_count);

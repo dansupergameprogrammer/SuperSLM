@@ -1,0 +1,28 @@
+65c65
+< sfdg_cell_g7_1: checks=31 failures=0 skips=0 -> PASS
+---
+> sfdg_cell_g7_1: checks=39 failures=0 skips=0 -> PASS
+70c70
+< sfdg_cell_g9_1: checks=384 failures=0 skips=0 -> PASS
+---
+> sfdg_cell_g9_1: checks=1444 failures=0 skips=0 -> PASS
+75c75
+< sfdg_cell_g11_1: checks=45 failures=0 skips=0 -> PASS
+---
+> sfdg_cell_g11_1: checks=51 failures=0 skips=0 -> PASS
+80c80
+< sfdg_cell_g12_verb: checks=247 failures=0 skips=0 -> PASS
+---
+> sfdg_cell_g12_verb: checks=249 failures=0 skips=0 -> PASS
+85c85
+< sfdg_cell_g12_6: checks=381 failures=0 skips=0 -> PASS
+---
+> sfdg_cell_g12_6: checks=567 failures=0 skips=0 -> PASS
+90c90
+< sfdg_cell_g12_7: checks=176 failures=0 skips=0 -> PASS
+---
+> sfdg_cell_g12_7: checks=194 failures=0 skips=0 -> PASS
+95c95
+< sfdg_cell_g12_10: checks=110 failures=0 skips=0 -> PASS
+---
+> sfdg_cell_g12_10: checks=137 failures=0 skips=0 -> PASS

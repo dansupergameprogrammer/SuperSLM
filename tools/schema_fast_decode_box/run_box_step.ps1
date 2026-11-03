@@ -29,6 +29,9 @@
 # If they moved, re-tune the head's size in matmul.cpp (README there) before measuring.
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File tools\schema_fast_decode_box\run_box_step.ps1 -Step B0
+#
+# GPU steps (plan rev 1.4.4 Sec. 10: GB0-GB3, GB-F/M/J r and g, GBK, GB-XG-1..7, GK0-GK2) go to
+# run_gpu_box_step.ps1, with the parameters both scripts declare; it has its own cap, load ledger and step list.
 param(
     [Parameter(Mandatory = $true)][string]$Step,
     [string]$Name = 'schema-fast-decode',
@@ -52,6 +55,15 @@ $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSEdition -ne 'Core') {
     $env:PSModulePath = (@([Environment]::GetFolderPath('MyDocuments') + '\WindowsPowerShell\Modules',
         "$env:ProgramFiles\WindowsPowerShell\Modules", "$env:SystemRoot\system32\WindowsPowerShell\v1.0\Modules") -join ';')
+}
+
+if ($Step -match '^(GB|GK)') {
+    $gpu = Join-Path $PSScriptRoot 'run_gpu_box_step.ps1'
+    $known = @((Get-Command $gpu).Parameters.Keys)
+    $fwd = @{}
+    foreach ($k in $PSBoundParameters.Keys) { if ($known -contains $k) { $fwd[$k] = $PSBoundParameters[$k] } }
+    & $gpu @fwd
+    exit $LASTEXITCODE
 }
 
 # The frozen inputs (sha256). A mismatch refuses B1-B4: a changed file is a different population or

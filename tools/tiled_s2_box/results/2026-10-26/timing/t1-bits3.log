@@ -1,0 +1,5 @@
+artifact D:\_scratch\sfd-1p17-kit\kit-1p17-5060-x\model\qwen2.5-0.5b-instruct-cap4096-aex-pr.sslm layers 24 tasks 4 bits 3
+schema potion_shop_order prompt_tokens 41 budget 64 pairs 15 warmup 0 pair off,on:exact
+arm off n 15 gen_ms_median 534.204 q1 526.470 q3 546.977 prefill_ms_median 260.711 digest 7e46330608d11704 digests_equal 1
+arm on:exact n 15 gen_ms_median 613.011 q1 610.616 q3 629.531 prefill_ms_median 259.451 digest 7e46330608d11704 digests_equal 1
+ratio off/on:exact median 0.8620 q1 0.8594 q3 0.8661 sign_lo 0.8581 sign_hi 0.8694

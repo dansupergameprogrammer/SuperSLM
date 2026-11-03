@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(superslm VERSION 1.16.0 LANGUAGES CXX)
+project(superslm VERSION 1.18.1 LANGUAGES CXX)
 
 # C++20: the S-LoRA delta path is specified at -std=c++20 (SuperSLM_Plan.md §19),
 # and the core carries wide-integer (int64) composition arithmetic throughout. One
@@ -151,7 +151,7 @@ endif()
 
 add_executable(superslm_tests tests/test_main.cpp tests/test_slm18x_saturation_census.cpp
 	tests/test_slm19x_schema_damped_greedy.cpp tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp
-	tests/test_decode_threading.cpp tests/test_decode_threading_d1.cpp)
+	tests/test_decode_threading.cpp tests/test_decode_threading_d1.cpp tests/test_batched_threading.cpp)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
 superslm_add_schema_fast_decode_cells(superslm_tests)
 if(MSVC)
@@ -165,6 +165,11 @@ include(tests/paged-kv/paged_kv.cmake)
 # GPU paged-KV plan (rev 16) step G3: the D3D12-free core's host-only cells.
 include(tests/gpu-g3-core/g3_core.cmake)
 include(tests/precache/precache.cmake)
+# Multi-row GPU plan (rev 1.3.2): the red suite (tests/multirow-gpu), opt-in while the feature branch is open.
+option(SUPERSLM_MULTIROW_GPU_TESTS "Register the multi-row GPU red suite's host-only cells with CTest" OFF)
+if(SUPERSLM_MULTIROW_GPU_TESTS)
+	include(tests/multirow-gpu/multirow_gpu.cmake)
+endif()
 
 # T-2152 (outside strike item 1): tests/test_main.cpp's own T-2019/T-2024 GPU-serial-port
 # section calls `superslm_gpu::*` directly (#ifdef _WIN32-guarded in that file so the same
@@ -385,7 +390,7 @@ target_compile_definitions(superslm_scalar_forced_seams PUBLIC SUPERSLM_FORCE_SC
 target_compile_definitions(superslm_scalar_forced_seams PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
 add_executable(superslm_decode_threading_scalar_forced EXCLUDE_FROM_ALL
 	tests/decode_threading_standalone_main.cpp tests/test_decode_threading.cpp
-	tests/test_decode_threading_d1.cpp)
+	tests/test_decode_threading_d1.cpp tests/test_batched_threading.cpp)
 target_link_libraries(superslm_decode_threading_scalar_forced PRIVATE superslm_scalar_forced_seams)
 target_include_directories(superslm_decode_threading_scalar_forced PRIVATE tests)
 # Schema fast-decode plan (rev 1.2.1) §9: the scalar tier's run of the M1/J1 red suite, on the same
@@ -527,7 +532,7 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	add_executable(superslm_tests_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tests/test_main.cpp
 		tests/test_slm18x_saturation_census.cpp tests/test_slm19x_schema_damped_greedy.cpp
 		tests/test_tiled_gemm.cpp tests/test_attn_rowsites.cpp tests/test_decode_threading.cpp
-		tests/test_decode_threading_d1.cpp)
+		tests/test_decode_threading_d1.cpp tests/test_batched_threading.cpp)
 	target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
 	superslm_add_schema_fast_decode_cells(superslm_tests_${_sslm_tier_lower}_forced)
 	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests)
@@ -1117,6 +1122,56 @@ if(WIN32 AND (SUPERSLM_BUILD_GPU OR BUILD_TESTING))
 	unset(_superslm_shader_name)
 	unset(_superslm_shader_cso)
 	unset(_superslm_shader_staged)
+
+	# Multi-row plan §3.1/§3.2: the row-widened site variants, H in {2, 4, 8}, at the same pinned
+	# target and flags. src/gpu/shaders_wide holds the 19 generated non-GEMM sites
+	# (gen_wide_shaders.py, never edited by hand) and the one hand-written GEMM source, compiled
+	# once per GEMM site. Outputs are <site>_wide_h<H>.cso and <gemm>_gemm_wide_h<H>.cso beside the
+	# one-row shaders, staged and installed with them: since MR3 the shipped library loads them for
+	# sslm_gpu_seq_embed_rows chunks of two or more rows (include/superslm/gpu_1p0.h).
+	set(_sslm_wide_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders_wide")
+	file(GLOB _sslm_wide_site_srcs CONFIGURE_DEPENDS "${_sslm_wide_dir}/*_site_wide.hlsl")
+	set(_sslm_wide_jobs "")
+	foreach(_sslm_wide_h 2 4 8)
+		foreach(_sslm_wide_src ${_sslm_wide_site_srcs})
+			get_filename_component(_sslm_wide_name "${_sslm_wide_src}" NAME_WE)
+			list(APPEND _sslm_wide_jobs "${_sslm_wide_name}_h${_sslm_wide_h}|${_sslm_wide_src}|${_sslm_wide_h}|0")
+		endforeach()
+		set(_sslm_wide_gi 1)
+		foreach(_sslm_wide_g q_proj kv_proj o_proj gate_proj up_proj down_proj)
+			list(APPEND _sslm_wide_jobs
+			     "${_sslm_wide_g}_gemm_wide_h${_sslm_wide_h}|${_sslm_wide_dir}/proj_gemm_wide.hlsl|${_sslm_wide_h}|${_sslm_wide_gi}")
+			math(EXPR _sslm_wide_gi "${_sslm_wide_gi} + 1")
+		endforeach()
+	endforeach()
+	foreach(_sslm_wide_job ${_sslm_wide_jobs})
+		string(REPLACE "|" ";" _sslm_wide_parts "${_sslm_wide_job}")
+		list(GET _sslm_wide_parts 0 _sslm_wide_out)
+		list(GET _sslm_wide_parts 1 _sslm_wide_src)
+		list(GET _sslm_wide_parts 2 _sslm_wide_rows)
+		list(GET _sslm_wide_parts 3 _sslm_wide_gemm)
+		set(_sslm_wide_defs "-DSSLM_WIDE_H=${_sslm_wide_rows}")
+		if(NOT _sslm_wide_gemm STREQUAL "0")
+			list(APPEND _sslm_wide_defs "-DSSLM_GEMM_SITE=${_sslm_wide_gemm}")
+		endif()
+		set(_sslm_wide_cso "${SUPERSLM_GPU_SHADER_OUT_DIR}/${_sslm_wide_out}.cso")
+		set(_sslm_wide_staged "${SUPERSLM_GPU_SHADER_STAGE_DIR}/${_sslm_wide_out}.cso")
+		add_custom_command(
+			OUTPUT "${_sslm_wide_cso}" "${_sslm_wide_staged}"
+			COMMAND "${CMAKE_COMMAND}" -E make_directory "${SUPERSLM_GPU_SHADER_OUT_DIR}"
+			COMMAND "${SUPERSLM_DXC_EXECUTABLE}" -T cs_6_2 -E main -Fo "${_sslm_wide_cso}" "${_sslm_wide_src}" -O3 -HV 2018 -WX
+			        ${_sslm_wide_defs} -I "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders"
+			COMMAND "${CMAKE_COMMAND}" -E copy "${_sslm_wide_cso}" "${_sslm_wide_staged}"
+			DEPENDS "${_sslm_wide_src}" ${SUPERSLM_GPU_SHADER_HEADERS}
+			COMMENT "dxc: ${_sslm_wide_out}.cso"
+			VERBATIM
+		)
+		list(APPEND SUPERSLM_GPU_SHADER_OUTPUTS "${_sslm_wide_cso}")
+		list(APPEND SUPERSLM_GPU_SHADER_STAGED "${_sslm_wide_staged}")
+	endforeach()
+	unset(_sslm_wide_dir)
+	unset(_sslm_wide_site_srcs)
+	unset(_sslm_wide_jobs)
 
 	add_custom_target(superslm_gpu_shaders DEPENDS ${SUPERSLM_GPU_SHADER_OUTPUTS} ${SUPERSLM_GPU_SHADER_STAGED})
 

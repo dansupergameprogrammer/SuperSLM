@@ -155,6 +155,8 @@ inline const char* St(SslmGpuStatus s) {
 		case 28: return "SSLM_GPU_PREFIX_REJECTED";
 		case 29: return "SSLM_GPU_PREFIX_SCHEMA_MISMATCH";
 		case 30: return "SSLM_RESTORE_PRODUCER_MISMATCH";
+		case 31: return "SSLM_GPU_FORCED_TABLE_ABSENT";
+		case 32: return "SSLM_GPU_CONTEXT_CAP_EXCEEDED";
 		default: return "UNKNOWN_STATUS";
 	}
 }

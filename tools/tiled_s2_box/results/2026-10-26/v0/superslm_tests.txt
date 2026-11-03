@@ -1,0 +1,158 @@
+superslm_gpu: stale shader binary: D:\SuperSLM\.worktrees\tiled-s2\out\shaders\kv_proj_site.cso (compiled 2016-10-28 19:04:20) is older than D:\SuperSLM\.worktrees\tiled-s2\src\gpu\shaders\wide128.hlsli (modified 2026-10-26 18:47:01). Recompile the shaders into that directory with dxc before running this executable -- build.bat's own dxc loop is the recipe; a build that compiles only the .cpp leaves the previous generation's shader in place.
+superslm_gpu: stale shader binary: D:\SuperSLM\.worktrees\tiled-s2\out\shaders\kv_proj_site.cso (compiled 2016-10-28 19:04:20) is older than D:\SuperSLM\.worktrees\tiled-s2\src\gpu\shaders\wide128.hlsli (modified 2026-10-26 18:47:01). Recompile the shaders into that directory with dxc before running this executable -- build.bat's own dxc loop is the recipe; a build that compiles only the .cpp leaves the previous generation's shader in place.
+TestT2577_S2_AStaleShaderOnTheRealDispatchPathReturnsTheNamedStatus: about to trigger ShaderPath's own stale-shader stderr line on "D:\SuperSLM\.worktrees\tiled-s2\out\shaders\kv_proj_site.cso" -- EXPECTED, this cell just back-dated it on purpose
+sha256: dispatched implementation = x86 SHA extensions
+S2.4 SiLU-LUT golden hash: 587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6 (10200 inputs, 40800 bytes)
+S2.5 acceptance gate (hidden_size_1536_qwen2_5_1_5b): max |error| = 815.953125, mean |error| = 491.384033, output_scale = 1635.196899 (D'=207670), per-case bound (0.5x) = 817.598450 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (hidden_size_960_smollm2_360m): max |error| = 1095.582764, mean |error| = 509.720306, output_scale = 2301.417236 (D'=292280), per-case bound (0.5x) = 1150.708618 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (intermediate_size_8960_qwen2_5_1_5b): max |error| = 2111.343750, mean |error| = 968.023438, output_scale = 5106.708496 (D'=648552), per-case bound (0.5x) = 2553.354248 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (intermediate_size_2560_smollm2_360m): max |error| = 1221.062500, mean |error| = 623.984375, output_scale = 3324.377930 (D'=422196), per-case bound (0.5x) = 1662.188965 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (synthetic_unaligned_length_777): max |error| = 429.306641, mean |error| = 252.479818, output_scale = 1306.149658 (D'=165881), per-case bound (0.5x) = 653.074829 -- asserted (F2, S-HARDEN-4)
+S2.5 acceptance gate (synthetic_unaligned_length_4095): max |error| = 1810.968750, mean |error| = 911.093750, output_scale = 4263.740234 (D'=541495), per-case bound (0.5x) = 2131.870117 -- asserted (F2, S-HARDEN-4)
+S2.5 matmul golden hash: 932478a449091dacf9210e69c5961d3ab6e2915d2fc783e0d19d35f53dd5d9c9 (13 cases, 44244 bytes)
+tiled GEMM: this binary dispatches on the AVX2 tier; tiled path expected at M >= 8; tiled-entry counter read
+tiled GEMM golden hash: b7c5b06c1ebfa23be0e40ced8e7e409d7a87e8f15ce879d78284d0f99a16710d (41 cases, 127600 bytes)
+tiled GEMM cells (plan slice 1): 263 checks, 0 failures
+attn-rowsites S1 golden hash: 8836d5eb32a4badb492a8bcdf11e00222ad59a1e4b98013a3b8cb0c059d98ec8 (634120 values)
+attn-rowsites S2: tier 2, kernel AVX2 (switch 0, msvc 1), prob-V counters read
+attn-rowsites S2 golden hash: b0d1a6cd065347e799e5bb9857ce5db1f51ff351c8d4edde22896f11974506ed (30100 values)
+attn-rowsites S3 4.S3 sentinel pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 4.S3 exact-size pass: 16359 row-leaf calls, 0 with a wrong code or fence, 0 with a wrong path
+attn-rowsites S3 golden hash: 3e3abed7c746191e8745c89ad38019076eff290aa7f4ffb57fb51c4527fdb3b9 (3567018 values)
+attn-rowsites S4 golden hash: ad6e11b1cb3133560632532e11cbb17ae53e432a79c6b0fca6e0cd24ebcaa847 (882516 values)
+attn-rowsites S5 golden hash: daea9a39c4df72b9431140446ee511cb9f60101646d83fbc2ae22d4b3d4faaa5 (33618 values)
+attn-rowsites 11.1(c) fixture hash: 336b8d417d078cdf91c0cd714e557df752e952eeb29b79ac594348e3be085779 (14384 values); 96 rows, softmax 96/0, prob-V 92/4 (fast/fallback by the guard copies)
+attn-rowsites 11.1(d): SKIPPED (set SUPERSLM_ATTN_ROWSITES_ARTIFACT to the 0.5B-width 1-layer synthetic artifact)
+attn-rowsites cells (plan slices S1, S2, S3, S4, S5): 91772 checks, 0 failures
+decode-threading 4.1: 23040 splits checked, 13260 threaded
+decode-threading 7.1: 765000 splits and 35199 logits calls checked, 16320 one-task calls
+decode-threading cells: 7 checks, 0 failures
+decode-threading 4.2: rule counts checked at 8 KiB, 18,432, 18,433 and 256 KiB
+decode-threading 6.1: 216 group calls, 83712 rows checked against DotRowScalarRef
+decode-threading 2.1: 24 hostile cases at decode step 2
+decode-threading D1 cells: 2151 checks, 0 failures
+batched-threading (tiled slice 2) cells: 1185 checks, 0 failures
+[schema fast-decode] cell 2.4    green (0 ms)
+[schema fast-decode] cell 3.1    green (79 ms)
+[schema fast-decode] cell 4.1    green (140 ms)
+[schema fast-decode] cell 5.4    green (3 ms)
+[schema fast-decode] cell 5.5    green (6 ms)
+[schema fast-decode] cell 6.1    green (2870 ms)
+[schema fast-decode] cell 6.3    green (1034 ms)
+[schema fast-decode] cell 8.4    green (180 ms)
+[schema fast-decode] cell 11.1   green (127 ms)
+[schema fast-decode] cell 11.4   green (21 ms)
+[schema fast-decode] cell 1.1    green (7 ms)
+[schema fast-decode] cell 1.2    green (1 ms)
+[schema fast-decode] cell 1.3    green (197 ms)
+[schema fast-decode] cell 2.1    green (24 ms)
+[schema fast-decode] cell 2.2    green (1 ms)
+[schema fast-decode] cell 2.3    green (97 ms)
+[schema fast-decode] cell 2.5    green (4 ms)
+[schema fast-decode] cell 2.6    green (1 ms)
+[schema fast-decode] cell 2.7    green (98 ms)
+[schema fast-decode] cell 3.2    green (154 ms)
+[schema fast-decode] cell 3.3    green (130 ms)
+[schema fast-decode] cell 3.4    green (17 ms)
+[schema fast-decode] cell 4.2    green (19 ms)
+[schema fast-decode] cell 5.1    green (105 ms)
+[schema fast-decode] cell 5.2    green (11 ms)
+[schema fast-decode] cell 5.3    green (1 ms)
+[schema fast-decode] cell 5.6    green (129 ms)
+[schema fast-decode] cell 6.2    green (24 ms)
+[schema fast-decode] cell 6.4    green (153 ms)
+[schema fast-decode] cell 6.5    green (8 ms)
+[schema fast-decode] cell 6.6    green (80 ms)
+[schema fast-decode] cell 8.1    green (7 ms)
+[schema fast-decode] cell 8.2    green (10 ms)
+[schema fast-decode] cell 8.3    green (1 ms)
+[schema fast-decode] cell 8.5    green (26 ms)
+[schema fast-decode] cell 8.6    green (157 ms)
+[schema fast-decode] cell 8.7    green (2 ms)
+[schema fast-decode] cell 8.8    green (4 ms)
+[schema fast-decode] cell 9.1    green (7 ms)
+[schema fast-decode] cell 9.2    green (1 ms)
+[schema fast-decode] cell 10.1   green (507 ms)
+[schema fast-decode] cell 10.2   green (2 ms)
+[schema fast-decode] cell 11.2   green (67 ms)
+[schema fast-decode] cell 11.3   green (1 ms)
+[schema fast-decode] cell Q6C.1  green (93 ms)
+[schema fast-decode] cell Q6C.2  green (41 ms)
+[schema fast-decode] cell Q6C.3  green (19 ms)
+[schema fast-decode] cell Q6C.4  green (10 ms)
+[schema fast-decode] cell Q6C.5  green (15 ms)
+[schema fast-decode] cell Q6C.6  green (24 ms)
+[schema fast-decode] cell Q6C.7  green (11 ms)
+[schema fast-decode] cell TF.2   green (362 ms)
+[schema fast-decode] cell TF.4b  green (57 ms)
+[schema fast-decode] cell 6.X1   green (253281 ms)
+[schema fast-decode] cell 6.X2   green (2212 ms)
+[schema fast-decode] cell 6.X3   green (37 ms)
+[schema fast-decode] cell 6.X5   green (2388 ms)
+[schema fast-decode] cell 6.X6   green (4172 ms)
+[schema fast-decode] cell 6.X7   green (22 ms)
+[schema fast-decode] cell 1.X1   green (62 ms)
+[schema fast-decode] cell 1.X2   green (1448 ms)
+[schema fast-decode] cell 1.X3   green (1492 ms)
+[schema fast-decode] cell 1.X4   green (137 ms)
+[schema fast-decode] cell 2.X1   green (15 ms)
+[schema fast-decode] cell 2.X2   green (11 ms)
+[schema fast-decode] cell 2.X3   green (98 ms)
+[schema fast-decode] cell 3.X1   green (126 ms)
+[schema fast-decode] cell 3.X2   green (199 ms)
+[schema fast-decode] cell 3.X3   green (1400 ms)
+[schema fast-decode] cell 4.X1   green (621 ms)
+[schema fast-decode] cell 4.X2   green (446 ms)
+[schema fast-decode] cell 5.X1   green (290 ms)
+[schema fast-decode] cell 5.X2   green (3442 ms)
+[schema fast-decode] cell 5.X3   green (3538 ms)
+[schema fast-decode] cell 5.X4   green (198 ms)
+[schema fast-decode] cell 5.X5   green (103 ms)
+[schema fast-decode] cell 5.X6   green (1969 ms)
+[schema fast-decode] cell 5.X7   green (33 ms)
+[schema fast-decode] cell 8.X1   green (380 ms)
+[schema fast-decode] cell 8.X1b  green (1223 ms)
+[schema fast-decode] cell 8.X2   green (1521 ms)
+[schema fast-decode] cell 8.X3   green (139 ms)
+[schema fast-decode] cell 8.X4   green (48 ms)
+[schema fast-decode] cell 8.X5   green (12 ms)
+[schema fast-decode] cell 8.X6   green (117 ms)
+[schema fast-decode] cell 8.X7   green (8 ms)
+[schema fast-decode] cell 9.X1   green (189 ms)
+[schema fast-decode] cell 9.X2   green (0 ms)
+[schema fast-decode] cell 10.X1  green (97 ms)
+[schema fast-decode] cell 11.X1  green (24 ms)
+[schema fast-decode] cell 11.X2  green (8 ms)
+[schema fast-decode] cell 11.X3  green (1209 ms)
+[schema fast-decode] cell TF.2d  green (294 ms)
+[schema fast-decode] cell TF.4bX green (71 ms)
+schema fast-decode (M1, J1, TF, J1-X) cells: 197132 checks, 0 failures
+[G3] 3.6h/orders ...
+[G3] 3.6h/orders green (25 checks, 0 failed)
+[G3] 3.6h/concurrent ...
+[G3] 3.6h/concurrent green (6 checks, 0 failed)
+[G3] 3.6h/yield-hook ...
+[G3] 3.6h/yield-hook green (3 checks, 0 failed)
+[G3] 3.6h/stranded-terminal ...
+[G3] 3.6h/stranded-terminal green (7 checks, 0 failed)
+[G3] G3/ledger/submit-recovered ...
+[G3] G3/ledger/submit-recovered green (12 checks, 0 failed)
+[G3] G3/ledger/submit-retry-strands ...
+[G3] G3/ledger/submit-retry-strands green (9 checks, 0 failed)
+[G3] G3/ledger/submit-no-retry ...
+[G3] G3/ledger/submit-no-retry green (3 checks, 0 failed)
+[G3] G3/ledger/check-before-reset ...
+[G3] G3/ledger/check-before-reset green (7 checks, 0 failed)
+[G3] G3/ledger/wait-fast-path ...
+[G3] G3/ledger/wait-fast-path green (5 checks, 0 failed)
+[G3] G3/ledger/poll-not-ready ...
+[G3] G3/ledger/poll-not-ready green (7 checks, 0 failed)
+[G3] G3/ledger/drain ...
+[G3] G3/ledger/drain green (3 checks, 0 failed)
+[G3] G3/ledger/boundary-guard ...
+[G3] G3/ledger/boundary-guard green (6 checks, 0 failed)
+GPU paged-KV G3 ledger cells (3.6h, G3/ledger): 12 cells, 93 checks, 0 failures
+# adapter: AMD Radeon RX 7900 XT
+superslm_gpu: stale shader binary: D:\SuperSLM\.worktrees\tiled-s2\out\shaders\dyn_recip.cso (compiled 2016-10-28 19:04:20) is older than D:\SuperSLM\.worktrees\tiled-s2\src\gpu\shaders\wide128.hlsli (modified 2026-10-26 18:47:01). Recompile the shaders into that directory with dxc before running this executable -- build.bat's own dxc loop is the recipe; a build that compiles only the .cpp leaves the previous generation's shader in place.
+TestT2575_ShaderPathRefusesAStaleBinaryOnTheRealLoadPath: about to trigger ShaderPath's own stale-shader stderr line on "D:\SuperSLM\.worktrees\tiled-s2\out\shaders\dyn_recip.cso" -- EXPECTED, this cell just back-dated it on purpose
+superslm tests: 332494 checks, 0 failures

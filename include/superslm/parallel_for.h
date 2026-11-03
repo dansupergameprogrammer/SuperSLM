@@ -16,9 +16,18 @@
  *   weight bytes; it is not a floor on each task, and the last task can be smaller (docs/api.md
  *   gives the rule).
  *   When a one-token pass would split (its largest projection reaches two or more tasks),
- *   sslm_seq_jump_forward runs an admission of 2 to 7 tokens as that many one-token passes,
- *   each split the same way (byte-identical output).
- * - Every other step, and every step of a prefill call that admits more than one token, ignores it.
+ *   sslm_seq_jump_forward runs an admission of 2 to 7
+ *   tokens as that many one-token passes, each split the same way (byte-identical output).
+ * - With SSLM_PARALLEL_FOR_PREFILL set in `reserved` (CPU backend, 1.18.0), every batched
+ *   projection too: each projection of a prefill, prefix-prefill or sslm_seq_jump_forward pass
+ *   that runs two or more rows at once (the exact jump-forward's check pass included). The output
+ *   columns are split into contiguous blocks of 32; a projection calls `run` only when it splits
+ *   into two or more tasks, and a fixed minimum of multiply-adds (rows x input width x output
+ *   width) caps the task count, as the one-row rule's minimum of weight bytes does. Below it, and
+ *   for a pass of one row, the projection runs on the calling thread. Every buffer the split needs
+ *   is allocated on the calling thread before `run`; no task allocates.
+ * - Every other step ignores it, and so does every step of a prefill call that admits more than
+ *   one token unless SSLM_PARALLEL_FOR_PREFILL is set.
  * A setter rejects any `reserved` bit this library does not implement, so a host that asks for a
  * step this build lacks is told so rather than silently ignored. The GPU backend accepts the
  * implemented bits and reads its hook only for the token finish.
@@ -68,14 +77,20 @@ typedef struct sslm_parallel_for {
 	void* host_ctx;        /* passed back to run unchanged; must outlive the installation */
 	int32_t max_tasks;     /* most tasks one run may carry; <= 1: serial;
 	                          at most SSLM_PARALLEL_FOR_MAX_TASKS */
-	uint32_t reserved;     /* opt-in bits: 0 or SSLM_PARALLEL_FOR_MATVEC; any other bit is
-	                          rejected by the setters */
+	uint32_t reserved;     /* opt-in bits: any combination of SSLM_PARALLEL_FOR_PREFILL and
+	                          SSLM_PARALLEL_FOR_MATVEC; any other bit is rejected by the setters */
 } sslm_parallel_for;
 
+/* Bit 0 of `reserved` (1.18.0): also split every CPU batched (two or more rows) projection across
+ * `run` (above). Opt-in, like bit 1. The macro's presence is the compile-time test for the
+ * feature; a library before 1.18.0 rejects the bit at the setter (SSLM_INVALID_ARGUMENT), so a host
+ * can tell an engine that threads batched passes from one that does not. */
+#define SSLM_PARALLEL_FOR_PREFILL 0x1u
+
 /* Bit 1 of `reserved`: also split every CPU one-row (M = 1) projection across `run` (above).
- * Opt-in, so a host that installs a hook for the logits step alone keeps exactly that. Bit 0 is
- * reserved for a later batched-prefill split and is rejected by this build. The macro's presence
- * is the compile-time test for the feature; a library without it rejects the bit at the setter. */
+ * Opt-in, so a host that installs a hook for the logits step alone keeps exactly that. The macro's
+ * presence is the compile-time test for the feature; a library without it rejects the bit at the
+ * setter. */
 #define SSLM_PARALLEL_FOR_MATVEC 0x2u
 
 /* The most tasks one `run` may carry. The exactly-once check keeps one byte of call-local state

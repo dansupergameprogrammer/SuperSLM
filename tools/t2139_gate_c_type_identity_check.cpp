@@ -99,6 +99,9 @@ typedef enum sslm_status {
 	// Paged-KV plan Sec3.6: the budget-holder limit status, appended at 29.
 	SSLM_KV_BUDGET_EXCEEDED = 29,
 	SSLM_RESTORE_PRODUCER_MISMATCH = 30,
+	// Schema skip-ahead on the GPU (1.17.0): the two GPU statuses, appended at 31 and 32.
+	SSLM_GPU_FORCED_TABLE_ABSENT = 31,
+	SSLM_GPU_CONTEXT_CAP_EXCEEDED = 32,
 	// SSLM_STATUS_NEXT_FREE -- CONFIRMED (M1, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
 	// review.md), not re-derived: the real tests/t2130-g5-red-suite/sslm_g5.h now carries this
 	// same sentinel, landed by curie/t2130-g5-red-suite@beb2355 (this line's own prior comment

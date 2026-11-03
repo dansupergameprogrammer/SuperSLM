@@ -194,10 +194,32 @@ against 1.6.0 is in the
   runs on the calling thread. On Qwen2.5-0.5B at `max_tasks` 4, k + v
   (256 rows, 229,376 bytes) runs on the calling thread and the other four
   groups split, so there are 97 `run` calls per decode token (4 per layer
-  plus the finish). A call admitting two or more tokens is unchanged. The GPU
+  plus the finish). A call admitting two or more tokens is unchanged by this
+  bit (see the next item). The GPU
   setter accepts the bit and ignores it: the GPU backend reads its hook only
   for the finish. The macro's presence in `parallel_for.h` is the
   compile-time test, and a library without the feature refuses the bit.
+- **Batched projections, opt-in (CPU backend, 1.18.0).** Setting
+  `SSLM_PARALLEL_FOR_PREFILL` (bit 0) in `reserved` also splits every
+  projection of a pass that runs two or more rows at once: a prefill or
+  prefix-prefill call admitting two or more tokens, and every
+  `sslm_seq_jump_forward` pass of two or more rows. The jump-forward's check
+  is the exception: at 2 to 7 rows it still runs one-row passes when bit 1
+  threads them, since its check stops at the first mismatch and one-row
+  passes compute no rejected row; at 8 rows or more it runs the threaded
+  batched pass. Each of the seven projections (q, k, v, o, gate, up, down)
+  splits alone, by output columns. For M rows, input width K and N output
+  columns, the task count is the smallest of `max_tasks`, ceil(N / 32) and
+  floor(M·K·N / 4 Mi), and at least 1. Each task then takes ceil(N / count)
+  columns rounded up to a multiple of 32, and the last task takes what is
+  left. A projection calls `run` only when this gives at least two tasks.
+  On Qwen2.5-0.5B (K, N of 896 and 4864) at `max_tasks` 4, gate, up and down
+  split from M = 2, q and o from M = 11, and k and v from M = 74. Every value
+  is still an exact integer sum computed on one thread, so tokens and saved
+  state are identical with the bit on or off. The buffers a split needs are
+  allocated on the calling thread before `run`; no task allocates. The GPU
+  setter accepts the bit and ignores it. A library before
+  1.18.0 refuses it.
 - Rows are split into contiguous blocks whose size is a function of the
   matrix shape, `max_tasks` and the 256 KiB constant only, and every row is one
   exact integer sum on one thread: tokens, save blobs and digests are
@@ -411,6 +433,145 @@ widths and caps, other pool occupancies, batched decode and the AMD card
 are not measured. That is the only GPU speed statement; the
 [1.13.0 release note](releases/1.13.0.md) has the readings.
 
+### Multi-row prompt reading (1.18.0)
+
+*Released in 1.18.0. Every name here is an addition; no save format (`SLM5`,
+`SLM6`, `SPX1`) changes. Certified on the AMD Radeon RX 7900 XT; see the
+[1.18.0 release note](releases/1.18.0.md) for the NVIDIA run.*
+
+`sslm_gpu_seq_embed_rows` reads up to `SSLM_GPU_MAX_ROWS` (8) prompt tokens
+at once. The tokens pass through each layer together, with one weight read
+and one dispatch per site for all of them instead of one token at a time.
+The result is byte-identical to feeding the same tokens one at a time
+through `sslm_gpu_seq_embed_token` and the decode step: the same K/V rows,
+residual, counters and save blob.
+
+```c
+SslmGpuRowsSpec spec = {sizeof spec, SSLM_GPU_ROWS_PROMPT, tokens, count, 0};
+int32_t admitted = 0;
+sslm_gpu_seq_embed_rows(ctx, seq, &spec, &admitted);  /* opens a chunk of `admitted` rows */
+int32_t open = 0;
+do {
+    sslm_decode_step_gpu(ctx, seq, adapter_or_null, budget);  /* whole layers, as for one row */
+    sslm_gpu_ready(ctx, seq, 1, &ready, &status);             /* the last layer closes the chunk */
+    sslm_gpu_seq_rows_open(seq, &open);
+} while (open);
+```
+
+- **Opening.** `sslm_gpu_seq_embed_rows` is host-only: it submits nothing.
+  It admits the longest prefix of the tokens that fits the context's
+  headroom and, for a budgeted sequence, its budget limit, and reports that
+  count in `*out_admitted`. When nothing fits, it returns
+  `SSLM_GPU_CONTEXT_CAP_EXCEEDED` at the context cap, or
+  `SSLM_GPU_KV_BUDGET_EXCEEDED` at a budget limit below the cap. A sequence
+  that is Submitted, mid-token, or already has a chunk open returns
+  `SSLM_BUSY`. A bad spec returns `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`: a null
+  pointer, `struct_size` too small, a count outside 1..8, a kind other than
+  `SSLM_GPU_ROWS_PROMPT` or `SSLM_GPU_ROWS_EXACT_DRAFT`, or any flag (`flags`
+  must be 0). A token
+  outside the vocabulary returns `SSLM_TOKEN_ID_OUT_OF_RANGE`. Nothing is
+  written on any refusal. The sequence's ready-for-logits state is cleared.
+  Its schema binding and walk state are untouched while the chunk is open.
+- **Exact drafts (`SSLM_GPU_ROWS_EXACT_DRAFT`, 1.18.0).** The rows are
+  `[p, d1, ..., d(count-1)]`: p is the pending token the last finish produced
+  (and walked), and the d's are a draft of what follows. A model mapped
+  without `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`, or a sequence not holding its
+  pending token in hand (layer 0, ready flag clear, context > 0), returns
+  `SSLM_SEQUENCE_REJECTED`. Admission is the longest prefix whose drafts are
+  each draftable and legal at the walk state the previous row reaches (every
+  in-range draft on an unbound sequence), capped as above. The closing
+  `sslm_gpu_ready` finishes each row with the decode bridge's own finish and
+  commits rows 0..a-1, where row a-1 is the first whose produced token is not
+  the next row, whose finish fails or dead-ends, or the last row. The
+  sequence is then byte-identical to one that decoded the same a tokens one
+  at a time, the produced token walked (a dead end keeps the walk and sets
+  the ready flag). `sslm_gpu_seq_rows_produced(seq, out_token)` reads the
+  produced token (-2 at a dead end), or returns the failed finish's status
+  with nothing written; `SSLM_BUSY` while a chunk is open, and
+  `SSLM_SEQUENCE_REJECTED` when no Exact close has happened since the last
+  `sslm_gpu_seq_embed_rows` or reset. It takes no claim. When the finish
+  uses the device head, the rows' logits are computed in one submission,
+  timed on its own (`superslm_gpu::LastLogitsStageTiming()`, `gpu_port.h`),
+  for two or more rows; a one-row close keeps the one-row logits call. The
+  same record carries the close's host-finish time, measured on the thread
+  that closes the chunk. If the close's entry guard refuses (another sequence
+  Submitted), that `sslm_gpu_ready` reports `SSLM_BUSY` and changes nothing:
+  the chunk stays open at full depth, and the next `sslm_gpu_ready` retries
+  the close, or `sslm_gpu_seq_rows_abandon` rolls it back.
+- **No schema-forced kind.** A schema-forced kind and a first-prewalked flag
+  were removed with canonical mode before release (1.18.0). Kind 1 is reserved and is a bad spec, and so is any flag.
+- **Advancing.** `sslm_decode_step_gpu` moves every row of the chunk forward
+  by the whole layers the budget covers, counted as for one row
+  (`DispatchesPerLayer` per layer). A budget below one layer returns
+  `SSLM_DISPATCH_BUDGET_TOO_SMALL`, with the chunk unchanged. The adapter
+  passed with the first slice is fixed for the chunk; a different one later
+  returns `SSLM_BUSY`. `sslm_decode_step_batch_gpu` accepts members with open
+  chunks. Each takes whole layers from the batch's budget, as a plain member
+  does, and is submitted and drained in its turn: one submission per member,
+  as for every member of the batch.
+- **Closing.** The `sslm_gpu_ready` that finishes the last layer commits
+  every row. The last row rests at full depth with no finish, as a one-row
+  token does after its last layer, so the next call is the token finish.
+  `sslm_gpu_seq_last_rows_committed` reads the rows committed.
+- **Refusal.** If a guard refuses row j, the closing `sslm_gpu_ready`
+  reports `SSLM_SEQUENCE_REJECTED`. Rows before j are committed, and
+  `sslm_gpu_seq_last_rows_committed` reads j. As after a prompt-bridge
+  refusal, reset the sequence before reusing it.
+- **Failure and abandon.** A device or allocation failure in any slice puts
+  the sequence back exactly as it was before `sslm_gpu_seq_embed_rows`, and
+  closes the chunk. `sslm_gpu_seq_rows_abandon` does the same on request,
+  and returns `SSLM_OK` with no change when no chunk is open. Abandoning an
+  Exact chunk after its first slice submits one copy to put back its rows'
+  device K/V. That copy passes the decode verbs' entry guard. A refusal
+  changes nothing and leaves the chunk open. A failed copy still closes the
+  chunk, and the abandon returns the failure.
+- **Other verbs while a chunk is open.** Token embedding, adapter binding,
+  prefix adoption, every schema/prefill bridge, `sslm_gpu_seq_jump_forward`,
+  `sslm_gpu_seq_embed_schema_token` and `sslm_gpu_seq_forced_tokens` return
+  `SSLM_BUSY` (the forced-text query because the walk the chunk will advance
+  is not at rest). `sslm_gpu_seq_ready_for_logits` is allowed.
+  `sslm_gpu_seq_save` returns `SSLM_GPU_ROWS_CHUNK_OPEN` with nothing
+  written. Reading the prefill hidden state is allowed, and returns the
+  snapshot unchanged. `sslm_gpu_seq_reset` closes the chunk, and
+  `sslm_gpu_seq_release` frees it.
+- **Threads.** `sslm_gpu_seq_embed_rows`, `sslm_gpu_seq_rows_abandon`, the
+  decode step and each batch member take the per-handle claim. `sslm_gpu_ready`,
+  save, reset, release and the two queries (`sslm_gpu_seq_rows_open`,
+  `sslm_gpu_seq_last_rows_committed`) take none.
+
+The widened shaders (`*_wide_h2.cso`, `*_wide_h4.cso`, `*_wide_h8.cso`) are
+built and installed beside the one-row shaders. A chunk of one row runs the
+one-row shaders.
+
+#### The prompt bridge reads through the same path
+
+`SslmGpuSeqPrefillPromptForG5Bridge` (the verb an embedder's GPU encode
+calls) reads its admitted tokens through the multi-row path, in passes of up
+to 8 rows. Its signature, statuses and results are unchanged. The final
+hidden state (`sslm_gpu_seq_read_prefill_final_hidden`), the K/V rows and
+the save blob are byte-identical to feeding the same tokens one call per
+token.
+
+- **Pass height.** `dispatch_budget` counts dispatches, and a widened
+  dispatch is one dispatch. So the budget bounds the layers each submission
+  runs, `floor(budget / DispatchesPerLayer)`, not the rows a pass carries. A
+  budget of at least one layer gives passes of 8 rows (fewer for the last
+  pass). Each pass is submitted in slices of that many layers, so a call
+  of n tokens on L layers makes `ceil(n / 8) * ceil(L / floor(budget /
+  DispatchesPerLayer))` synchronous submissions (`ceil(n / 8)` at full
+  depth or more). A budget below one layer runs the shipped path whatever
+  its value: sub-chunks of up to 4 tokens, each at full depth in one
+  submission. A pass of one row runs the one-row shaders.
+- **Refusals and threads.** Every refusal and claim rule is the bridge's
+  existing one. A guard refusal commits the rows before the refused one and
+  returns `SSLM_SEQUENCE_REJECTED`. The bridge takes no per-handle claim.
+  It does not open a chunk that outlives the call: `sslm_gpu_seq_rows_open`
+  reads 0 afterwards, and `sslm_gpu_seq_last_rows_committed` keeps its value.
+- **Opting out.** Set the environment variable `SSLM_GPU_MULTIROW_PROMPT=0`
+  before `sslm_gpu_context_create` to force the one-row path for every
+  sequence of that context. The variable is read once, when the context is
+  created. Unset, or any other value, leaves the multi-row path on.
+
 ### Thread safety
 
 Calls against **different** sequence handles are safe to make from
@@ -529,6 +690,25 @@ One covers precached prefixes (1.16.0; ordinal 30):
 written on another adapter (its vendor or device ID differs from the
 context's). Nothing is drawn. The status was released in 1.16.0, with the
 GPU twins.
+
+Two cover schema skip-ahead on the GPU (1.17.0; see
+[Schema skip-ahead on the GPU](#schema-skip-ahead-on-the-gpu-1170)).
+`SSLM_GPU_FORCED_TABLE_ABSENT` (ordinal 31): `sslm_gpu_seq_forced_tokens` or
+`sslm_gpu_seq_jump_forward` on a model mapped without a forced-next table (its
+artifact carries no tokenizer section); nothing changes.
+`SSLM_GPU_CONTEXT_CAP_EXCEEDED` (ordinal 32): a `sslm_gpu_seq_jump_forward` call that asked a
+dedicated sequence for more rows than fit before its context cap; the rows that fit are
+committed. Both names are also appended to the CPU's `SSLM_STATUS_ENUM_LIST`; no CPU call returns
+either. The CPU and GPU enums do not share ordinals: compare statuses by name, never by number.
+
+One covers multi-row GPU passes (1.18.0; `SslmGpuStatus` value 33, appended
+after the schema skip-ahead pair; see
+[Multi-row prompt reading](#multi-row-prompt-reading-1180)):
+`SSLM_GPU_ROWS_CHUNK_OPEN`, a save refused while a row chunk is open; nothing
+is written. It is GPU-only: no CPU sequence has a row chunk, so no CPU call
+can return it, and it is not appended to the CPU's `SSLM_STATUS_ENUM_LIST`,
+as the paged K/V statuses above are not. An `sslm_gpu_seq_embed_rows` at the
+context cap that admits no row returns 1.17's `SSLM_GPU_CONTEXT_CAP_EXCEEDED`.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 diverge on one refusal: when a device-side domain guard refuses one of the admitted
@@ -693,6 +873,8 @@ silently accepted.
   the finish is serial on the calling thread as before. With
   `SSLM_PARALLEL_FOR_MATVEC` set, each decode layer's one-row projections,
   and a prefill call that admits exactly one token, split across it too.
+  With `SSLM_PARALLEL_FOR_PREFILL` set (1.18.0), so does every pass of two or
+  more rows.
   Tokens are identical either way. A hook that breaks its exactly-once contract fails that call
   with `SSLM_INVALID_ARGUMENT` and leaves the sequence ready to retry. See
   [The token finish](#the-token-finish) above for the contract and the
@@ -1242,9 +1424,17 @@ chain is that token, then the chain of the state it leads to. The table costs
   nothing, bind eligibility included. A null `out_count` or `out_accepting`, a
   negative `cap`, or NULL ids with `cap > 0` is `SSLM_INVALID_ARGUMENT`.
 - `sslm_seq_jump_forward(model, seq, chunk_budget, params, opts, ws,
-  out_forced, cap, &forced_count)` (`opts` NULL, or mode
-  `SSLM_JUMP_CANONICAL`: *canonical mode*, described here; mode
-  `SSLM_JUMP_EXACT`: *exact mode*, below) admits the *pending* choice token, if there is one,
+  out_forced, cap, &forced_count)` runs *exact mode* (below) for NULL `opts`,
+  mode `SSLM_JUMP_DEFAULT` (0) and mode `SSLM_JUMP_EXACT` (1). **1.18.0
+  removed canonical mode** (deprecated in 1.17.0). Its value 0 is now
+  `SSLM_JUMP_DEFAULT`, so a zero-initialised options struct selects Exact.
+  `SSLM_JUMP_DEFAULT` is exactly what NULL options give: Exact with the forced
+  chain as the draft. A draft, or `draft_count` != 0, with `SSLM_JUMP_DEFAULT`
+  is `SSLM_INVALID_ARGUMENT`; a caller's draft takes `SSLM_JUMP_EXACT`. Saves
+  made by 1.15.0-1.17.0 after a canonical jump still restore, and continue
+  under the mode the caller asks for. The rest of this item describes canonical
+  mode as 1.15.0-1.17.0 ran it; its refusals, limits, decode parameters and
+  concurrency are the ones exact mode refers to. Canonical mode admitted the *pending* choice token, if there is one,
   then chain tokens, up to `chunk_budget` tokens in all, in one batched layer
   pass through the prefill path, and writes the admitted chain ids (never the
   pending token) to `out_forced`. A token is pending when the last
@@ -1304,18 +1494,20 @@ chain is that token, then the chain of the state it leads to. The table costs
     consumes the token a concurrent `decode_step` would): a concurrent
     `sslm_seq_release` or `decode_step` of the same sequence waits for it.
 
-**Exact mode** (1.15.0; `sslm_jump_options` with mode `SSLM_JUMP_EXACT`) is a
-verified jump-forward: its output, tokens and save blobs included, equals a run
+**Exact mode** (1.15.0; since 1.18.0 the verb's only mode: NULL `opts`,
+`SSLM_JUMP_DEFAULT` or `SSLM_JUMP_EXACT`) is a verified jump-forward: its output, tokens and save blobs included, equals a run
 that never calls the verb.
 - **Options.** `struct_size` must be `sizeof(sslm_jump_options)`. `draft`
   holds `draft_count` token ids, read during the call only; `draft` NULL with
   `draft_count` 0 means the forced chain from the state after the pending
   token, and a non-NULL `draft` with `draft_count` 0 is an empty draft. A
-  wrong `struct_size`, an unknown mode, a negative `draft_count`, a NULL
-  `draft` with `draft_count` > 0, or a draft in canonical mode is
-  `SSLM_INVALID_ARGUMENT`, checked before every other refusal, with nothing
-  changed (`*out_forced_count` unwritten, bind eligibility kept). The other
-  refusals are canonical mode's, in its order.
+  wrong `struct_size`, a mode other than `SSLM_JUMP_DEFAULT` or
+  `SSLM_JUMP_EXACT`, a negative `draft_count`, a NULL `draft` with
+  `draft_count` > 0, or a draft (or `draft_count` != 0) with
+  `SSLM_JUMP_DEFAULT` is `SSLM_INVALID_ARGUMENT`, checked before every other
+  refusal, with nothing changed (`*out_forced_count` unwritten, bind
+  eligibility kept). The other refusals are the ones listed above, in that
+  order.
 - **What it does.** With a pending token p, the draft is clipped to
   `chunk_budget - 1` tokens and to the rows the context cap and the KV budget
   leave after p, then cut at its first token that is out of range, a special
@@ -1339,7 +1531,7 @@ that never calls the verb.
   failed anti-LM create) returns its status with nothing changed. A failure
   after a row is kept, inside a check's finish or a later one-row pass, ends
   the check there: the verified rows are kept and the call returns `SSLM_OK`.
-- **Decode parameters.** As for canonical mode; pass `decode_step` the same
+- **Decode parameters.** Validated as above; pass `decode_step` the same
   ones. Under damped parameters the anti-LM state is created or re-keyed only
   when the pass has two or more rows, installed only once the check's first
   finish has returned a token (a failed first finish leaves the old state and
@@ -1452,3 +1644,100 @@ always safe. A dead-ended sequence is `sslm_gpu_seq_reset`- and
 `sslm_gpu_seq_bind_adapter`-eligible (see the CHANGELOG), and is proven
 bit-identical between the CPU and GPU paths at real scale (see
 [Certified platforms](#certified-platforms)).
+
+## Schema skip-ahead on the GPU (1.17.0)
+
+The GPU twins of the CPU's schema fast-decode verbs (1.15.0), released in 1.17.0. Every name below is an addition;
+no save format (`SLM5`, `SLM6`, `SPX1`) changes. Stream equality with the CPU, per mode, is certified on the NVIDIA
+RTX 5060 and the AMD Radeon RX 7900 XT only. 1.17.0 also fixes the RTX 50-series (Blackwell) GPU results that 1.16.0
+listed as a known issue.
+
+**Canonical mode is removed in 1.18.0.** It changed answers: it wrote the
+forced text with the tokenizer's split, so the model continued from tokens it would not have chosen. On a schema-heavy
+workload it changed 8 of 44 answers, where exact mode kept every answer and was nearly as fast. NULL options,
+`SSLM_JUMP_DEFAULT` (canonical's old value 0) and `SSLM_JUMP_EXACT` now all select Exact, and `SSLM_JUMP_DEFAULT`
+takes no draft, as NULL options take none. The GPU verb runs Exact on multi-row dispatch (below), after its argument
+checks (a mode outside the enum, or a draft with `SSLM_JUMP_DEFAULT`, is `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`, and a call
+with a multi-row chunk open is `SSLM_BUSY`). A 1.17.0 GPU save made after a canonical jump still restores. The jump-forward paragraph below describes 1.17.0's canonical verb.
+
+**The forced-text query.** `sslm_gpu_seq_forced_tokens(ctx, seq, out_ids, cap, out_count, out_accepting)` returns
+the text the bound schema forces from the sequence's current walk state, as token ids: the CPU's
+`sslm_seq_forced_tokens` for the same state, id for id. It is host-only and changes nothing, bindability included.
+`sslm_gpu_model_map` builds the forced-next table once, with the CPU map's own builder, from the artifact's schema
+and tokenizer sections. Refusals, in order, each writing nothing: a malformed handle or argument,
+`SSLM_SEQUENCE_KV_BUFFER_MISMATCH`; a model with no table (an artifact without a tokenizer section),
+`SSLM_GPU_FORCED_TABLE_ABSENT`; a Submitted sequence, or another thread's decode of it, `SSLM_BUSY`. An allocation
+failure while the table is built fails the map with `SSLM_GPU_ALLOCATION_FAILED`.
+
+**The masked finish.** Under a bound schema, the decode bridge's finish scores only the rows the schema allows at the
+walk state, with the CPU masked finish's own function, when the model's hidden size passes the CPU's exactness test
+(computed once at `sslm_gpu_model_map`) and the head rows are on the host or tied to the embedding. Tokens, walks,
+saves and counters equal the full finish's. Unbound decode is unchanged. A model whose device head is untied from
+the embedding keeps the device logits under a bound schema: it gets no GPU masked finish in 1.17.0. One exit is new
+on a tied device-head model: a host parallel-for hook that does not run every task makes the finish return
+`SSLM_GPU_PARALLEL_FOR_INCOMPLETE` with token -1, the walk unchanged and the ready flag set, so a retry finishes the
+same row, as the host-head finish already did.
+
+**The jump-forward verb.** `sslm_gpu_seq_jump_forward(ctx, seq, pending_token, chunk_budget, opts, out_forced, cap,
+out_forced_count)` is the GPU twin of `sslm_seq_jump_forward`.
+
+From 1.18.0 its one mode is Exact (NULL options, `SSLM_JUMP_DEFAULT` and `SSLM_JUMP_EXACT` alike), as on the CPU. With
+a pending token in hand it runs p and the draft (the caller's, or the forced chain from the walk state), clipped to
+`chunk_budget - 1` drafts and to the headroom and cut at the first draft that is not draftable or not legal, in passes
+of up to 8 rows on the multi-row path. Each row but the last is finished with the decode bridge's own finish; the call
+keeps the rows up to and including the first whose produced token differs from the next draft, writes the kept
+drafts to `out_forced`, and leaves the ready flag set on the last kept row, so the next decode bridge call produces
+exactly the plain decode loop's token. No pass runs after one that found a mismatch. No pending token, no schema, a
+model without the exact finish, no headroom, or nothing left after the clip is a no-op (OK, count 0). A device or
+allocation failure (a guard refusal included) in the first pass restores the entry state and returns
+`SSLM_DEVICE_LOST` or `SSLM_GPU_ALLOCATION_FAILED`; in a later pass it keeps the earlier passes and returns OK. The
+prefill snapshot is never touched, and `sslm_gpu_seq_last_rows_committed` keeps its value. The rest of this
+paragraph is 1.17.0's canonical contract, kept for its saves.
+
+In 1.17.0, which had canonical mode only, it admitted, in passes of up to 4 rows
+(a pass of one row on the schema-content chunk path), the pending token (when one is given) and then the chain the schema forces from the walk
+state, at most `chunk_budget` rows in all; R rows make ceil(R / 4) layer submissions. `out_forced` receives the
+forced ids admitted (`cap` must be at least `chunk_budget`), and `*out_forced_count` their number, the pending row
+not counted. The GPU keeps no forced-token counter, and no save format changes. `SslmGpuJumpOptions` is
+`{struct_size, mode, draft, draft_count}`; `opts` may be NULL (canonical). **1.17.0 refuses `SSLM_JUMP_EXACT` with
+`SSLM_SEQUENCE_REJECTED`**, with or without a draft; the fields stay so that a later release can accept it with no
+ABI change.
+
+- **Entry shapes.** A token in hand (layer 0, ready flag clear, context > 0) takes `pending_token` >= 0: the token the
+  last finish produced and walked, embedded without a second walk. A ready sequence (the ready flag set, or the
+  primed row at full depth) and a fresh bound sequence (no context) take -1. Any other shape is
+  `SSLM_SEQUENCE_REJECTED`. With no chain at the walk state the call is a no-op (OK, count 0), and a pending token
+  stays the caller's.
+- **After an admission** the ready flag is set at full depth, so the next decode bridge call finishes the last admitted
+  row only.
+- **The limit.** Before any submission the verb computes the rows left before the limit, h: the context cap, or a
+  pooled sequence's limit. A call that asks for more than h admits h, walks over them, sets the ready flag, and
+  returns `SSLM_GPU_CONTEXT_CAP_EXCEEDED` (ordinal 32), or `SSLM_GPU_KV_BUDGET_EXCEEDED` for a pooled sequence whose
+  limit is below the cap. At h = 0 nothing changes and the status is the same. The verb never returns the
+  schema-content bridge's `SSLM_DEVICE_LOST` for a full context.
+- **The prefill snapshot** (`sslm_gpu_seq_read_prefill_final_hidden`) is cleared as the pass starts and set when every
+  row asked for is admitted, as the schema-content bridge does.
+- **A failure** in the pass (`SSLM_GPU_ALLOCATION_FAILED` for an allocation failure on the device or the host,
+  `SSLM_DEVICE_LOST` for every other fault) restores the entry state (context length, walk, the per-sequence counters, the
+  hidden state and scale, the layer index, the ready flag, the prefill snapshot's flag, the dedicated host-mirror rows
+  and a pooled holder's mapped pages) and returns that status. An off decode can follow.
+- **Refusals,** in order, each changing nothing, bindability included: a malformed handle, output, budget, `cap` or
+  `opts`, `SSLM_SEQUENCE_KV_BUFFER_MISMATCH`; exact mode, `SSLM_SEQUENCE_REJECTED`; `pending_token` below -1 or past
+  the vocabulary, `SSLM_TOKEN_ID_OUT_OF_RANGE`; no table, `SSLM_GPU_FORCED_TABLE_ABSENT`; a held decode claim or a
+  Submitted sequence, `SSLM_BUSY`; the shape, `SSLM_SEQUENCE_REJECTED`; then the submission guard's statuses. A call
+  that passes them clears bind eligibility; an unbound sequence is then a no-op.
+
+**The walked embed.** `sslm_gpu_seq_embed_schema_token(ctx, seq, token)` is `sslm_gpu_seq_embed_token` with the walk:
+it checks the token against the walk state, embeds it, advances the walk and clears the ready flag, which discards a
+ready row. The caller then drives the layers with `sslm_decode_step_gpu` and, for a forced row, does not finish it;
+row for row, a chain fed this way equals the verb's. No schema bound, an illegal token, or a mid-token sequence (its
+layers partly run) is `SSLM_SEQUENCE_REJECTED` with nothing changed.
+
+**The ready getter.** `sslm_gpu_seq_ready_for_logits(ctx, seq, out_ready)` writes 1 when the next decode bridge call
+finishes the held row without an embed, else 0. It is host-only. SLM5 and SLM6 restore the flag, so a host reads a
+restored sequence's resting shape from it. It takes the decode claim for the read. A malformed handle,
+`SSLM_SEQUENCE_KV_BUFFER_MISMATCH`; a Submitted sequence, or another thread's decode of it, `SSLM_BUSY`.
+
+**Determinism.** Stream equality per mode is claimed only on the GPUs where the box's exactness rules ran (the RTX
+2080 SUPER and the Radeon RX 7900 XTX). It is a separate claim from the plugin's, whose README does not claim GPU
+determinism.

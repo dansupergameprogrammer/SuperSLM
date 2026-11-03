@@ -64,9 +64,17 @@ PIN(SSLM_GPU_PREFIX_SCHEMA_MISMATCH, 29);
 // Precached prefixes (1.16.0): the producer refusal, appended last.
 PIN(SSLM_RESTORE_PRODUCER_MISMATCH, 30);
 
+// Schema skip-ahead on the GPU (1.17.0): the forced-table and context-cap statuses.
+PIN(SSLM_GPU_FORCED_TABLE_ABSENT, 31);
+PIN(SSLM_GPU_CONTEXT_CAP_EXCEEDED, 32);
+// Multi-row GPU passes (1.18.0; plan §3.7 and errata E-2): the chunk-open refusal, appended last at its final
+// ordinal. The cap refusal is 1.17's SSLM_GPU_CONTEXT_CAP_EXCEEDED (32).
+PIN(SSLM_GPU_ROWS_CHUNK_OPEN, 33);
+
 // "Last": a switch over every named enumerator with no default compiles warning-free under
 // /W4 /we4062 only if the list below is complete. The appended T-2851 values are 21..23, the
-// paged-KV values 24..29, the precached-prefix value 30.
+// paged-KV values 24..29, the precached-prefix value 30, the schema skip-ahead values 31 and 32,
+// the multi-row value 33.
 #pragma warning(error : 4062)  // enumerator not handled in switch: fails the build here
 constexpr int AllNamed(SslmGpuStatus s) {
 	switch (s) {
@@ -101,13 +109,16 @@ constexpr int AllNamed(SslmGpuStatus s) {
 		case SSLM_GPU_PREFIX_REJECTED:
 		case SSLM_GPU_PREFIX_SCHEMA_MISMATCH:
 		case SSLM_RESTORE_PRODUCER_MISMATCH:
+		case SSLM_GPU_FORCED_TABLE_ABSENT:
+		case SSLM_GPU_CONTEXT_CAP_EXCEEDED:
+		case SSLM_GPU_ROWS_CHUNK_OPEN:
 			return 1;
 	}
 	return 0;
 }
-static_assert(AllNamed(SSLM_RESTORE_PRODUCER_MISMATCH) == 1, "the switch above names every status");
+static_assert(AllNamed(SSLM_GPU_ROWS_CHUNK_OPEN) == 1, "the switch above names every status");
 
 int main() {
-	std::printf("cell_status_ordinals: 31 ordinals pinned at compile time -> PASS\n");
+	std::printf("cell_status_ordinals: 34 ordinals pinned at compile time -> PASS\n");
 	return 0;
 }
