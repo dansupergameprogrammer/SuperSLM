@@ -886,10 +886,13 @@ std::vector<int32_t> OwnNext(sslm_model m, sslm_seq s, int n, const sslm_decode_
 	if (sslm_workspace_create(m, &cfg, ws_buf.p, wsz, &w) == SSLM_OK &&
 	    sslm_seq_restore(m, &pool, blob.data(), blob.size(), &q) == SSLM_OK) {
 		sslm_decode_params g{};
-		sslm_decode_params_init(m, SSLM_DECODE_MODE_GREEDY, kLayers, &g);
-		for (int i = 0; i < n; ++i) {
+		const sslm_status is = sslm_decode_params_init(m, SSLM_DECODE_MODE_GREEDY, kLayers, &g);
+		CHECK_MSG(is == SSLM_OK, "OwnNext: sslm_decode_params_init(greedy, %d) == %d", kLayers, static_cast<int>(is));
+		for (int i = 0; is == SSLM_OK && i < n; ++i) {
 			int32_t t = -100;
-			if (sslm_decode_step_v2(m, &q, 1, p ? p : &g, w, &t) != SSLM_OK || t < 0) break;
+			const sslm_status st = sslm_decode_step_v2(m, &q, 1, p ? p : &g, w, &t);
+			CHECK_MSG(st == SSLM_OK, "OwnNext: the reference twin's decode %d == %d", i, static_cast<int>(st));
+			if (st != SSLM_OK || t < 0) break;
 			out.push_back(t);
 		}
 		sslm_seq_release(q);
@@ -948,10 +951,11 @@ OffRun DecodeOnly(sslm_model m, const char* schema, const std::vector<int32_t>& 
 	    sslm_prefill(m, q, prompt.data(), int32_t(prompt.size()), int32_t(prompt.size()), SSLM_SPAN_PROMPT, w,
 	                 &consumed) == SSLM_OK) {
 		sslm_decode_params g{};
-		sslm_decode_params_init(m, SSLM_DECODE_MODE_GREEDY, kLayers, &g);
-		o.ok = true;
+		const sslm_status is = sslm_decode_params_init(m, SSLM_DECODE_MODE_GREEDY, kLayers, &g);
+		CHECK_MSG(is == SSLM_OK, "DecodeOnly: sslm_decode_params_init(greedy, %d) == %d", kLayers, static_cast<int>(is));
+		o.ok = is == SSLM_OK;
 		o.blob_at.push_back(SaveOf(m, q));
-		for (int i = 0; i < max; ++i) {
+		for (int i = 0; o.ok && i < max; ++i) {
 			int32_t t = -100;
 			if (sslm_decode_step_v2(m, &q, 1, p ? p : &g, w, &t) != SSLM_OK) {
 				o.ok = false;

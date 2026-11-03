@@ -149,7 +149,8 @@ inline void CheckCleanStop(const char* cell, const char* arm, const char* schema
 	}
 }
 
-// The CPU reference: greedy decode to the end, whole tokens (layer budget 64) or one layer per call (cpu::Token).
+// The CPU reference: greedy decode to the end, whole tokens (layer budget = the model's depth, CRig::Decode) or one layer
+// per call (cpu::Token). Every failure is a CHECK failure: an empty or short reference stream never passes silently.
 struct CpuRun {
 	bool dead = false;
 	std::vector<int32_t> stream;
@@ -158,11 +159,17 @@ struct CpuRun {
 };
 inline CpuRun RunCpu(CRig& c, const char* schema, const std::vector<int32_t>& prompt, bool sliced, int max = 400) {
 	CpuRun r;
-	sslm_seq s = c.New(schema);
-	if (!s || c.Prefill(s, prompt, SSLM_SPAN_PROMPT) != SSLM_OK) return r;
+	CHECK_MSG(c.ok, "CPU reference %s: the rig did not open", schema);
+	sslm_seq s = c.ok ? c.New(schema) : nullptr;
+	const sslm_status ps = s ? c.Prefill(s, prompt, SSLM_SPAN_PROMPT) : SSLM_INVALID_ARGUMENT;
+	CHECK_MSG(ps == SSLM_OK, "CPU reference %s: prompt prefill of %zu tokens: %d", schema, prompt.size(),
+	          static_cast<int>(ps));
+	if (ps != SSLM_OK) return r;
 	for (int i = 0; i < max; ++i) {
 		sslm_status st = SSLM_OK;
 		const int32_t t = sliced ? cpu::Token(c.M(), s, &st) : c.Decode(s);
+		CHECK_MSG(!(sliced && st != SSLM_OK) && t >= -2, "CPU reference %s %s: decode %d gave status %d token %d", schema,
+		          sliced ? "sliced" : "whole", i, static_cast<int>(st), t);
 		if ((sliced && st != SSLM_OK) || t < -2) return r;
 		if (t == -2) {
 			r.dead = true;
@@ -170,6 +177,8 @@ inline CpuRun RunCpu(CRig& c, const char* schema, const std::vector<int32_t>& pr
 			r.query_count = QueryCpu(c.M(), s).count;
 			return r;
 		}
+		CHECK_MSG(t >= 0, "CPU reference %s %s: decode %d gave %d, want a token or -2", schema, sliced ? "sliced" : "whole",
+		          i, t);
 		if (t < 0) return r;
 		r.stream.push_back(t);
 	}

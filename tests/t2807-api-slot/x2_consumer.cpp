@@ -2,7 +2,7 @@
 // C ABI by the T-2823 fold). Compiled with /DSUPERSLM_API=__declspec(dllimport) and linked against
 // sslm_engine.dll's import library ONLY, so every engine symbol it calls must cross the DLL boundary. It calls
 // every symbol of X2's expected set at least once and nothing else from the engine -- the 25 C++ entries of
-// consumed_symbols.txt and the 49 C verbs of c_abi_verbs.txt, 74 at v1.12.0: build_x2.ps1 checks that this
+// consumed_symbols.txt and the 55 C verbs of c_abi_verbs.txt, 80 since v1.15.0: build_x2.ps1 checks that this
 // DLL's import table from sslm_engine.dll EQUALS that set, so a call silently dropped here fails X2 (the
 // harness mutant, /DX2_DROP_CHUNK_BATCHED, proves it).
 //
@@ -35,6 +35,9 @@
 // sslm_adapter_residency, sslm_schema_count) return 0 for a null model or adapter. Each row below asserts
 // its refusal; sslm_workspace_set_parallel_for adds the new import. The 11 paged-KV verbs below
 // check their documented null-model sizing and refusal behavior with caller-owned output storage.
+// The 1.14.0 prefix save/restore pair and the 1.15.0 jump-forward pair (sslm_prefix_save,
+// sslm_prefix_restore, sslm_seq_forced_tokens, sslm_seq_jump_forward) are refused the same way: null
+// handles, SSLM_INVALID_ARGUMENT, and each output either untouched or cleared as its contract states.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -222,6 +225,14 @@ extern "C" __declspec(dllexport) int x2_run() {
 		p = nullptr;
 		X2_INVALID(sslm_prefix_prefill(m, p, tok, 1, 1, SSLM_SPAN_PROMPT, ws, &n));
 		X2_INVALID(sslm_prefix_freeze(p));
+		sz = 17;
+		X2_CHECK(sslm_prefix_save(p, buf, &sz) == SSLM_INVALID_ARGUMENT && sz == 17,
+		         "sslm_prefix_save rejects null prefix without writing the size");
+		p = reinterpret_cast<sslm_prefix>(static_cast<uintptr_t>(1));
+		uint32_t prefix_shared = 17;
+		X2_CHECK(sslm_prefix_restore(m, &kp, buf, sizeof buf, nullptr, &p, &prefix_shared) == SSLM_INVALID_ARGUMENT &&
+		             p == nullptr && prefix_shared == 0,
+		         "sslm_prefix_restore rejects null model and clears both outputs");
 		X2_INVALID(sslm_prefix_release(p));
 		X2_INVALID(sslm_seq_create(m, nullptr, nullptr));
 		s = reinterpret_cast<sslm_seq>(static_cast<uintptr_t>(1));
@@ -261,6 +272,11 @@ extern "C" __declspec(dllexport) int x2_run() {
 		X2_INVALID(sslm_prefix_set_schema(p, sc));
 		X2_INVALID(sslm_decode_step_v2(m, &s, 1, &dp, ws, tok));
 		X2_INVALID(sslm_decode_params_init(m, 0, 1, &dp));
+		int32_t accepting = 0;
+		X2_INVALID(sslm_seq_forced_tokens(m, s, tok, 4, &n, &accepting));
+		n = 17;
+		X2_CHECK(sslm_seq_jump_forward(m, s, 1, nullptr, nullptr, ws, tok, 4, &n) == SSLM_INVALID_ARGUMENT && n == 0,
+		         "sslm_seq_jump_forward rejects null model and clears the count");
 		X2_ZERO(sslm_workspace_size(m, &cfg));
 		X2_INVALID(sslm_workspace_create(m, &cfg, nullptr, 0, &ws));
 		X2_INVALID(sslm_detokenize_stream(m, &ds, tok, 1, buf, &n));

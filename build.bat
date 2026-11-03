@@ -2326,6 +2326,16 @@ for %%f in (1 2 3 4 5 6 7 8 9 10) do (
 	cl %SFDGCS_FLAGS% tests\schema-fast-decode-gpu\sfdg_cell_cs_g%%f.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\cells\ /Fe:out\sfdg-cs\sfdg_cell_cs_g%%f.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\cell_g%%f.log 2>&1 || (type out\sfdg-cs\cell_g%%f.log & echo clean-stop GPU cell sfdg_cell_cs_g%%f did not compile or link & goto :hard_fail)
 )
 echo clean-stop GPU cells: G1-G10 compiled and linked against the current engine.
+rem The schema fast-decode GPU tools (tools\schema_fast_decode_gpu_p2_ref.cpp, schema_fast_decode_gpu_jf_bench.cpp,
+rem schema_fast_decode_gx3_bench.cpp): compiled and linked here against the same seam engine, so each has a build
+rem recipe in this file (tools\ci\check_tools_have_build_recipe.py). Not run: P2.16's reference, GB2/GB3's jump-forward
+rem bench and GX.3's per-submit bench take a model and a D3D12 device, and the box driver
+rem (tools\schema_fast_decode_box\run_gpu_box_step.ps1) runs them. A tool that does not compile or link fails this build.
+mkdir out\sfdg-cs\tools
+cl %SFDGCS_FLAGS% tools\schema_fast_decode_gpu_p2_ref.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\tools\ /Fe:out\sfdg-cs\tools\schema_fast_decode_gpu_p2_ref.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\tool_p2_ref.log 2>&1 || (type out\sfdg-cs\tool_p2_ref.log & echo schema fast-decode GPU tool schema_fast_decode_gpu_p2_ref did not compile or link & goto :hard_fail)
+cl %SFDGCS_FLAGS% tools\schema_fast_decode_gpu_jf_bench.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\tools\ /Fe:out\sfdg-cs\tools\sslm_schema_fast_decode_gpu_jf_bench.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\tool_jf_bench.log 2>&1 || (type out\sfdg-cs\tool_jf_bench.log & echo schema fast-decode GPU tool schema_fast_decode_gpu_jf_bench did not compile or link & goto :hard_fail)
+cl %SFDGCS_FLAGS% tools\schema_fast_decode_gx3_bench.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\tools\ /Fe:out\sfdg-cs\tools\sslm_schema_fast_decode_gx3_bench.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\tool_gx3_bench.log 2>&1 || (type out\sfdg-cs\tool_gx3_bench.log & echo schema fast-decode GPU tool schema_fast_decode_gx3_bench did not compile or link & goto :hard_fail)
+echo schema fast-decode GPU tools: P2.16 reference, jump-forward bench and GX.3 bench compiled and linked.
 if not defined SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR goto :sfdgcs_runtime_skipped
 xcopy /Y /Q out\shaders\*.cso out\sfdg-cs\shaders\ >nul
 for %%f in (1 2 3 4 5 6 7 8 9 10) do (
@@ -2338,6 +2348,29 @@ echo clean-stop GPU cells SKIPPED at runtime: set SUPERSLM_SCHEMA_FAST_DECODE_FI
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%
+
+rem T-3094 (multi-command S0): tests\t3094-multicommand-s0 is a red suite by design -- its product cells assert the
+rem converter behaviour the multi-command arc has not built yet, so they fail against the shipped converter, and its
+rem own docstring (test_s0_red.py) says so. It is wired here as a reported, non-gating run in the form of the
+rem run_fp_free_scan_real_corpus.py step above: the exit code is captured and printed, never folded into %ec%.
+rem --continue-on-collection-errors keeps one module's missing optional dependency (v2\test_probe.py imports
+rem scikit-learn) from stopping the rest of the suite. Skipped, loudly, when python or pytest is absent.
+set t3094_ec=not-run
+where python >nul 2>nul
+if not errorlevel 1 (
+	python -c "import pytest" >nul 2>nul
+	if not errorlevel 1 (
+		python -m pytest tests\t3094-multicommand-s0 -q --continue-on-collection-errors -p no:cacheprovider --basetemp out\pytest-t3094
+		call set t3094_ec=%%errorlevel%%
+	) else (
+		echo pytest not installed for this Python -- skipping tests\t3094-multicommand-s0 ^(non-fatal^)
+	)
+) else (
+	echo python not found on PATH -- skipping tests\t3094-multicommand-s0 ^(non-fatal^)
+)
+if not "%t3094_ec%"=="not-run" (
+	echo tests\t3094-multicommand-s0 exited %t3094_ec% ^(non-gating: a red suite by design, see test_s0_red.py^)
+)
 
 rem T-2091 (O30's own local-half closure, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-
 rem review.md; build log §27): this script ran no Python at all until now, so the O11 gate-flag pin
