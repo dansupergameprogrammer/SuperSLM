@@ -16,7 +16,7 @@ Branch `claude/project-thread-mq1of4`. Brief: [BRIEF.md](BRIEF.md). Three box ru
 No engine or converter defect in the array path was found on any run. On 1.19 the 40 token streams of the four
 plain arms (CPU, GPU, CPU Exact, CPU full finish) are identical to the fix round's, which were identical to the old
 box's: the same tokens on two engines, an AMD and an NVIDIA GPU, and two CPUs. The two new GPU arms give the plain GPU
-document on 10/10 prompts each. One speed regression is new on 1.19 (Finding 6). The findings are under **Findings**.
+document on 10/10 prompts each. One speed difference from the 1.16-based fix round comes from 1.17.0's GPU masked finish (Finding 6). The findings are under **Findings**.
 
 **The 1.19 timings are "not quiet".** No other harness, test binary, attach, Unreal or Frozen Hearts build ran during
 the timed steps (checked before the run). But Chrome was open (18-19 processes; 5.5 % total CPU over a 5 s sample
@@ -182,7 +182,7 @@ On 1.19 every prompt's tokens equal plain GPU decode in both modes, in both runs
 pattern the fix round's host trace did not: a base of 21-27 ms with bursts of 36-49 ms wall (15-19 ms busy) every
 5-15 tokens, in both modes.
 
-The bullets below are the fix round's reading, kept as written; on 1.19 the device-head gain is gone (Finding 6).
+The bullets below are the fix round's reading, kept as written; on 1.19 the device head is not used under a bound schema (Finding 6).
 
 - Per prompt the spread is small: on host, wall 28.6–29.4 and busy 12.5–13.0 ms; on device, wall 17.8–18.4 and
   busy 9.6–10.3 ms.
@@ -359,7 +359,16 @@ artifact (walks and rejections 10/10, `tfrestore` 21/21, `--state-zero` fails 21
      2080 SUPER).
 5. **The workhorse toolchain differs from `build.bat`'s pins** (workhorse). The run used dxc 10.0.26100.0 rather than
    10.0.19041.0, and Python 3.13 is required. The outputs are unaffected: the token streams equal the old box's.
-6. **On 1.19 the device-resident head no longer speeds up GPU decode** (workhorse, 1.19; reproduced in a second run).
+6. **Under a bound schema the device-resident head is not used, by 1.17.0's design** (workhorse, 1.19; reproduced
+   in a second run; cause read from the code in the cloud, 2026-11-03).
+   - Cause: `GpuFinishPathFor` (`src/gpu/gpu_1p0.cpp`) picks the legal-row finish whenever a schema is bound and the
+     model's legal-row predicate holds, and for a tied model `legal_row_head` is the host embedding, so the finish
+     submits no device logits (1.17.0, `13eeeadb`, GPU masked finish). `897b9bb4` was on a 1.16 base, without it.
+     Inside string content nearly the whole vocabulary is legal, so the host legal-row finish costs about what the
+     full host head does (inferred from the equal timings, not profiled). Choosing the device head when a state's
+     legal set is large is a possible later engine change.
+   - Busy figures are not comparable across the two runs: 1.18's ruling 46 counts the finish's own GPU work in
+     `LastCallTiming`, which the 1.16 base did not.
    - At one slice per token, head on device: 28.5 and 26.8 ms/token on 1.19, against 18.0 on the fix round's
      `897b9bb4`. Head on host is unchanged (29.0 and 28.6, against 29.1).
    - The GPU busy window with the head on device rose from 9.84 to 12.5-13.5 ms, now the same as on host, and the

@@ -31,9 +31,11 @@ release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB
   teacher-forced points on each backend; both SCM1 mutants and the state-zero mutant killed. The new GPU Exact
   jump-forward arm and GPU multi-row arm (prompt and `SSLM_GPU_ROWS_EXACT_DRAFT` chunks) each give the plain GPU
   document on 10/10 prompts, with 452 drafts kept over 167 draft calls, at ~40 ms/token against plain GPU's 232 at the
-  default slice setting. The canonical arm is dropped, since 1.18.0 runs it as Exact. Known issue from the same run:
-  the device-resident head no longer speeds up one-slice GPU decode (26.8-28.5 ms/token, against 18.0 on 1.16), and
-  tokens are unaffected (RESULTS.md, Finding 6).
+  default slice setting. The canonical arm is dropped, since 1.18.0 runs it as Exact. Known since 1.17.0, measured in the same
+  run: under a bound schema, a model with a tied head finishes each token on the host's legal rows (1.17.0's GPU masked
+  finish), so `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE` does not change a schema-bound decode. Where most of the vocabulary is
+  legal, as inside a string, that costs about what the full host head does: one-slice GPU decode measured 26.8-28.5
+  ms/token either way, against 18.0 with the device head on a 1.16 base. Tokens are unaffected (RESULTS.md, Finding 6).
 - **The clean stop at the schema's end** (closes 1.18.0's known issue). A `-2` at `SSLM_OK` now has a stated meaning
   that callers read, not infer. Read the accepting bit right after it: on the CPU `sslm_stats().schema_accepting`
   or `sslm_seq_forced_tokens`' `out_accepting`; on the GPU `SslmGpuSeqSchemaAcceptingForG5Bridge` or
