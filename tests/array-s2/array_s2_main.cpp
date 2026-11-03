@@ -3,7 +3,8 @@
 // fixtures.py post-processes. Usage:
 //   array_s2 map     <base.sslm> <schema.sslm> <schema>
 //   array_s2 walks   <schema.sslm> <schema> <fixtures> <cpu|gpu>
-//   array_s2 gen     <schema.sslm> <schema> <fixtures> <cpu|gpu> <plain|canon|exact|full> [row ...]
+//   array_s2 gen     <schema.sslm> <schema> <fixtures> <cpu|gpu> <plain|exact|full|multirow> [row ...]
+//            (cpu: plain, exact, full; gpu: plain, exact, multirow)
 //   array_s2 restore <schema.sslm> <schema> <fixtures> <gen file> <save plan> <cpu|gpu> [row ...]
 //   array_s2 tfrestore <schema.sslm> <schema> <fixtures> <cpu|gpu> <prompt row> [doc ...]
 //   array_s2 gputime <schema.sslm> <schema> <fixtures> <gen file> [row ...]
@@ -167,15 +168,22 @@ int Walks(const std::vector<uint8_t>& bytes, const std::string& schema, const st
 int Gen(const std::vector<uint8_t>& bytes, const std::string& schema, const std::vector<Record>& recs,
         const std::string& backend, const std::string& variant, const std::vector<std::string>& rows) {
 	GenMode mode = GenMode::Plain;
-	if (variant == "canon") mode = GenMode::JumpCanonical;
-	else if (variant == "exact") mode = GenMode::JumpExact;
+	if (variant == "exact") mode = GenMode::JumpExact;
+	else if (variant == "multirow") mode = GenMode::MultiRow;
 	else if (variant != "plain" && variant != "full") return 2;
-	if (backend == "gpu" && variant != "plain") return 2;
+	if (backend == "gpu" && variant == "full") return 2;
+	if (backend == "cpu" && variant == "multirow") return 2;
 	MapResult m;
 	CpuSession* c = nullptr;
 	GpuSession* g = nullptr;
-	if (backend == "cpu") c = CpuOpen(bytes.data(), bytes.size(), schema, variant == "full", kMaxChunk, &m);
-	else g = GpuOpen(bytes.data(), bytes.size(), schema, &m);
+	if (backend == "cpu") {
+		c = CpuOpen(bytes.data(), bytes.size(), schema, variant == "full", kMaxChunk, &m);
+	} else {
+		// EXACT_DRAFT chunks need the output head on the device; every other GPU arm keeps it on the host.
+		GpuOptions opt;
+		opt.head_on_device = mode == GenMode::MultiRow;
+		g = GpuOpen(bytes.data(), bytes.size(), schema, &m, opt);
+	}
 	if (!m.ok) {
 		std::printf("# setup failed: %s\n", m.error.c_str());
 		return 2;
@@ -186,11 +194,13 @@ int Gen(const std::vector<uint8_t>& bytes, const std::string& schema, const std:
 	for (const auto& r : recs) {
 		if (r.kind != "prompt" || !Wanted(rows, r.name)) continue;
 		++checked;
-		const GenResult res = c ? CpuGen(c, r.ids, kMaxTokens, mode) : GpuGen(g, r.ids, kMaxTokens);
+		const GenResult res = c ? CpuGen(c, r.ids, kMaxTokens, mode) : GpuGen(g, r.ids, kMaxTokens, mode);
 		failures += res.end != "dead_end" || res.accepting != 1;
-		std::printf("# %s %s end=%s accepting=%d tokens=%zu forced=%lld jump_calls=%lld ms=%.0f ms_per_token=%.1f\n",
+		std::printf("# %s %s end=%s accepting=%d tokens=%zu forced=%lld jump_calls=%lld drafts=%lld widest=%lld ms=%.0f "
+		            "ms_per_token=%.1f\n",
 		            label.c_str(), r.name.c_str(), res.end.c_str(), res.accepting, res.ids.size(),
-		            static_cast<long long>(res.forced), static_cast<long long>(res.jump_calls), res.ms,
+		            static_cast<long long>(res.forced), static_cast<long long>(res.jump_calls),
+		            static_cast<long long>(res.drafts), static_cast<long long>(res.widest), res.ms,
 		            res.ids.empty() ? 0.0 : res.ms / static_cast<double>(res.ids.size()));
 		std::printf("gen %s %s %s %zu", label.c_str(), r.name.c_str(), res.end.c_str(), res.ids.size());
 		PrintIds(res.ids);

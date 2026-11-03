@@ -2305,8 +2305,8 @@ if not defined SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR (
 		echo python is absent -- the schema fast-decode fixture was not generated, the M1/J1 cells below will fail for the missing fixture
 	)
 )
-rem Engine 1.19, the clean stop at the schema's end: the GPU cells G1-G9 (tests\schema-fast-decode-gpu\
-rem sfdg_cleanstop.h, sfdg_cell_cs_g*.cpp; the CPU cells E1-E7 run inside superslm_tests.exe, below). Placed after
+rem Engine 1.19, the clean stop at the schema's end: the GPU cells G1-G10 (tests\schema-fast-decode-gpu\
+rem sfdg_cleanstop.h, sfdg_cell_cs_g*.cpp; the CPU cells E1-E8 run inside superslm_tests.exe, below). Placed after
 rem the F-SFD provisioning above because the cells read that fixture. The compile-and-link gate always runs: the
 rem schema fast-decode GPU suite's own flags, sources and seam definitions (build_sfd_gpu.bat), every cell linked
 rem against the current engine; a cell that does not compile or link fails this build. The runtime step runs every
@@ -2322,13 +2322,13 @@ if errorlevel 1 (
 	echo clean-stop GPU cells: the seam engine build FAILED
 	goto :hard_fail
 )
-for %%f in (1 2 3 4 5 6 7 8 9) do (
+for %%f in (1 2 3 4 5 6 7 8 9 10) do (
 	cl %SFDGCS_FLAGS% tests\schema-fast-decode-gpu\sfdg_cell_cs_g%%f.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\cells\ /Fe:out\sfdg-cs\sfdg_cell_cs_g%%f.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\cell_g%%f.log 2>&1 || (type out\sfdg-cs\cell_g%%f.log & echo clean-stop GPU cell sfdg_cell_cs_g%%f did not compile or link & goto :hard_fail)
 )
-echo clean-stop GPU cells: G1-G9 compiled and linked against the current engine.
+echo clean-stop GPU cells: G1-G10 compiled and linked against the current engine.
 if not defined SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR goto :sfdgcs_runtime_skipped
 xcopy /Y /Q out\shaders\*.cso out\sfdg-cs\shaders\ >nul
-for %%f in (1 2 3 4 5 6 7 8 9) do (
+for %%f in (1 2 3 4 5 6 7 8 9 10) do (
 	out\sfdg-cs\sfdg_cell_cs_g%%f.exe "--fixture-dir=%SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR%" || (echo clean-stop GPU cell sfdg_cell_cs_g%%f FAILED & goto :hard_fail)
 )
 goto :sfdgcs_runtime_done

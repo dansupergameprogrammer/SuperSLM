@@ -70,6 +70,7 @@ sfdg_cell_cs_g6|CS|sfdg_cell_cs_g6
 sfdg_cell_cs_g7|CS|sfdg_cell_cs_g7
 sfdg_cell_cs_g8|CS|sfdg_cell_cs_g8
 sfdg_cell_cs_g9|CS|sfdg_cell_cs_g9
+sfdg_cell_cs_g10|CS|sfdg_cell_cs_g10
 '
 
 if [ "$LIST" = 1 ]; then

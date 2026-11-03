@@ -39,6 +39,7 @@ V2 = REPO / "tests" / "t3094-multicommand-s0" / "v2"
 ROWS = ["ex005", "ex006", "ex033", "ex034", "ex035", "ex041", "ex042", "ex051", "ex052", "ex053"]
 TF_DOCS = ["one_intent_0_conditions", "one_intent_1_condition", "three_intents_0_2_1_conditions"]
 TF_PROMPT = "ex041"
+GPU_ARMS = ("exact", "multirow")  # engine 1.19: GPU Exact jump-forward and the GPU multi-row arm
 BUSY_NAMES = ("array_s2", "superslm_tests", "sslm_verify", "t2132_", "schema_fast_decode")
 
 
@@ -345,18 +346,25 @@ class Box:
         return self.verdict(log, rc == 1 and len(recs) == len(rows) and bool(kills) and not bad,
                             f"exit={rc} records={len(recs)}/{len(rows)} dead_end_not_accepting={len(kills)} errors={len(bad)}")
 
-    def canon_info(self, log: Path) -> int:
-        """Canonical jump-forward (being removed in 1.18), information only: plain CPU against canonical,
-        recorded with validity and the first difference. Passes when the check ran to its end, whatever it
-        found; a crash or a missing stream fails."""
-        self.concat(RES / "gen_canon.txt", [BOX / "gen_cpu_plain.log", BOX / "gen_cpu_canon.log"])
-        rc = self.py(log, HERE / "fixtures.py", "check", "--ckpt", self.ckpt, "--gen", RES / "gen_canon.txt",
-                     "--json", RES / "gen_check_canon.json")
-        text = log.read_text(encoding="utf-8", errors="replace")
-        rows = sum(1 for l in text.splitlines() if l.startswith("ex") and ": " in l)
-        ok = rc in (0, 1) and "failures:" in text and "Traceback" not in text and rows == len(ROWS)
-        with open(log, "a", encoding="utf-8") as f:
-            f.write(f"canon_info completed={ok} rows={rows} (information only)\n")
+    def gpu_arms_engaged(self, log: Path) -> int:
+        """Each new GPU arm ran every prompt to an accepting end and kept draft tokens on at least one prompt:
+        an arm whose verb or chunks never committed a draft would equal plain decode without exercising the path.
+        Reads the arms' own `#` lines (jump_calls, drafts, widest)."""
+        lines, ok = [], True
+        for v in GPU_ARMS:
+            recs = [l for l in (BOX / f"gen_gpu_{v}.log").read_text(encoding="utf-8", errors="replace").splitlines()
+                    if l.startswith(f"# gpu_{v} ") and " end=" in l]
+            fields = [dict(f.split("=", 1) for f in l.split() if "=" in f) for l in recs]
+            ended = sum(f.get("end") == "dead_end" and f.get("accepting") == "1" for f in fields)
+            drafts = sum(int(f.get("drafts", "0")) for f in fields)
+            calls = sum(int(f.get("jump_calls", "0")) for f in fields)
+            widest = max((int(f.get("widest", "0")) for f in fields), default=0)
+            arm_ok = len(recs) == len(ROWS) and ended == len(ROWS) and drafts > 0 and calls > 0 and \
+                (v != "multirow" or widest >= 2)
+            ok = ok and arm_ok
+            lines.append(f"gpu_{v}: prompts={len(recs)}/{len(ROWS)} accepting_ends={ended} draft_calls={calls} "
+                         f"drafts={drafts} widest={widest} engaged={arm_ok}")
+        log.write_text("\n".join(lines) + f"\ngpu_arms_engaged ok={ok}\n", encoding="utf-8")
         return 0 if ok else 1
 
     def concat(self, out: Path, parts: list[Path]) -> int:
@@ -402,8 +410,8 @@ class Box:
             st.append((f"walks_{b}", False, (0,), lambda L, b=b: self.harness(L, "walks", A, S, F, b)))
         for run in (1, 2):
             sfx = "" if run == 1 else "_run2"
-            variants = [("cpu", "plain", self.exe), ("gpu", "plain", self.exe), ("cpu", "canon", self.exe),
-                        ("cpu", "exact", self.exe), ("cpu", "full", self.seam)]
+            variants = [("cpu", "plain", self.exe), ("gpu", "plain", self.exe), ("cpu", "exact", self.exe),
+                        ("cpu", "full", self.seam)]
             for b, v, exe in variants:
                 name = f"gen_{b}_{v}{sfx}"
                 st.append((name, True, (0,), lambda L, b=b, v=v, exe=exe: self.harness(L, "gen", A, S, F, b, v, exe=exe)))
@@ -417,8 +425,6 @@ class Box:
         st.append(("gen_check", False, (0,), lambda L: self.py(
             L, HERE / "fixtures.py", "check", "--ckpt", self.ckpt, "--gen", RES / "gen_musteq.txt",
             "--json", RES / "gen_check.json")))
-        # Information only: canonical jump-forward, which 1.18 removes.
-        st.append(("gen_canon_info", False, (0,), self.canon_info))
         st.append(("gen_repeat", False, (0,), lambda L: self.same_gen(L, RES / "gen.txt", RES / "gen_run2.txt")))
         st.append(("saves", False, (0,), lambda L: self.py(L, HERE / "fixtures.py", "saves", "--ckpt", self.ckpt,
                                                           "--gen", RES / "gen.txt", "--out", RES / "saveplan.txt")))
@@ -455,6 +461,19 @@ class Box:
         st.append(("gputime", True, (0,), lambda L: self.harness(
             L, "gputime", A, S, F, RES / "gen.txt", env_extra={"ARRAY_S2_GPU_LAYERS_PER_SLICE": "24"})))
         st.append(("gputime_copy", False, (0,), lambda L: self.concat(RES / "gputime.txt", [BOX / "gputime.log"])))
+        # Engine 1.19: the GPU paths 1.18.0 added, on the array schema. Appended after every earlier step so that
+        # adding them moves no existing step. GPU Exact jump-forward (sslm_gpu_seq_jump_forward, the forced chain as
+        # the draft) and the GPU multi-row arm (the prompt in SSLM_GPU_ROWS_PROMPT chunks, every decode step an
+        # SSLM_GPU_ROWS_EXACT_DRAFT chunk, head on the device) must each give documents identical to plain GPU
+        # decode on every prompt, valid against IntentDoc v2, and must actually have kept drafts.
+        for v in GPU_ARMS:
+            st.append((f"gen_gpu_{v}", True, (0,), lambda L, v=v: self.harness(L, "gen", A, S, F, "gpu", v)))
+        st.append(("gen_gpu_arms", False, (0,), lambda L: self.concat(
+            RES / "gen_gpu_arms.txt", [BOX / "gen_gpu_plain.log"] + [BOX / f"gen_gpu_{v}.log" for v in GPU_ARMS])))
+        st.append(("gen_gpu_arms_check", False, (0,), lambda L: self.py(
+            L, HERE / "fixtures.py", "check", "--ckpt", self.ckpt, "--gen", RES / "gen_gpu_arms.txt",
+            "--json", RES / "gen_check_gpu_arms.json")))
+        st.append(("gen_gpu_arms_engaged", False, (0,), self.gpu_arms_engaged))
         return st
 
     def head(self) -> str:

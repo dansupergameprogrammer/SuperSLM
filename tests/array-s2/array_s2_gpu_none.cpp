@@ -11,7 +11,7 @@ GpuSession* GpuOpen(const uint8_t*, size_t, const std::string&, MapResult* map, 
 }
 void GpuClose(GpuSession*) {}
 WalkResult GpuWalk(GpuSession*, const std::vector<int32_t>&) { return {}; }
-GenResult GpuGen(GpuSession*, const std::vector<int32_t>&, int32_t) { return {}; }
+GenResult GpuGen(GpuSession*, const std::vector<int32_t>&, int32_t, GenMode) { return {}; }
 std::vector<RestoreResult> GpuRestores(GpuSession*, const std::vector<int32_t>&, const std::vector<int32_t>&,
                                        const std::vector<int32_t>&, const RestoreOptions&, Trace*,
                                        std::string* error) {

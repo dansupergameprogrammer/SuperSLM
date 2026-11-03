@@ -276,18 +276,18 @@ GenResult CpuGen(CpuSession* s, const std::vector<int32_t>& prompt, int32_t max_
 			return false;
 		}
 		if (got > 0) ++r.jump_calls;
+		r.drafts += got;
 		r.ids.insert(r.ids.end(), forced.begin(), forced.begin() + got);
 		return got > 0;
 	};
+	if (mode == GenMode::MultiRow) {
+		r.end = "error:multirow is GPU only";
+		sslm_seq_release(seq);
+		return r;
+	}
 	while (static_cast<int32_t>(r.ids.size()) < max_tokens) {
-		if (mode == GenMode::JumpCanonical) {
-			// The host loop: jump until no forced token is left, then decode.
-			while (forced_count() > 0) {
-				if (!jump(nullptr)) break;
-			}
-		} else if (mode == GenMode::JumpExact && !r.ids.empty() && forced_count() > 0) {
-			jump(&exact);
-		}
+		// Exact with the forced chain as the draft (SSLM_JUMP_EXACT, no draft), once a token is pending.
+		if (mode == GenMode::JumpExact && !r.ids.empty() && forced_count() > 0) jump(&exact);
 		if (r.end.rfind("error:", 0) == 0) break;
 		int32_t t = -1;
 		st = DecodeOne(s, seq, &t);

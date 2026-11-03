@@ -1,5 +1,5 @@
-// Engine 1.19, the clean stop at the schema's end: the GPU cells G1-G9 of the design note's §4 (the contract's pins),
-// one cell per executable (sfdg_cell_cs_g1.cpp .. sfdg_cell_cs_g9.cpp), built beside the schema fast-decode GPU cells
+// Engine 1.19, the clean stop at the schema's end: the GPU cells G1-G9 of the design note's §4 (the contract's pins) and G10,
+// one cell per executable (sfdg_cell_cs_g1.cpp .. sfdg_cell_cs_g10.cpp), built beside the schema fast-decode GPU cells
 // by build_sfd_gpu.bat and build_sfd_gpu_mingw.sh (slice CS), on F-SFD. Box only: the cells need a D3D12 device; the
 // cloud compiles and links them.
 //
