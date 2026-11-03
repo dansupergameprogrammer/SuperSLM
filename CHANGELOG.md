@@ -2,6 +2,52 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
+## [1.19.0] - unreleased
+
+JSON arrays in schema-constrained generation, and a clean stop at the schema's end. `docs/releases/1.19.0.md` is the
+release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB6`, `SLM5`, `SLM6`, `SPX1`) changes.
+
+### Added
+
+- **JSON arrays in schema-constrained generation.** The schema converter (`tools/sslm_convert_schema.py`) compiles a
+  `"type": "array"` node to a cyclic item automaton: `[`, the `minItems` required items separated by `,`, then `]` or
+  another item. `minItems: 0` admits `[]`. A leading, trailing or doubled comma is never accepted. `items` must be one
+  schema object, and arrays nest. `maxItems` is refused by name. A schema with a reachable state that can never finish
+  a document is refused by name, with no artifact.
+- **Release limits for array schemas.** Seven per-schema limits, each with its own named diagnostic: `minItems` 8 per
+  array, nesting depth 8, 4,096 NFA states, 4,096 token-DFA states, 8,388,608 token transitions, 134,217,728 serialized
+  mask bytes and 536,870,912 tracked compiler bytes. A count equal to its limit is admitted. They bind only a schema
+  that contains an array, so an array-free schema compiles to the same table and SCM1 bytes as before.
+- **`tools/sslm_attach_schema.py`**, the offline attachment command. It compiles one or more named schemas against the
+  exact tokenizer checkpoint of a finished `.sslm`, appends one SCM1 section with every other section and header flag
+  unchanged, and runs `sslm_verify` on the base before compiling and on the result before reporting success. It
+  refuses, with no file written: a base that is not intact, already has an SCM1 section, or has no TOKENIZER section;
+  a checkpoint whose tokenizer differs from the base's; a bad schema name; and anything the compiler refuses.
+  `--limits-json` replaces named limits.
+- **Proven on a real artifact.** On the 0.5B model with an array schema attached, on an AMD and an NVIDIA GPU and two
+  CPUs: 10/10 generated documents valid, CPU and GPU streams identical, save/restore at every array byte, and exact
+  jump-forward and the masked finish both identical to plain decode on 10/10 (CPU; the GPU full finish is a third
+  witness). (Canonical jump-forward, removed in 1.18.0, closed arrays early there.) See
+  `tests/array-s2/RESULTS.md`.
+- **The clean stop at the schema's end** (closes 1.18.0's known issue). A `-2` at `SSLM_OK` now has a stated meaning
+  that callers read, not infer. Read the accepting bit right after it: on the CPU `sslm_stats().schema_accepting`
+  or `sslm_seq_forced_tokens`' `out_accepting`; on the GPU `SslmGpuSeqSchemaAcceptingForG5Bridge` or
+  `sslm_gpu_seq_forced_tokens`' `out_accepting`. 1 is a **clean stop**: the document is complete, and decoding should
+  stop with the output final. 0 is a **dead end**, which stays an error. The engine's behaviour is unchanged: the walk
+  and layer index are kept, a retry reproduces the same `-2`, and the sequence can be saved, restored, reset or have
+  its adapter changed. An `SSLM_GPU_ROWS_EXACT_DRAFT` chunk whose draft runs through the schema's last token closes
+  as a clean stop; draft tokens past it are not admitted.
+- **Tests:** clean-stop cells `CS.E1`-`CS.E7` in `superslm_tests` (`tests/schema_fast_decode/sfd_cells_cleanstop.inc`:
+  greedy, damped, sliced, batched, jump-forward, save/restore and lifecycle, and the dead-end seam), and GPU cells
+  `sfdg_cell_cs_g1`-`g9` (`tests/schema-fast-decode-gpu/`: whole and sliced tokens, multi-row closes, jump-forward,
+  `SLM5`/`SLM6` save/restore, the dead-end seam, and CPU/GPU agreement), built by `build.bat`.
+
+### Fixed
+
+- **sslm_verify checks the SchemaMasks section.** It refuses an SCM1 section the runtime loaders refuse; before, an
+  attach could report "verified" for an artifact that would not map.
+- *Placeholder:* the Qwen3 converter fix (in progress).
+
 ## [1.18.1] - 2026-10-31
 
 A GPU fix release. No token, save format, status, verb or shader changes. `SPX1` prefix blobs are bound to the engine
