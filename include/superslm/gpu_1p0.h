@@ -730,7 +730,9 @@ SslmGpuStatus sslm_gpu_seq_embed_rows(SslmGpuContext* ctx, SslmGpuSequenceHandle
 SslmGpuStatus sslm_gpu_seq_rows_abandon(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) noexcept;
 SslmGpuStatus sslm_gpu_seq_rows_open(const SslmGpuSequenceHandle* seq, int32_t* out_rows) noexcept;
 SslmGpuStatus sslm_gpu_seq_last_rows_committed(const SslmGpuSequenceHandle* seq, int32_t* out_rows) noexcept;
-/* sslm_gpu_seq_rows_produced reads the token the last EXACT_DRAFT close produced (-2 at a schema dead end): SSLM_OK
+/* sslm_gpu_seq_rows_produced reads the token the last EXACT_DRAFT close produced (-2 when the schema's walk has no
+ * transition for the masked winner: a clean stop if SslmGpuSeqSchemaAcceptingForG5Bridge then reads 1, a dead end if
+ * it reads 0; see the finish bridge's "WHAT -2 MEANS" below): SSLM_OK
  * with it in `*out_token`, or, when that close's finish failed, the decode bridge's status for the failure with
  * nothing written. A null sequence or out pointer: SSLM_SEQUENCE_KV_BUFFER_MISMATCH. A chunk open: SSLM_BUSY. No
  * EXACT_DRAFT close since the last sslm_gpu_seq_embed_rows or reset (a fresh, reset or restored sequence, an
@@ -786,7 +788,9 @@ SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenc
  * handle. On SSLM_OK, `out_schema_bound` is 1 iff a schema is bound; `out_schema_accepting` is 1
  * iff a schema is bound and the current DFA state is in that schema's exact SCM1 accept set.
  * Unbound reads are 0. On a drained-but-not-yet-finished Idle sequence, accepting reports the
- * current pre-finish membership; drain and finish before using it to decide output finality. */
+ * current pre-finish membership; drain and finish before using it to decide output finality.
+ * After a finish that returned -2 at SSLM_OK (1.19.0) this is the call that says what the -2 was:
+ * 1 = the document is complete (a clean stop), 0 = a dead end (an error). */
 SslmGpuStatus SslmGpuSeqSchemaAcceptingForG5Bridge(
     SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t* out_schema_accepting) noexcept;
 SslmGpuStatus SslmGpuSeqSchemaBoundForG5Bridge(
@@ -857,12 +861,22 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSeq
  * unescaped quote) and its consumer guidance -- a property of the compiled table itself,
  * identical on this path and on `sslm_decode_step`'s own CPU equivalent.
  *
- * SCHEMA DEAD END (v1.6.0, D-SLM3476): when a schema is bound and `Transition` finds no CSR row
+ * WHAT -2 MEANS (1.19.0; no ABI change). A `-2` at SSLM_OK is the schema saying "no token may come
+ * next". Read SslmGpuSeqSchemaAcceptingForG5Bridge (or sslm_gpu_seq_forced_tokens' out_accepting)
+ * right after it: 1 = the walk is in an accept state and the document is complete -- a CLEAN STOP,
+ * the normal end of schema-constrained generation (stop decoding, the output is final); 0 = a DEAD
+ * END, an error (the model or a degenerate row steered into a state with no way forward). In both
+ * cases the walk state and layer index are left as described below, so the read is stable and a
+ * retry reproduces the same -2. The CPU path reports the same pair through sslm_stats().
+ * schema_accepting.
+ *
+ * SCHEMA DEAD END / END OF DOCUMENT (v1.6.0, D-SLM3476): when a schema is bound and `Transition` finds no CSR row
  * entry for the masked-argmax winner at `seq`'s own walk-state (an accepting state's own
  * legitimately all-zero mask page, or a synthetic degenerate row where every admitted logit ties
  * at INT32_MIN and the lowest-index tie-break returns a token with no transition), this call
  * returns `*out_token == -2` at `SSLM_OK` -- never `SSLM_SEQUENCE_REJECTED`, which this bridge
- * reserves for the layer-loop-not-at-full-depth precondition failure below. This is the identical
+ * reserves for the layer-loop-not-at-full-depth precondition failure below. Whether it is a clean stop or a
+ * dead end is read from the accepting query above, never from the token. This is the identical
  * status the CPU path returns for the same event (`sslm_abi.cpp`'s own two miss sites). On this
  * path `seq`'s own layer_index is NOT reset (the walk state and layer index are both left exactly
  * as they were), and `ready_for_logits` IS re-armed. A further call to THIS function re-runs
@@ -902,8 +916,9 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSeque
  * `SslmGpuSeqFinishTokenForG5Bridge` itself -- cannot reproduce the duplicate-KV-commit class of
  * bug an earlier build round found and fixed, by construction.
  *
- * Inherits `SslmGpuSeqFinishTokenForG5Bridge`'s own schema-dead-end contract (v1.6.0,
- * D-SLM3476) unchanged: `*out_token == -2` at `SSLM_OK` on a schema dead end, with
+ * Inherits `SslmGpuSeqFinishTokenForG5Bridge`'s own -2 contract (v1.6.0, D-SLM3476; reading
+ * clarified 1.19.0) unchanged: `*out_token == -2` at `SSLM_OK` when the walk has no next token --
+ * a clean stop when SslmGpuSeqSchemaAcceptingForG5Bridge reads 1, a dead end when it reads 0 -- with
  * `ready_for_logits` re-armed by the underlying Finish call, so a caller that always retries
  * through this same entry point after a `-2` reproduces the identical result deterministically
  * and never re-embeds or re-drives the layer loop.

@@ -6,7 +6,8 @@
 # COMPILE. Running the cells is box-only (§10 GB-F, GB-M, GB-J and GB1).
 #
 # Usage: tests/schema-fast-decode-gpu/build_sfd_gpu_mingw.sh [--out=DIR] [--jobs=N] [--list] [TARGET ...]
-#   TARGET   g1f | g1m | g1j    every executable of that slice (default: all three)
+#   TARGET   g1f | g1m | g1j | cs   every executable of that slice (default: all four; cs is engine 1.19's
+#                                  clean-stop cells, sfdg_cleanstop.h)
 #            <exe name>         one executable from the table below
 #   --out    default <repo>/out/sfdg
 #   --jobs   parallel compiles (default 2; the container is shared)
@@ -38,7 +39,7 @@ for a in "$@"; do
 		*) TARGETS+=("$a") ;;
 	esac
 done
-[ ${#TARGETS[@]} -eq 0 ] && TARGETS=(g1f g1m g1j)
+[ ${#TARGETS[@]} -eq 0 ] && TARGETS=(g1f g1m g1j cs)
 
 # ---- the executables (keep in step with build_sfd_gpu.bat) -------------------------------------------------
 # name | slice | sources (tests/schema-fast-decode-gpu/*.cpp; a source with a slash is repo-relative)
@@ -60,6 +61,15 @@ sfdg_cell_g12_7|G1J|sfdg_cell_g12_7
 sfdg_cell_g12_10|G1J|sfdg_cell_g12_10
 schema_fast_decode_gpu_p2_ref|G1J|tools/schema_fast_decode_gpu_p2_ref
 sslm_schema_fast_decode_gpu_jf_bench|G1J|tools/schema_fast_decode_gpu_jf_bench
+sfdg_cell_cs_g1|CS|sfdg_cell_cs_g1
+sfdg_cell_cs_g2|CS|sfdg_cell_cs_g2
+sfdg_cell_cs_g3|CS|sfdg_cell_cs_g3
+sfdg_cell_cs_g4|CS|sfdg_cell_cs_g4
+sfdg_cell_cs_g5|CS|sfdg_cell_cs_g5
+sfdg_cell_cs_g6|CS|sfdg_cell_cs_g6
+sfdg_cell_cs_g7|CS|sfdg_cell_cs_g7
+sfdg_cell_cs_g8|CS|sfdg_cell_cs_g8
+sfdg_cell_cs_g9|CS|sfdg_cell_cs_g9
 '
 
 if [ "$LIST" = 1 ]; then

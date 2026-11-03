@@ -3,7 +3,7 @@ rem Schema fast-decode plan rev 1.4.4, slices G1-F, G1-M and G1-J: the GPU cells
 rem same executables as build_sfd_gpu_mingw.sh (the cloud build); the two tables must stay in step.
 rem
 rem Usage: tests\schema-fast-decode-gpu\build_sfd_gpu.bat ["--out=DIR"] ["--shaders=DIR"] [TARGET ...]
-rem   TARGET   g1f | g1m | g1j (default: all three), or one executable's name
+rem   TARGET   g1f | g1m | g1j | cs (default: all four; cs is engine 1.19's clean-stop cells), or one executable's name
 rem   --out    default <repo>\build\sfdg (executables in <out>\bin, shaders copied to <out>\bin\shaders)
 rem   --shaders default <repo>\out\shaders (build.bat's), else <repo>\build\Release\shaders (CMake's)
 rem
@@ -28,7 +28,7 @@ if not defined TAKEN set "TARGETS=!TARGETS! %~1"
 shift
 goto :parse_args
 :args_done
-if "%TARGETS%"=="" set TARGETS= g1f g1m g1j
+if "%TARGETS%"=="" set TARGETS= g1f g1m g1j cs
 if "%SHADERS%"=="" set SHADERS=%ENG%\out\shaders
 if not exist "%SHADERS%\*.cso" set SHADERS=%ENG%\build\Release\shaders
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
@@ -79,6 +79,16 @@ call :exe sfdg_cell_g12_6 G1J
 call :exe sfdg_cell_g12_7 G1J
 call :exe sfdg_cell_g12_10 G1J
 call :exe schema_fast_decode_gpu_p2_ref G1J "%ENG%\tools\"
+rem Engine 1.19, the clean stop at the schema's end: cells G1-G9 (sfdg_cleanstop.h).
+call :exe sfdg_cell_cs_g1 CS
+call :exe sfdg_cell_cs_g2 CS
+call :exe sfdg_cell_cs_g3 CS
+call :exe sfdg_cell_cs_g4 CS
+call :exe sfdg_cell_cs_g5 CS
+call :exe sfdg_cell_cs_g6 CS
+call :exe sfdg_cell_cs_g7 CS
+call :exe sfdg_cell_cs_g8 CS
+call :exe sfdg_cell_cs_g9 CS
 echo SFDG BUILD: %NLINKED% linked, %NRED% red by link, %NCOMPILE% red by compile
 exit /b 0
 

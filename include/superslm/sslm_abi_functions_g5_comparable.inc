@@ -131,15 +131,22 @@ SUPERSLM_API sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int3
 /* design Sec14.1, extended by the T-2199 Phase D review fix S1
  * (Claude/Poirot/7a3b10a-t2199-phaseD-review.md): out_tokens[i] reserves THREE sentinels, not
  * two -- the existing -1 ("pending, mid-token, call again with the same layer_budget-carried
- * state"), -2 ("this sequence's schema-bound walk reached a state with NO legal continuation at
- * all -- the argmax-selected token has no matching CSR transition entry, which Sec13.2 permits
- * at an accepting state with a legitimately all-zero mask page"), and -3 ("this index named a
+ * state"), -2 ("this sequence's schema-bound walk is at a state where the masked argmax has no
+ * transition: the schema's end, classified by the accepting query below"), and -3 ("this index named a
  * sequence that is NOT CURRENTLY LIVE -- concurrently released by another thread, per the T-2199
  * Phase D3 teardown-during-flight registry fix, sslm_abi.cpp's own g_seq_registry_mutex/
  * g_live_seqs -- before this call's own liveness check ran"). -2 and -3 are BOTH per-sequence
- * outcomes, not a call fault: the call's own return status stays SSLM_OK for either. -2 leaves
- * that sequence's own state exactly as this call found it and is safe to retry (a schema-bound
- * dead end is a stable, defined stop). -3 is NOT safe to retry the way -1 is: unlike -1
+ * outcomes, not a call fault: the call's own return status stays SSLM_OK for either.
+ * WHAT -2 MEANS (1.19.0; no ABI change): the walk state is kept, so the caller reads the accepting
+ * query after the -2 -- sslm_stats' schema_accepting, or sslm_seq_forced_tokens' out_accepting --
+ * to classify it. accepting = 1: the schema is complete. The output is a finished, valid document
+ * and this is a clean stop, not an error. accepting = 0: a dead end -- the walk is at a
+ * non-accepting state with no legal continuation, which a converted schema never reaches (the
+ * converter proves every reachable non-accepting state has a legal token); the caller reports it
+ * as an error. In both cases the sequence rests ready for logits at layer 0 with its walk state
+ * unchanged by the -2: a call that embedded and ran the last produced token keeps that token's
+ * K/V row, and a retry runs the finish only, gives -2 again and changes nothing. The sequence stays
+ * savable, restorable, resettable and adapter-swappable. -3 is NOT safe to retry the way -1 is: unlike -1
  * ("this call's own work on this sequence is unfinished, call again with the SAME state"), -3
  * names a sequence the caller no longer owns a live handle to at all -- calling again on the
  * same index cannot make it live again, and a caller must not loop on -3 the way the documented
