@@ -1,5 +1,5 @@
-# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\array-s2\tests\array-s2\fixtures.py precheck --ckpt D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-7ae5576 --fixtures D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt --out D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\precheck.txt
-compiled IntentDoc v2 in 5.9 s: 635 states, 3074805 transitions
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\fixtures.py precheck --ckpt D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-7ae5576 --fixtures D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt --out D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\precheck.txt
+compiled IntentDoc v2 in 8.1 s: 635 states, 3074805 transitions
 PASS walk one_intent_0_conditions tokens=29 admitted=29 accepting_before_end=0
 PASS walk one_intent_1_condition tokens=62 admitted=62 accepting_before_end=0
 PASS walk three_intents_0_2_1_conditions tokens=175 admitted=175 accepting_before_end=0

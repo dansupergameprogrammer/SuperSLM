@@ -1,42 +1,62 @@
 # S2 results: JSON arrays on a real artifact (CPU and GPU)
 
-Branch `claude/project-thread-mq1of4`. Brief: [BRIEF.md](BRIEF.md). Two box runs:
+Branch `claude/project-thread-mq1of4`. Brief: [BRIEF.md](BRIEF.md). Three box runs:
 
-- **Workhorse** (2026-10-26, the fix-round rerun): WORKHORSE, Radeon RX 7900 XT 20 GB (driver 32.0.21030.2001),
-  Ryzen 9 5950X, sources at `897b9bb4`. All 79 `box_run.py` steps passed. Every raw file under `results/` except
-  `attach.log`, `attach_retime.log` and `slices.txt` is from this run; the step logs are under `results/box/`.
+- **Workhorse, engine 1.19** (2026-11-03, the 1.19 box rerun): WORKHORSE, Radeon RX 7900 XT 20 GB (driver
+  32.0.21030.2001), Ryzen 9 5950X, sources at `0dfb6aea` (the merged 1.19 engine; `f4dd5c66` plus the harness's
+  Windows `(std::min)` fix). All 81 `box_run.py` steps passed, including the two new GPU arms (GPU Exact jump-forward
+  and GPU multi-row). Every raw file under `results/` except `attach.log`, `attach_retime.log` and `slices.txt` is
+  from this run; the step logs are under `results/box/`.
+- **Workhorse, fix round** (2026-10-26): the same machine, sources at `897b9bb4` (1.16.0-based, before the 1.18
+  merge). All 79 steps passed. Its raw files are in this file's history at `f4dd5c66`.
 - **Old box** (2026-10-25): DESKTOP-T2JJTNM, RTX 2080 SUPER, sources at `e9d73750` (no `src/` or `include/`
   difference from `origin/main`, v1.16.0). Its raw files are in this file's history at `897b9bb4`;
   `attach.log`, `attach_retime.log` and `slices.txt` are still its own.
 
-No engine or converter defect was found on either box. The CPU and GPU token streams on workhorse are identical, for
-all 50 streams, to the old box's (`gen.txt` at `897b9bb4`): the same tokens on an AMD and an NVIDIA GPU, and on two
-CPUs. The findings are under **Findings**.
+No engine or converter defect in the array path was found on any run. On 1.19 the 40 token streams of the four
+plain arms (CPU, GPU, CPU Exact, CPU full finish) are identical to the fix round's, which were identical to the old
+box's: the same tokens on two engines, an AMD and an NVIDIA GPU, and two CPUs. The two new GPU arms give the plain GPU
+document on 10/10 prompts each. One speed regression is new on 1.19 (Finding 6). The findings are under **Findings**.
 
-**Workhorse timings are "not quiet".** No other harness, test binary or attach ran during the run (the script's busy
-check). But Chrome and the ChatGPT and Codex desktop apps were open. Before the run they used about 1 of 32 hardware
-threads over a 5 s sample, with the GPU 3D engine idle. Frozen Hearts and Unreal were not running.
+**The 1.19 timings are "not quiet".** No other harness, test binary, attach, Unreal or Frozen Hearts build ran during
+the timed steps (checked before the run). But Chrome was open (18-19 processes; 5.5 % total CPU over a 5 s sample
+before the run, 13 % before the second `gputime`). The fix round's timings were also "not quiet" (Chrome, ChatGPT and
+Codex open). Figures within ~15 % of each other across runs should not be read as a change.
 
-| Step | Old box (2080 SUPER) | Workhorse (7900 XT) |
-|---|---|---|
-| 1 Build | `build.bat` full build; 8 pre-existing red cells, none in array code | `sslm_verify`, shaders and the two harness binaries (`box_run.py`); `build.bat`'s suites not run |
-| 2 Base | `qwen2.5-0.5b-instruct-combined.sslm`, TOKENIZER, no SchemaMasks | the same file, byte-identical (rebuilt, see Artifacts) |
-| 3 Attach | verified, byte-reproducible, counts equal to the cloud's | the same: identical attached SHA-256, counts and fingerprint |
-| Verifier check | not run (the verifier at `d7ebeaee` was re-checked by hand) | 5/5 (`verify_schema_masks_check.py`) |
-| Precheck | not run | 31/31 |
-| 4a Map | CPU +226 ms; schema VRAM 59,637,760 B | CPU +191 ms; GPU +160 ms; schema VRAM 59,768,832 B |
-| 4b Walks | 3/3 CPU, 3/3 GPU | 3/3 CPU, 3/3 GPU, accepting only at the last token |
-| 4c Rejections | 3/3 CPU, 3/3 GPU | 4/4 CPU, 4/4 GPU (adds the trailing comma inside `conditions`) |
-| 4d Generation | 10/10 valid; CPU = GPU 10/10 | 10/10 valid; CPU = GPU 10/10; a second run identical 50/50 streams |
-| 4e Save/restore, generated | 54/54 CPU, 54/54 GPU | 54/54 CPU, 54/54 GPU, now checking accepting (and GPU walk state) per token |
-| 4e Save/restore, teacher-forced | not run | 21/21 CPU, 21/21 GPU, plus 3/3 walk traces each |
-| 4f Engine features | exact = plain 10/10; full finish = plain 10/10; canonical valid 10/10, different 10/10 | the same |
-| 5 Mutants | 2/2 killed (accept_shift by (b) and (d), offset_swap at map) | 2/2 plus restore-at-state-zero, each killed by its expected detection on CPU and GPU |
-| GPU busy vs wall | not measured | measured: see **Decode speed** |
+| Step | Old box (2080 SUPER) | Workhorse fix round (`897b9bb4`) | Workhorse 1.19 (`0dfb6aea`) |
+|---|---|---|---|
+| 1 Build | `build.bat` full build; 8 pre-existing red cells, none in array code | `sslm_verify`, shaders and the two harness binaries (`box_run.py`); `build.bat`'s suites not run | the same, plus the full `build.bat` (see **Build**) |
+| 2 Base | `qwen2.5-0.5b-instruct-combined.sslm`, TOKENIZER, no SchemaMasks | the same file, byte-identical (rebuilt, see Artifacts) | the same file |
+| 3 Attach | verified, byte-reproducible, counts equal to the cloud's | the same: identical attached SHA-256, counts and fingerprint | the same SHA-256 again, attach and re-attach |
+| Verifier check | not run (the verifier at `d7ebeaee` was re-checked by hand) | 5/5 (`verify_schema_masks_check.py`) | 5/5 |
+| Precheck | not run | 31/31 | 31/31 |
+| 4a Map | CPU +226 ms; schema VRAM 59,637,760 B | CPU +191 ms; GPU +160 ms; schema VRAM 59,768,832 B | CPU +252 ms; GPU +271 ms; schema VRAM 59,768,832 B |
+| 4b Walks | 3/3 CPU, 3/3 GPU | 3/3 CPU, 3/3 GPU, accepting only at the last token | 6/6 CPU, 6/6 GPU (the 3 walks, and their 3 fix-round re-tokenizations) |
+| 4c Rejections | 3/3 CPU, 3/3 GPU | 4/4 CPU, 4/4 GPU (adds the trailing comma inside `conditions`) | 4/4 CPU, 4/4 GPU |
+| 4d Generation | 10/10 valid; CPU = GPU 10/10 | 10/10 valid; CPU = GPU 10/10; a second run identical 50/50 streams | 10/10 valid; CPU = GPU 10/10; a second run identical 40/40 streams; all 40 equal the fix round's |
+| 4d GPU arms (new in 1.19) | not run | not run | GPU Exact = plain GPU 10/10; GPU multi-row = plain GPU 10/10; both engaged (167 draft calls, 452 drafts; multi-row widest chunk 6) |
+| 4e Save/restore, generated | 54/54 CPU, 54/54 GPU | 54/54 CPU, 54/54 GPU, now checking accepting (and GPU walk state) per token | 54/54 CPU, 54/54 GPU, plus 10/10 trace lines each |
+| 4e Save/restore, teacher-forced | not run | 21/21 CPU, 21/21 GPU, plus 3/3 walk traces each | 21/21 CPU, 21/21 GPU, plus 3/3 walk traces each |
+| 4f Engine features | exact = plain 10/10; full finish = plain 10/10; canonical valid 10/10, different 10/10 | the same | exact = plain 10/10; full finish = plain 10/10; the canonical arm dropped (since 1.18.0 canonical runs Exact) |
+| 5 Mutants | 2/2 killed (accept_shift by (b) and (d), offset_swap at map) | 2/2 plus restore-at-state-zero, each killed by its expected detection on CPU and GPU | the same: 2/2 plus state zero (13/13 and 7/7 kills per backend) |
+| GPU busy vs wall | not measured | measured: see **Decode speed** | measured twice: see **Decode speed** |
 
 ## Build
 
-**Workhorse** (`box_run.py`, MSVC 14.34 from VS 2022 through `VsDevCmd.bat`, Python 3.13.17):
+**Workhorse, 1.19** (`box_run.py`, MSVC from VS 2022 through `VsDevCmd.bat`, Python 3.13.17, dxc 10.0.26100.0):
+- The same four `box_run.py` build steps as the fix round, all ok.
+- `tests\array-s2\build_harness.bat` failed to compile at first: `std::min` in `array_s2_gpu.cpp` collided with the
+  `min` macro the d3d12 headers pull in (C2589). `(std::min)` fixes it (`0dfb6aea`); no other change.
+- The full `build.bat` ran too, from a machine-local copy that swaps the pinned dxc 10.0.19041.0 (absent) for
+  10.0.26100.0 and logs a failing gate and continues, so one run reports every suite. The fixtures
+  (`gen_schema_fast_decode_fixture.py` and the rest) were generated, so the clean-stop GPU cells ran rather than
+  skipped. Results: clean-stop GPU cells G1-G10 all pass (3,810 checks); `superslm_tests.exe` 328,537 checks, 0
+  failures (the old box's three `sfd_cells_x.inc` failures are gone); X2 EQUAL on verbs, exports and imports (80);
+  both build-recipe checks 0 unaccounted; the FP-free scan pytest 237 passed, 5 skipped; `dim7_capacity_red.cpp`
+  12,484 checks with the same 5 failures as the old box. Two gates failed, both for pre-existing reasons: Phase D (1
+  skip: no runtime adapter for the S8 fixture) and the dimension suites (dim7's 5 failures, plus adapter skips).
+
+**Workhorse, fix round** (`box_run.py`, MSVC 14.34 from VS 2022 through `VsDevCmd.bat`, Python 3.13.17):
 - `tools\build_verify.bat` builds `out\sslm_verify.exe` (11 s).
 - The shaders: `dxc -T cs_6_2 -E main -O3 -HV 2018 -WX` on every `src\gpu\shaders\*.hlsl`, into `out\shaders`. This
   box has dxc 10.0.26100.0, not the 10.0.19041.0 that `build.bat` pins. The GPU token streams are identical to the
@@ -76,7 +96,8 @@ verb-count check reads 55 instead of 51 (Finding 3).
   - The result is byte-identical to the old box's base (the SHA-256 above).
 - **Python.** The tools need Python 3.13: `unicode_tables.py` requires unicodedata 15.1.0, and Python 3.12 has
   15.0.0. The workhorse run used Python 3.13.17 with `tokenizers` 0.23.3, `jsonschema` 4.26.0, `psutil` 7.2.2 and
-  `numpy` (the old box used `tokenizers` 0.22.2 and `jsonschema` 4.22). `fixtures.py build` wrote the 16 prompt,
+  `numpy` (the old box used `tokenizers` 0.22.2 and `jsonschema` 4.22). The 1.19 run used the same versions, plus
+  `capstone` 5.0.9 for `build.bat`'s FP-free scan. `fixtures.py build` wrote the 16 prompt,
   walk and reject records the old box wrote, plus the fix round's 28 teacher-forced records.
 - **The attached artifact** has integrity fingerprint `b75950bb9713fe9544b0b6565a7849e50fee43272eea3fc07882ad7ef40ddc55`
   and a 59,614,386 B SCM1 section on both boxes. A re-attach on workhorse wrote the same SHA-256
@@ -86,15 +107,16 @@ verb-count check reads 55 instead of 51 (Finding 3).
 
 **Attach** (`measure.py`, sampled every 50 ms):
 
-| | Old box | Workhorse |
-|---|---:|---:|
-| Wall, both schemas | 28.91 s, 28.72 s (30.43 s while the build ran) | 23.27 s, 23.79 s |
-| Converter peak working set | 2,146,209,792 B | 2,148,151,296 B |
-| Verifier child peak | 1,749,508,096 B | 1,750,355,968 B |
-| `intents` alone: wall, converter peak | 23.04 s, 2,003,795,968 B *(not in raw output)* | 18.80 s, 2,005,708,800 B |
+| | Old box | Workhorse fix round | Workhorse 1.19 |
+|---|---:|---:|---:|
+| Wall, both schemas | 28.91 s, 28.72 s (30.43 s while the build ran) | 23.27 s, 23.79 s | 30.84 s, 31.44 s |
+| Converter peak working set | 2,146,209,792 B | 2,148,151,296 B | 2,148,003,840 B |
+| Verifier child peak | 1,749,508,096 B | 1,750,355,968 B | 1,750,384,640 B |
+| `intents` alone: wall, converter peak | 23.04 s, 2,003,795,968 B *(not in raw output)* | 18.80 s, 2,005,708,800 B | 23.53 s, 2,005,905,408 B |
 
-Workhorse figures: [box/attach.measure.log](results/box/attach.measure.log), `reattach.measure.log` and
-`attach_intents_only.measure.log`.
+Workhorse 1.19 figures: [box/attach.measure.log](results/box/attach.measure.log), `reattach.measure.log` and
+`attach_intents_only.measure.log`. The 1.19 attach ran while Chrome was open; the ~30 % longer wall
+is not attributed to the engine.
 
 | Schema | DFA states | NFA states | Token transitions | Section bytes | Tracked temporary bytes | Recursion depth |
 |---|---:|---:|---:|---:|---:|---:|
@@ -104,28 +126,36 @@ Workhorse figures: [box/attach.measure.log](results/box/attach.measure.log), `re
 The counts are identical on both boxes and equal the cloud measurement. `minItems`: `/properties/intents` 1,
 `/properties/intents/items/properties/conditions` 0.
 
-**Map** (three runs each; [map.txt](results/map.txt) is workhorse's):
+**Map** (three runs each; [map.txt](results/map.txt) is workhorse 1.19's):
 
-| | Old box base | Old box schema | Workhorse base | Workhorse schema |
-|---|---:|---:|---:|---:|
-| CPU `sslm_model_map`, mean ms | 378.3 | 604.1 (+226) | 325.9 | 516.8 (+191) |
-| GPU `sslm_gpu_model_map`, mean ms | 707.0 | 981.5 (+275) | 520.8 | 680.7 (+160) |
-| GPU local-segment usage, after map minus before | 378,798,080 B | 438,435,840 B | 379,060,224 B | 438,829,056 B |
+| | Old box base | Old box schema | Fix round base | Fix round schema | 1.19 base | 1.19 schema |
+|---|---:|---:|---:|---:|---:|---:|
+| CPU `sslm_model_map`, mean ms | 378.3 | 604.1 (+226) | 325.9 | 516.8 (+191) | 368.2 | 620.5 (+252) |
+| GPU `sslm_gpu_model_map`, mean ms | 707.0 | 981.5 (+275) | 520.8 | 680.7 (+160) | 637.0 | 907.6 (+271) |
+| GPU local-segment usage, after map minus before | 378,798,080 B | 438,435,840 B | 379,060,224 B | 438,829,056 B | 379,060,224 B | 438,829,056 B |
 
-The schema's VRAM residency is 59,637,760 B on the old box (910 × 64 KiB) and 59,768,832 B on workhorse (912 × 64 KiB),
-for the 59,614,386 B SCM1 section. The GPU model also keeps a host copy of the section.
+The schema's VRAM residency is 59,637,760 B on the old box (910 × 64 KiB) and 59,768,832 B on workhorse (912 × 64 KiB,
+the same on 1.19), for the 59,614,386 B SCM1 section. The GPU model also keeps a host copy of the section.
 
-**Decode speed** (greedy, the 10 prompts, 767 tokens; workhorse's: [box/gen_*.log](results/box/), [gputime.txt](results/gputime.txt)):
+**Decode speed** (greedy, the 10 prompts, 767 tokens; workhorse 1.19's: [box/gen_*.log](results/box/),
+[gen_gpu_arms.txt](results/gen_gpu_arms.txt), [gputime.txt](results/gputime.txt); 1.19 run 2 is `gen_run2.txt`,
+and for the GPU arms and `gputime` a second `box_run.py --redo gputime` pass):
 
-| | Old box ms/token | Workhorse ms/token |
-|---|---:|---:|
-| CPU plain (`layer_budget` 24, one slice per token) | 38.2 | 31.8 (run 2: 32.4) |
-| CPU canonical jump-forward (291 tokens) | 33.5 | 28.1 |
-| CPU exact jump-forward | 37.6 | 33.8 |
-| CPU full finish (`array_s2_seam.exe`) | not recorded | 44.5 |
-| GPU, G5 bridge, 24 slices per token (the default `ARRAY_S2_GPU_LAYERS_PER_SLICE=1`) | 146.5–148.7 | 210.1 (run 2: 212.1) |
-| GPU, 1 slice per token, head on host | 27.1 | 29.2 |
-| GPU, 1 slice per token, head on device | not measured | 18.0 |
+| | Old box ms/token | Fix round ms/token | 1.19 ms/token (tok/s) |
+|---|---:|---:|---:|
+| CPU plain (`layer_budget` 24, one slice per token) | 38.2 | 31.8 (run 2: 32.4) | 44.4 (22.5); run 2: 50.0 |
+| CPU canonical jump-forward (291 tokens) | 33.5 | 28.1 | dropped (canonical runs Exact since 1.18.0) |
+| CPU exact jump-forward | 37.6 | 33.8 | 48.7 (20.5); run 2: 48.2 |
+| CPU full finish (`array_s2_seam.exe`) | not recorded | 44.5 | 55.2 (18.1); run 2: 58.3 |
+| GPU, G5 bridge, 24 slices per token (the default `ARRAY_S2_GPU_LAYERS_PER_SLICE=1`) | 146.5–148.7 | 210.1 (run 2: 212.1) | 232.0 (4.3); run 2: 224.7 |
+| GPU Exact jump-forward, default slices (new) | not run | not run | 39.7 (25.2); run 2: 40.8 |
+| GPU multi-row, `SSLM_GPU_ROWS_EXACT_DRAFT` chunks, head on device (new) | not run | not run | 39.9 (25.0); run 2: 41.5 |
+| GPU, 1 slice per token, head on host | 27.1 | 29.2 | 29.0 (34.5); run 2: 28.6 |
+| GPU, 1 slice per token, head on device | not measured | 18.0 | 28.5 (35.1); run 2: 26.8 (Finding 6) |
+
+The 1.19 CPU figures are 15-50 % above the fix round's, with Chrome open. Not quiet, so they are not read as an
+engine change. The GPU Exact and multi-row arms both keep 452 drafts over 167 draft calls; they are ~5.8× faster than
+plain GPU decode at the default slice setting, because a draft call commits several forced tokens per round trip.
 
 The old box's slice sweep ([slices.txt](results/slices.txt), old box only; tokens identical at every setting):
 24 slices 148.7, 12 slices 84.7, 4 slices 39.6, 1 slice 27.1 ms/token. Each extra slice cost about 5.3 ms there. On
@@ -138,10 +168,21 @@ plain GPU run for 10/10 prompts in both modes). `gpu_busy_ms` is the engine's ow
 after step 0 (step 0 runs no layer loop). The token finish (host logits, or the device-head submission) has no GPU
 timestamps, so it is inside wall time and the gap only.
 
-| Head | Wall ms/token | GPU busy ms/token | Wall − busy | tok/s |
-|---|---:|---:|---:|---:|
-| on host (default residency) | 29.07 | 12.72 | 16.35 | 34.3 |
-| on device (`SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`) | 18.01 | 9.84 | 8.18 | 55.5 |
+| Run | Head | Wall ms/token | GPU busy ms/token | Wall − busy | tok/s |
+|---|---|---:|---:|---:|---:|
+| 1.19, run 1 | on host (default residency) | 28.96 | 13.53 | 15.43 | 34.5 |
+| 1.19, run 1 | on device (`SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`) | 28.51 | 13.49 | 15.02 | 35.1 |
+| 1.19, run 2 | on host | 28.55 | 12.64 | 15.91 | 35.0 |
+| 1.19, run 2 | on device | 26.84 | 12.51 | 14.33 | 37.3 |
+| fix round | on host | 29.07 | 12.72 | 16.35 | 34.3 |
+| fix round | on device | 18.01 | 9.84 | 8.18 | 55.5 |
+
+On 1.19 every prompt's tokens equal plain GPU decode in both modes, in both runs. Run 1's file is
+`D:\_scratch\rel-1p19\gputime.run1.txt` on workhorse; `gputime.txt` is run 2. The 1.19 per-step traces show a
+pattern the fix round's host trace did not: a base of 21-27 ms with bursts of 36-49 ms wall (15-19 ms busy) every
+5-15 tokens, in both modes.
+
+The bullets below are the fix round's reading, kept as written; on 1.19 the device-head gain is gone (Finding 6).
 
 - Per prompt the spread is small: on host, wall 28.6–29.4 and busy 12.5–13.0 ms; on device, wall 17.8–18.4 and
   busy 9.6–10.3 ms.
@@ -196,7 +237,15 @@ is why they are a few tokens longer.
 | trailing comma after the last condition | 54 (`],"`) | not run | 54 / 54 |
 
 **(d) Constrained greedy generation** ([gen.txt](results/gen.txt), [gen_check.json](results/gen_check.json)):
-- On workhorse, all 20 runs (10 CPU, 10 GPU) ended at the schema's dead end in an accepting state. Every document
+- **1.19:** all 40 runs (CPU, GPU, CPU Exact, CPU full finish; 10 prompts each) ended at the schema's dead end in an
+  accepting state, every document valid (`gen_check`: 0 failures). CPU = GPU on 10/10, 767 tokens. The second run
+  (`gen_run2.txt`) is identical, 40/40, and all 40 streams equal the fix round's.
+- **1.19 GPU arms** ([gen_gpu_arms.txt](results/gen_gpu_arms.txt),
+  [gen_check_gpu_arms.json](results/gen_check_gpu_arms.json)): GPU Exact jump-forward (`sslm_gpu_seq_jump_forward`)
+  and GPU multi-row (prompt in `SSLM_GPU_ROWS_PROMPT` chunks, decode in `SSLM_GPU_ROWS_EXACT_DRAFT` chunks, head on
+  device) each give the plain GPU document on 10/10 prompts, all valid, all ending accepting. Both arms engaged: 167
+  draft calls, 452 drafts kept; the widest multi-row chunk was 6 rows. A second pass gave the same result.
+- Fix round: on workhorse, all 20 runs (10 CPU, 10 GPU) ended at the schema's dead end in an accepting state. Every document
   parsed and validated against IntentDoc v2 (`gen_check`: 0 failures).
 - The CPU and GPU token streams are identical for all 10 prompts, 767 tokens in total.
 - A second run of every variant (`gen_run2.txt`) is identical: 50/50 streams.
@@ -236,12 +285,13 @@ is why they are a few tokens longer.
   The accepting flag (and GPU walk state) must match at the save, after restore, and on every later token. Result:
   21/21 on CPU and 21/21 on GPU, plus 3/3 walk traces on each.
 
-**(f) Engine features on an array schema** (CPU; the GPU has no jump-forward verb):
-- **Exact jump-forward** (`SSLM_JUMP_EXACT`): identical to plain decode on 10/10, on both boxes.
+**(f) Engine features on an array schema** (CPU; through the fix round the GPU had no jump-forward verb, and on 1.19
+the GPU Exact arm is under (d)):
+- **Exact jump-forward** (`SSLM_JUMP_EXACT`): identical to plain decode on 10/10, on both boxes and on 1.19.
 - **Masked finish against full finish.** `array_s2_seam.exe` sets the exactness hidden bound to 0 before map, which
-  clears `legal_row_finish`. Its streams are identical to plain decode's on 10/10, on both boxes. The GPU (full
-  finish, host mask) is a third witness, also 10/10.
-- **Canonical jump-forward** (information only, [gen_check_canon.json](results/gen_check_canon.json)): 10/10
+  clears `legal_row_finish`. Its streams are identical to plain decode's on 10/10, on both boxes and on 1.19. The GPU
+  (full finish, host mask) is a third witness, also 10/10.
+- **Canonical jump-forward** (old box and fix round only; dropped on 1.19, where canonical runs Exact; information only, [gen_check_canon.json](results/gen_check_canon.json)): 10/10
   documents are valid, but 10/10 differ from plain decode at token 3, on both boxes. Plain emits `":[` (8899), or
   `":` (788) on ex041 and ex042; canonical admits `":[{"` (66582). Canonical produces 28–30 tokens per prompt. See
   Finding 2.
@@ -309,6 +359,18 @@ artifact (walks and rejections 10/10, `tfrestore` 21/21, `--state-zero` fails 21
      2080 SUPER).
 5. **The workhorse toolchain differs from `build.bat`'s pins** (workhorse). The run used dxc 10.0.26100.0 rather than
    10.0.19041.0, and Python 3.13 is required. The outputs are unaffected: the token streams equal the old box's.
+6. **On 1.19 the device-resident head no longer speeds up GPU decode** (workhorse, 1.19; reproduced in a second run).
+   - At one slice per token, head on device: 28.5 and 26.8 ms/token on 1.19, against 18.0 on the fix round's
+     `897b9bb4`. Head on host is unchanged (29.0 and 28.6, against 29.1).
+   - The GPU busy window with the head on device rose from 9.84 to 12.5-13.5 ms, now the same as on host, and the
+     wall-minus-busy gap rose from 8.2 to 14.3-15.0 ms.
+   - Both 1.19 traces show periodic 36-49 ms steps that the fix round's host trace did not have.
+   - Tokens are unaffected (equal to plain GPU in both modes). The harness sets `SSLM_GPU_RESIDENCY_HEAD_ON_DEVICE`
+     exactly as before (`array_s2_gpu.cpp`), and 35 commits under `src/gpu` landed between the two runs. Not
+     investigated: this run makes no `src/` change. The box was not quiet (Chrome open), but the host mode reproduced
+     the fix round's figure, so load is an unlikely cause.
+7. **Finding 3 is closed on 1.19.** `build.bat`'s X2 step reads 55 C verbs against `c_abi_verbs.txt`'s 55 (EQUAL), and
+   80 exports and imports against 80 listed.
 
 ## Not done, or done differently from the brief
 
@@ -316,9 +378,12 @@ artifact (walks and rejections 10/10, `tfrestore` 21/21, `--state-zero` fails 21
   detached at `e9d73750`) because its write hook refused other paths. Workhorse used `D:\SuperSLM\.worktrees\array-s2`.
 - **Workhorse base and checkpoint.** `D:\_artifacts\SuperSLM\aex` had no tokenizer folder and no qualifying base. Both
   were brought over and rebuilt as described under Artifacts.
-- **`build.bat` suites** were not run on workhorse.
-- **GPU coverage of (f).** Jump-forward and the masked finish are CPU verbs. On GPU, (f) is covered only as the
-  full-finish witness in (d).
+- **`build.bat` suites** were not run on workhorse in the fix round. On 1.19 they ran from a machine-local copy
+  (dxc 10.0.26100.0, failing gates logged rather than fatal), never committed; see **Build**.
+- **1.19 timings** are "not quiet" (Chrome open); the CPU figures are not compared across runs.
+- **GPU coverage of (f).** Through the fix round, jump-forward and the masked finish were CPU verbs, and on GPU (f)
+  was covered only as the full-finish witness in (d). On 1.19, GPU Exact jump-forward and GPU multi-row are covered
+  under (d); the masked finish is still CPU only.
 - **CI for the verifier pytest: known gap.** No workflow runs `tests/t3094-multicommand-s0/converter-v2/`. The box
   run's `verify_check` step is its only automated runner.
 

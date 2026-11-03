@@ -1,0 +1,1 @@
+{"step": "gen_gpu_multirow", "exit": 0, "expected": [0], "wall_s": 50.6, "at": "2026-11-03T11:48:19", "head": "0dfb6aea0f3f8522aa43ccc743f83e6b13070ca4", "exe": "cd531fce042c9b6d6aeec79ea04830781f571894508d49d4567e923c348d9b24", "seam": "3ce5dbe92b65feeb1ec074e49857deacb834e1851957f8c4eefc514268db1aa7"}

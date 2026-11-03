@@ -1,4 +1,4 @@
-compiled IntentDoc v2 in 5.9 s: 635 states, 3074805 transitions
+compiled IntentDoc v2 in 8.1 s: 635 states, 3074805 transitions
 PASS walk one_intent_0_conditions tokens=29 admitted=29 accepting_before_end=0
 PASS walk one_intent_1_condition tokens=62 admitted=62 accepting_before_end=0
 PASS walk three_intents_0_2_1_conditions tokens=175 admitted=175 accepting_before_end=0

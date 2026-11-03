@@ -1,4 +1,4 @@
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt cpu ex041 three_intents_0_2_1_conditions --state-zero
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt cpu ex041 three_intents_0_2_1_conditions --state-zero
 PASS cpu tf three_intents_0_2_1_conditions walk tokens=184
 FAIL cpu tf three_intents_0_2_1_conditions:open_intents after=3 blob=201327648 continuation=64 end=max_tokens forced=1 mutated=1 check=tokens at=5 want=1311 got=56431
 FAIL cpu tf three_intents_0_2_1_conditions:open_conditions after=21 blob=201327648 continuation=64 end=max_tokens forced=0 mutated=1 check=tokens at=22 want=28503 got=4913

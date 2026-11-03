@@ -24,11 +24,16 @@ release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB
   refuses, with no file written: a base that is not intact, already has an SCM1 section, or has no TOKENIZER section;
   a checkpoint whose tokenizer differs from the base's; a bad schema name; and anything the compiler refuses.
   `--limits-json` replaces named limits.
-- **Array proof on a real artifact: pending the 1.19 box rerun.** `tests/array-s2/RESULTS.md` holds the run on the
-  0.5B model taken on the engine at `897b9bb4` (1.16.0-based), before the 1.18 merge. The 1.19 rerun
-  (`tests/array-s2/box_run.py`) runs every step again on the merged engine, adds a GPU Exact jump-forward arm and a
-  GPU multi-row arm (prompt and `SSLM_GPU_ROWS_EXACT_DRAFT` chunks), each required to give documents identical to
-  plain GPU decode on the 10 prompts, and drops the canonical arm, which since 1.18.0 runs Exact.
+- **Array proof on a real artifact, rerun on the 1.19 engine.** `tests/array-s2/box_run.py` passed all 81 steps on
+  workhorse (RX 7900 XT, 2026-11-03) on the merged engine, with the 0.5B model and IntentDoc v2
+  (`tests/array-s2/RESULTS.md`). Walks 6/6 and rejections 4/4 on CPU and GPU; generation 10/10 valid, CPU = GPU on
+  10/10 prompts (767 tokens), and all 40 streams equal to the 1.16-based run's; save/restore 54/54 generated and 21/21
+  teacher-forced points on each backend; both SCM1 mutants and the state-zero mutant killed. The new GPU Exact
+  jump-forward arm and GPU multi-row arm (prompt and `SSLM_GPU_ROWS_EXACT_DRAFT` chunks) each give the plain GPU
+  document on 10/10 prompts, with 452 drafts kept over 167 draft calls, at ~40 ms/token against plain GPU's 232 at the
+  default slice setting. The canonical arm is dropped, since 1.18.0 runs it as Exact. Known issue from the same run:
+  the device-resident head no longer speeds up one-slice GPU decode (26.8-28.5 ms/token, against 18.0 on 1.16), and
+  tokens are unaffected (RESULTS.md, Finding 6).
 - **The clean stop at the schema's end** (closes 1.18.0's known issue). A `-2` at `SSLM_OK` now has a stated meaning
   that callers read, not infer. Read the accepting bit right after it: on the CPU `sslm_stats().schema_accepting`
   or `sslm_seq_forced_tokens`' `out_accepting`; on the GPU `SslmGpuSeqSchemaAcceptingForG5Bridge` or

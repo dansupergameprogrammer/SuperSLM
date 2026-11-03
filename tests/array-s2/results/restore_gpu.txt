@@ -1,4 +1,4 @@
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex005
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex005
 PASS gpu ex005 trace tokens=110
 PASS gpu ex005 kind=x:open_intents after=3 blob=201327620 continuation=106 end=dead_end mutated=0
 PASS gpu ex005 kind=c:open_conditions+x:close_conditions after=23 blob=201327620 continuation=86 end=dead_end mutated=0
@@ -10,19 +10,19 @@ PASS gpu ex005 kind=b:comma_intents after=82 blob=201327620 continuation=27 end=
 PASS gpu ex005 kind=c:open_conditions+x:close_conditions after=101 blob=201327620 continuation=8 end=dead_end mutated=0
 PASS gpu ex005 kind=x:close_intents after=108 blob=201327620 continuation=1 end=dead_end mutated=0
 # exit 0
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex006
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex006
 PASS gpu ex006 trace tokens=32
 PASS gpu ex006 kind=x:open_intents after=3 blob=201327620 continuation=28 end=dead_end mutated=0
 PASS gpu ex006 kind=c:open_conditions+x:close_conditions after=23 blob=201327620 continuation=8 end=dead_end mutated=0
 PASS gpu ex006 kind=x:close_intents after=30 blob=201327620 continuation=1 end=dead_end mutated=0
 # exit 0
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex033
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex033
 PASS gpu ex033 trace tokens=32
 PASS gpu ex033 kind=x:open_intents after=3 blob=201327620 continuation=28 end=dead_end mutated=0
 PASS gpu ex033 kind=c:open_conditions+x:close_conditions after=23 blob=201327620 continuation=8 end=dead_end mutated=0
 PASS gpu ex033 kind=x:close_intents after=30 blob=201327620 continuation=1 end=dead_end mutated=0
 # exit 0
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex034
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex034
 PASS gpu ex034 trace tokens=58
 PASS gpu ex034 kind=x:open_intents after=3 blob=201327620 continuation=54 end=dead_end mutated=0
 PASS gpu ex034 kind=c:open_conditions+x:close_conditions after=23 blob=201327620 continuation=34 end=dead_end mutated=0
@@ -30,14 +30,14 @@ PASS gpu ex034 kind=b:comma_intents after=30 blob=201327620 continuation=27 end=
 PASS gpu ex034 kind=c:open_conditions+x:close_conditions after=49 blob=201327620 continuation=8 end=dead_end mutated=0
 PASS gpu ex034 kind=x:close_intents after=56 blob=201327620 continuation=1 end=dead_end mutated=0
 # exit 0
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex035
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex035
 PASS gpu ex035 trace tokens=65
 PASS gpu ex035 kind=x:open_intents after=3 blob=201327620 continuation=61 end=dead_end mutated=0
 PASS gpu ex035 kind=b:open_conditions after=21 blob=201327620 continuation=43 end=dead_end mutated=0
 PASS gpu ex035 kind=b:close_conditions after=57 blob=201327620 continuation=7 end=dead_end mutated=0
 PASS gpu ex035 kind=x:close_intents after=63 blob=201327620 continuation=1 end=dead_end mutated=0
 # exit 0
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex041
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex041
 PASS gpu ex041 trace tokens=183
 PASS gpu ex041 kind=x:open_intents after=4 blob=201327620 continuation=178 end=dead_end mutated=0
 PASS gpu ex041 kind=x:open_conditions after=22 blob=201327620 continuation=160 end=dead_end mutated=0
@@ -47,7 +47,7 @@ PASS gpu ex041 kind=b:comma_conditions after=136 blob=201327620 continuation=46 
 PASS gpu ex041 kind=b:close_conditions after=175 blob=201327620 continuation=7 end=dead_end mutated=0
 PASS gpu ex041 kind=b:close_intents after=182 blob=201327620 continuation=0 end=dead_end mutated=0
 # exit 0
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex042
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex042
 PASS gpu ex042 trace tokens=59
 PASS gpu ex042 kind=x:open_intents after=4 blob=201327620 continuation=54 end=dead_end mutated=0
 PASS gpu ex042 kind=c:open_conditions+x:close_conditions after=24 blob=201327620 continuation=34 end=dead_end mutated=0
@@ -55,7 +55,7 @@ PASS gpu ex042 kind=b:comma_intents after=31 blob=201327620 continuation=27 end=
 PASS gpu ex042 kind=c:open_conditions+x:close_conditions after=50 blob=201327620 continuation=8 end=dead_end mutated=0
 PASS gpu ex042 kind=x:close_intents after=57 blob=201327620 continuation=1 end=dead_end mutated=0
 # exit 0
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex051
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex051
 PASS gpu ex051 trace tokens=59
 PASS gpu ex051 kind=x:open_intents after=3 blob=201327620 continuation=55 end=dead_end mutated=0
 PASS gpu ex051 kind=c:open_conditions+x:close_conditions after=23 blob=201327620 continuation=35 end=dead_end mutated=0
@@ -63,7 +63,7 @@ PASS gpu ex051 kind=x:comma_intents after=30 blob=201327620 continuation=28 end=
 PASS gpu ex051 kind=c:open_conditions+x:close_conditions after=50 blob=201327620 continuation=8 end=dead_end mutated=0
 PASS gpu ex051 kind=x:close_intents after=57 blob=201327620 continuation=1 end=dead_end mutated=0
 # exit 0
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex052
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex052
 PASS gpu ex052 trace tokens=102
 PASS gpu ex052 kind=x:open_intents after=3 blob=201327620 continuation=98 end=dead_end mutated=0
 PASS gpu ex052 kind=c:open_conditions+x:close_conditions after=21 blob=201327620 continuation=80 end=dead_end mutated=0
@@ -75,7 +75,7 @@ PASS gpu ex052 kind=b:comma_intents after=76 blob=201327620 continuation=25 end=
 PASS gpu ex052 kind=c:open_conditions+x:close_conditions after=93 blob=201327620 continuation=8 end=dead_end mutated=0
 PASS gpu ex052 kind=x:close_intents after=100 blob=201327620 continuation=1 end=dead_end mutated=0
 # exit 0
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt gpu ex053
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt gpu ex053
 PASS gpu ex053 trace tokens=67
 PASS gpu ex053 kind=x:open_intents after=3 blob=201327620 continuation=63 end=dead_end mutated=0
 PASS gpu ex053 kind=b:open_conditions after=23 blob=201327620 continuation=43 end=dead_end mutated=0

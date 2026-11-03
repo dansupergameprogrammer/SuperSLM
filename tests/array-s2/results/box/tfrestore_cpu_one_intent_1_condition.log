@@ -1,4 +1,4 @@
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt cpu ex041 one_intent_1_condition
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe tfrestore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt cpu ex041 one_intent_1_condition
 PASS cpu tf one_intent_1_condition walk tokens=65
 PASS cpu tf one_intent_1_condition:open_intents after=3 blob=201327648 continuation=64 end=max_tokens forced=61 mutated=0
 PASS cpu tf one_intent_1_condition:open_conditions after=21 blob=201327648 continuation=60 end=dead_end forced=43 mutated=0

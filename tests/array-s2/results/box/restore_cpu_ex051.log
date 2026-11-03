@@ -1,4 +1,4 @@
-# D:\SuperSLM\.worktrees\array-s2\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\array-s2\tests\array-s2\results\saveplan.txt cpu ex051
+# D:\SuperSLM\.worktrees\rel-1p19\out\array_s2.exe restore D:\_artifacts\SuperSLM\array-s2\qwen05-intentdoc-v2.sslm intents D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\fixtures.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen.txt D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\saveplan.txt cpu ex051
 PASS cpu ex051 trace tokens=59
 PASS cpu ex051 kind=x:open_intents after=3 blob=201327648 continuation=55 end=dead_end mutated=0
 PASS cpu ex051 kind=c:open_conditions+x:close_conditions after=23 blob=201327648 continuation=35 end=dead_end mutated=0

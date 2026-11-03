@@ -1,4 +1,4 @@
-# cmd /c D:\SuperSLM\.worktrees\array-s2\tools\build_verify.bat   (env {'VSDEVCMD': '"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\Tools\\VsDevCmd.bat"'})
+# cmd /c D:\SuperSLM\.worktrees\rel-1p19\tools\build_verify.bat   (env {'VSDEVCMD': '"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\Tools\\VsDevCmd.bat"'})
 'vswhere.exe' is not recognized as an internal or external command,
 operable program or batch file.
 artifact.cpp

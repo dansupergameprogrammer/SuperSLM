@@ -1,0 +1,222 @@
+{
+ "ex005": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 110,
+   "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 110,
+   "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 110,
+   "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"the bridge\",\"target\":\"the beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ },
+ "ex006": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 32,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the gate\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 32,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the gate\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 32,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the gate\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ },
+ "ex033": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 32,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"beacon\",\"target\":\"beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 32,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"beacon\",\"target\":\"beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 32,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"beacon\",\"target\":\"beacon\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ },
+ "ex034": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 58,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":true},{\"action\":\"fire\",\"subject\":\"the gate\",\"target\":\"the bridge\",\"conditions\":[],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 58,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":true},{\"action\":\"fire\",\"subject\":\"the gate\",\"target\":\"the bridge\",\"conditions\":[],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 58,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"the bridge\",\"target\":\"the gate\",\"conditions\":[],\"depends_on_previous\":true},{\"action\":\"fire\",\"subject\":\"the gate\",\"target\":\"the bridge\",\"conditions\":[],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ },
+ "ex035": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 65,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"alarmed\",\"target\":\"alarm\",\"conditions\":[{\"role\":\"during\",\"entity\":\"alarmed\",\"state\":\"alarm\",\"cmp\":\"at_most\",\"value\":\"none\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 65,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"alarmed\",\"target\":\"alarm\",\"conditions\":[{\"role\":\"during\",\"entity\":\"alarmed\",\"state\":\"alarm\",\"cmp\":\"at_most\",\"value\":\"none\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 65,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"alarmed\",\"target\":\"alarm\",\"conditions\":[{\"role\":\"during\",\"entity\":\"alarmed\",\"state\":\"alarm\",\"cmp\":\"at_most\",\"value\":\"none\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ },
+ "ex041": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 183,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"you\",\"target\":\"target\",\"conditions\":[{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"none\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"scan\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"fire\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"neither\",\"negated\":true,\"watch\":\"new\"}],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 183,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"you\",\"target\":\"target\",\"conditions\":[{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"none\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"scan\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"fire\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"neither\",\"negated\":true,\"watch\":\"new\"}],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 183,
+   "text": "{\"intents\":[{\"action\":\"scan\",\"subject\":\"you\",\"target\":\"target\",\"conditions\":[{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"none\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"target\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"scan\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"scan\",\"negated\":true,\"watch\":\"new\"},{\"role\":\"start\",\"entity\":\"fire\",\"state\":\"asked\",\"cmp\":\"none\",\"value\":\"neither\",\"negated\":true,\"watch\":\"new\"}],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ },
+ "ex042": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 59,
+   "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"puls\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"pulses\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 59,
+   "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"puls\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"pulses\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 59,
+   "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"puls\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"wait\",\"subject\":\"pulses\",\"target\":\"pulses\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ },
+ "ex051": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 59,
+   "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"north ridge\",\"target\":\"horn interval\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"horn interval\",\"target\":\"north ridge\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 59,
+   "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"north ridge\",\"target\":\"horn interval\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"horn interval\",\"target\":\"north ridge\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 59,
+   "text": "{\"intents\":[{\"action\":\"move\",\"subject\":\"north ridge\",\"target\":\"horn interval\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"horn interval\",\"target\":\"north ridge\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ },
+ "ex052": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 102,
+   "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"tower\",\"target\":\"fall\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"move\",\"subject\":\"tower\",\"target\":\"down\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"hold\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 102,
+   "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"tower\",\"target\":\"fall\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"move\",\"subject\":\"tower\",\"target\":\"down\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"hold\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 102,
+   "text": "{\"intents\":[{\"action\":\"hold\",\"subject\":\"tower\",\"target\":\"fall\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"fire\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"move\",\"subject\":\"tower\",\"target\":\"down\",\"conditions\":[],\"depends_on_previous\":false},{\"action\":\"hold\",\"subject\":\"player\",\"target\":\"tower\",\"conditions\":[],\"depends_on_previous\":false}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ },
+ "ex053": {
+  "gpu": {
+   "end": "dead_end",
+   "tokens": 67,
+   "text": "{\"intents\":[{\"action\":\"fire\",\"subject\":\"north ridge\",\"target\":\"north ridge\",\"conditions\":[{\"role\":\"start\",\"entity\":\"north ridge\",\"state\":\"north ridge\",\"cmp\":\"none\",\"value\":\"all\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "gpu_exact": {
+   "end": "dead_end",
+   "tokens": 67,
+   "text": "{\"intents\":[{\"action\":\"fire\",\"subject\":\"north ridge\",\"target\":\"north ridge\",\"conditions\":[{\"role\":\"start\",\"entity\":\"north ridge\",\"state\":\"north ridge\",\"cmp\":\"none\",\"value\":\"all\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "gpu_multirow": {
+   "end": "dead_end",
+   "tokens": 67,
+   "text": "{\"intents\":[{\"action\":\"fire\",\"subject\":\"north ridge\",\"target\":\"north ridge\",\"conditions\":[{\"role\":\"start\",\"entity\":\"north ridge\",\"state\":\"north ridge\",\"cmp\":\"none\",\"value\":\"all\",\"negated\":true,\"watch\":\"auto\"}],\"depends_on_previous\":true}]}",
+   "valid": true
+  },
+  "identical_gpu_vs_gpu_exact": true,
+  "identical_gpu_vs_gpu_multirow": true
+ }
+}

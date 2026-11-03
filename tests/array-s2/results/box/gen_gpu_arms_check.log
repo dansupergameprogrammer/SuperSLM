@@ -1,0 +1,13 @@
+# C:\Users\dansu\AppData\Local\Programs\Python\Python313\python.exe D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\fixtures.py check --ckpt D:\_artifacts\SuperSLM\aex\qwen2.5-0.5b-instruct-7ae5576 --gen D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen_gpu_arms.txt --json D:\SuperSLM\.worktrees\rel-1p19\tests\array-s2\results\gen_check_gpu_arms.json
+ex005: valid gpu=110t/dead_end gpu_exact=110t/dead_end gpu_multirow=110t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+ex006: valid gpu=32t/dead_end gpu_exact=32t/dead_end gpu_multirow=32t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+ex033: valid gpu=32t/dead_end gpu_exact=32t/dead_end gpu_multirow=32t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+ex034: valid gpu=58t/dead_end gpu_exact=58t/dead_end gpu_multirow=58t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+ex035: valid gpu=65t/dead_end gpu_exact=65t/dead_end gpu_multirow=65t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+ex041: valid gpu=183t/dead_end gpu_exact=183t/dead_end gpu_multirow=183t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+ex042: valid gpu=59t/dead_end gpu_exact=59t/dead_end gpu_multirow=59t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+ex051: valid gpu=59t/dead_end gpu_exact=59t/dead_end gpu_multirow=59t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+ex052: valid gpu=102t/dead_end gpu_exact=102t/dead_end gpu_multirow=102t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+ex053: valid gpu=67t/dead_end gpu_exact=67t/dead_end gpu_multirow=67t/dead_end identical_gpu_vs_gpu_exact=True identical_gpu_vs_gpu_multirow=True
+failures: 0
+# exit 0

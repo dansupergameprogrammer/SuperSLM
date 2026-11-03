@@ -1,0 +1,3 @@
+gpu_exact: prompts=10/10 accepting_ends=10 draft_calls=167 drafts=452 widest=0 engaged=True
+gpu_multirow: prompts=10/10 accepting_ends=10 draft_calls=167 drafts=452 widest=6 engaged=True
+gpu_arms_engaged ok=True
