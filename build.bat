@@ -2305,6 +2305,36 @@ if not defined SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR (
 		echo python is absent -- the schema fast-decode fixture was not generated, the M1/J1 cells below will fail for the missing fixture
 	)
 )
+rem Engine 1.19, the clean stop at the schema's end: the GPU cells G1-G9 (tests\schema-fast-decode-gpu\
+rem sfdg_cleanstop.h, sfdg_cell_cs_g*.cpp; the CPU cells E1-E7 run inside superslm_tests.exe, below). Placed after
+rem the F-SFD provisioning above because the cells read that fixture. The compile-and-link gate always runs: the
+rem schema fast-decode GPU suite's own flags, sources and seam definitions (build_sfd_gpu.bat), every cell linked
+rem against the current engine; a cell that does not compile or link fails this build. The runtime step runs every
+rem cell when SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR is set (provisioned above by default), with the shaders this
+rem build compiled, and a failing cell fails this build. The cells need a hardware D3D12 device, as
+rem superslm_tests.exe's own GPU cells do.
+if exist out\sfdg-cs rmdir /s /q out\sfdg-cs
+mkdir out\sfdg-cs\engine out\sfdg-cs\cells out\sfdg-cs\shaders
+set SFDGCS_FLAGS=/nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Isrc /Isrc\gpu /Itests /Itests\paged-kv /Itests\paged-kv-gpu /Itests\t2791-gpu-prefill-read-red-suite /Itests\schema-fast-decode-gpu /DSUPERSLM_GPU_TEST_SEAMS /DSUPERSLM_GPU_ALLOC_FAULT_INJECTION /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_GPU_G5_FINISH_ROW_FAULT_INJECTION
+cl /c %SFDGCS_FLAGS% /Fo:out\sfdg-cs\engine\ src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\forward\parallel_split.cpp src\gpu\gpu_inflight_registry.cpp src\decode_digest.cpp src\kv_pages.cpp src\spx1_format.cpp src\sslm_abi.cpp src\damped_greedy_antilm.cpp src\damped_greedy_topk.cpp src\damped_greedy_phaseD.cpp src\damped_greedy_phaseD_loop.cpp src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp > out\sfdg-cs\engine.log 2>&1
+if errorlevel 1 (
+	type out\sfdg-cs\engine.log
+	echo clean-stop GPU cells: the seam engine build FAILED
+	goto :hard_fail
+)
+for %%f in (1 2 3 4 5 6 7 8 9) do (
+	cl %SFDGCS_FLAGS% tests\schema-fast-decode-gpu\sfdg_cell_cs_g%%f.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\cells\ /Fe:out\sfdg-cs\sfdg_cell_cs_g%%f.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\cell_g%%f.log 2>&1 || (type out\sfdg-cs\cell_g%%f.log & echo clean-stop GPU cell sfdg_cell_cs_g%%f did not compile or link & goto :hard_fail)
+)
+echo clean-stop GPU cells: G1-G9 compiled and linked against the current engine.
+if not defined SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR goto :sfdgcs_runtime_skipped
+xcopy /Y /Q out\shaders\*.cso out\sfdg-cs\shaders\ >nul
+for %%f in (1 2 3 4 5 6 7 8 9) do (
+	out\sfdg-cs\sfdg_cell_cs_g%%f.exe "--fixture-dir=%SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR%" || (echo clean-stop GPU cell sfdg_cell_cs_g%%f FAILED & goto :hard_fail)
+)
+goto :sfdgcs_runtime_done
+:sfdgcs_runtime_skipped
+echo clean-stop GPU cells SKIPPED at runtime: set SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR ^(python tools\gen_schema_fast_decode_fixture.py DIR^) to run them.
+:sfdgcs_runtime_done
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%

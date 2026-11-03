@@ -486,7 +486,10 @@ do {
   sequence is then byte-identical to one that decoded the same a tokens one
   at a time, the produced token walked (a dead end keeps the walk and sets
   the ready flag). `sslm_gpu_seq_rows_produced(seq, out_token)` reads the
-  produced token (-2 at a dead end), or returns the failed finish's status
+  produced token (-2 when the walk has no next token: a clean stop if
+  `SslmGpuSeqSchemaAcceptingForG5Bridge` then reads 1, a dead end if 0; a
+  draft that runs through the schema's last token closes as a clean stop),
+  or returns the failed finish's status
   with nothing written; `SSLM_BUSY` while a chunk is open, and
   `SSLM_SEQUENCE_REJECTED` when no Exact close has happened since the last
   `sslm_gpu_seq_embed_rows` or reset. It takes no claim. When the finish
@@ -842,7 +845,11 @@ silently accepted.
   call is still mid-token and safe to retry (call again with the same layer
   budget to continue); `-2` means that sequence's schema-bound walk has
   reached a state with no legal continuation at all — a per-sequence
-  outcome, not a call failure, and safe to retry (nothing about that
+  outcome, not a call failure. Read `sslm_stats().schema_accepting` (or
+  `sslm_seq_forced_tokens`' `out_accepting`) to tell which: 1 is a
+  **clean stop** — the document is complete, stop decoding, the output is
+  final; 0 is a **dead end**, an error (1.19.0; no ABI change). Either way
+  it is safe to retry (nothing about that
   sequence changes until the caller does something else with it — rebind a
   schema, reset, etc.); and `-3` means this index named a sequence that is
   **not currently live** (concurrently released by another thread) — unlike
@@ -1629,18 +1636,25 @@ the decode path's own contract — `sslm_decode_step_gpu` and
 `SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth step — unchanged
 by either prefill call.
 
-A schema-bound sequence that reaches its schema's own dead end (an
-accepting state whose mask page is legitimately all-zero, or a synthetic
-degenerate row where every admitted logit ties and the tie-break returns a
-token with no transition) returns `*out_token == -2` at `SSLM_OK` from
+A schema-bound sequence whose walk has no next token (an accepting state
+whose mask page is legitimately all-zero — the schema's own end — or a
+synthetic degenerate row where every admitted logit ties and the tie-break
+returns a token with no transition) returns `*out_token == -2` at `SSLM_OK` from
 `SslmGpuSeqFinishTokenForG5Bridge`/`SslmGpuSeqDecodeStepForG5Bridge` —
 never `SSLM_SEQUENCE_REJECTED`, which those calls reserve for their own
 precondition failures — matching the CPU path's identical `-2` convention
-for the same event. The walk state and layer index are left exactly as
+for the same event. **What the `-2` means is read, not inferred (1.19.0;
+no ABI change):** call `SslmGpuSeqSchemaAcceptingForG5Bridge` (or read
+`sslm_gpu_seq_forced_tokens`' `out_accepting`) right after it. 1 is a
+**clean stop** — the walk is in an accept state, the document is complete,
+and this is the normal end of schema-constrained generation; 0 is a **dead
+end**, which stays an error. The CPU path reports the same pair through
+`sslm_stats().schema_accepting`, and the two paths agree token for token
+and on the accepting bit. The walk state and layer index are left exactly as
 they were and `ready_for_logits` is re-armed, so a further call to either
 GPU entry point reproduces the identical `-2` result deterministically,
-consuming no new token from the caller: retrying after a dead end is
-always safe. A dead-ended sequence is `sslm_gpu_seq_reset`- and
+consuming no new token from the caller: retrying after a clean stop or a
+dead end is always safe. A sequence stopped either way is `sslm_gpu_seq_reset`- and
 `sslm_gpu_seq_bind_adapter`-eligible (see the CHANGELOG), and is proven
 bit-identical between the CPU and GPU paths at real scale (see
 [Certified platforms](#certified-platforms)).

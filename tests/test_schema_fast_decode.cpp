@@ -4869,6 +4869,9 @@ void Cell_TF_4b() {
 // J1-X (plan rev 1.3.3 §5.10, §11.4): the exact jump-forward cells.
 #include "schema_fast_decode/sfd_cells_x.inc"
 
+// Engine 1.19, the clean stop at the schema's end: the CPU cells E1-E7 (the -2 contract's pins).
+#include "schema_fast_decode/sfd_cells_cleanstop.inc"
+
 // Q6C.7 [Q6 C] One thread, no hook (the box's 1-thread jump-forward-on arm; A/B 2026-10-20): the §5.6 host
 // loop on POTION and LONGKEY at budget 64, with the workspace and with ws = NULL. Every verb call that admits
 // M >= 1 rows makes exactly one S-LAYERROWS entry, a batched pass of M rows, and the stream is the
@@ -5058,7 +5061,15 @@ void RunSchemaFastDecodeCells(int& checks, int& failures) {
 	run("11.X3", Cell_X_11_3);
 	run("TF.2d", Cell_X_TF_2d);
 	run("TF.4bX", Cell_X_TF_4b);
-	std::printf("schema fast-decode (M1, J1, TF, J1-X) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
+	// Engine 1.19 clean stop (-2 at SSLM_OK; accepting 1 is the schema's end, 0 a dead end)
+	run("CS.E1", Cell_CS_E1);
+	run("CS.E2", Cell_CS_E2);
+	run("CS.E3", Cell_CS_E3);
+	run("CS.E4", Cell_CS_E4);
+	run("CS.E5", Cell_CS_E5);
+	run("CS.E6", Cell_CS_E6);
+	run("CS.E7", Cell_CS_E7);
+	std::printf("schema fast-decode (M1, J1, TF, J1-X, clean stop) cells: %d checks, %d failures\n", GChecks.load(), GFailures.load());
 	checks += GChecks;
 	failures += GFailures;
 }

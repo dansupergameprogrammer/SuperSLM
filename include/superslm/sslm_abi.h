@@ -300,7 +300,8 @@ typedef struct sslm_stats_out {
     /* (design Sec14.1): 1 iff a schema is bound AND the sequence's current dfa_walk_state is a
      * member of that schema's accept set (accepting_le/accepting_count, design Sec13.2); 0 when it
      * is not, and 0 when no schema is bound. Use sslm_seq_schema_bound when those two zero cases
-     * must be distinguished. */
+     * must be distinguished. After a decode step's -2 the walk state is the one the -2 kept, so
+     * this reads the end state: 1 is the schema's end (a clean stop), 0 a dead end (an error). */
     int32_t schema_accepting;
 } sslm_stats_out;
 
