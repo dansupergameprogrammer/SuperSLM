@@ -2326,6 +2326,16 @@ for %%f in (1 2 3 4 5 6 7 8 9 10) do (
 	cl %SFDGCS_FLAGS% tests\schema-fast-decode-gpu\sfdg_cell_cs_g%%f.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\cells\ /Fe:out\sfdg-cs\sfdg_cell_cs_g%%f.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\cell_g%%f.log 2>&1 || (type out\sfdg-cs\cell_g%%f.log & echo clean-stop GPU cell sfdg_cell_cs_g%%f did not compile or link & goto :hard_fail)
 )
 echo clean-stop GPU cells: G1-G10 compiled and linked against the current engine.
+rem The schema fast-decode GPU tools (tools\schema_fast_decode_gpu_p2_ref.cpp, schema_fast_decode_gpu_jf_bench.cpp,
+rem schema_fast_decode_gx3_bench.cpp): compiled and linked here against the same seam engine, so each has a build
+rem recipe in this file (tools\ci\check_tools_have_build_recipe.py). Not run: P2.16's reference, GB2/GB3's jump-forward
+rem bench and GX.3's per-submit bench take a model and a D3D12 device, and the box driver
+rem (tools\schema_fast_decode_box\run_gpu_box_step.ps1) runs them. A tool that does not compile or link fails this build.
+mkdir out\sfdg-cs\tools
+cl %SFDGCS_FLAGS% tools\schema_fast_decode_gpu_p2_ref.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\tools\ /Fe:out\sfdg-cs\tools\schema_fast_decode_gpu_p2_ref.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\tool_p2_ref.log 2>&1 || (type out\sfdg-cs\tool_p2_ref.log & echo schema fast-decode GPU tool schema_fast_decode_gpu_p2_ref did not compile or link & goto :hard_fail)
+cl %SFDGCS_FLAGS% tools\schema_fast_decode_gpu_jf_bench.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\tools\ /Fe:out\sfdg-cs\tools\sslm_schema_fast_decode_gpu_jf_bench.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\tool_jf_bench.log 2>&1 || (type out\sfdg-cs\tool_jf_bench.log & echo schema fast-decode GPU tool schema_fast_decode_gpu_jf_bench did not compile or link & goto :hard_fail)
+cl %SFDGCS_FLAGS% tools\schema_fast_decode_gx3_bench.cpp out\sfdg-cs\engine\*.obj /Fo:out\sfdg-cs\tools\ /Fe:out\sfdg-cs\tools\sslm_schema_fast_decode_gx3_bench.exe /link d3d12.lib dxgi.lib dxguid.lib shlwapi.lib psapi.lib > out\sfdg-cs\tool_gx3_bench.log 2>&1 || (type out\sfdg-cs\tool_gx3_bench.log & echo schema fast-decode GPU tool schema_fast_decode_gx3_bench did not compile or link & goto :hard_fail)
+echo schema fast-decode GPU tools: P2.16 reference, jump-forward bench and GX.3 bench compiled and linked.
 if not defined SUPERSLM_SCHEMA_FAST_DECODE_FIXTURE_DIR goto :sfdgcs_runtime_skipped
 xcopy /Y /Q out\shaders\*.cso out\sfdg-cs\shaders\ >nul
 for %%f in (1 2 3 4 5 6 7 8 9 10) do (

@@ -529,10 +529,20 @@ struct CRig {
 	std::unique_ptr<cpu::Aligned> pool_buf;
 	sslm_kv_pool pool = nullptr;
 	std::vector<sslm_seq> seqs;
+	int32_t layers = 0;  // the artifact's own num_hidden_layers: Decode's whole-token layer budget
 	bool ok = false;
 	explicit CRig(const std::vector<uint8_t>& raw, uint32_t blocks = 8) {
 		m = std::make_unique<cpu::Model>(raw);
 		if (!m->ok) return;
+		// sslm_decode_params_init refuses a layer budget above the model's depth (INVALID_ARGUMENT), so the
+		// whole-token budget is read from the artifact, never assumed.
+		superslm::SslmModelView view{};
+		std::string err;
+		const bool loaded = superslm::SslmModel::Load(raw.data(), raw.size(), view, &err) == superslm::SslmModelStatus::Ok;
+		CHECK_MSG(loaded && view.config.num_hidden_layers > 0, "CPU reference: the artifact's layer count did not read (%s)",
+		          err.c_str());
+		if (!loaded || view.config.num_hidden_layers == 0) return;
+		layers = static_cast<int32_t>(view.config.num_hidden_layers);
 		const size_t size = blocks * sslm_kv_block_size(m->model) + sslm_kv_pool_overhead_size(m->model, blocks);
 		pool_buf = std::make_unique<cpu::Aligned>(size);
 		const sslm_status ps = sslm_kv_pool_create(m->model, pool_buf->p, size, blocks, &pool);
@@ -578,12 +588,16 @@ struct CRig {
 		ids.resize(st == SSLM_OK ? static_cast<size_t>(n) : 0);
 		return ids;
 	}
-	// One greedy decode: the token, -2 at a dead end, or -1000 - status.
+	// One greedy whole-token decode (layer budget = the model's depth): the token, -2 at a dead end, or -1000 - status.
+	// A non-OK status from the init or the step fails the cell here, so a broken reference never reads as a short one.
 	int32_t Decode(sslm_seq s) {
 		sslm_decode_params p{};
-		sslm_decode_params_init(M(), SSLM_DECODE_MODE_GREEDY, 64, &p);
+		const sslm_status is = sslm_decode_params_init(M(), SSLM_DECODE_MODE_GREEDY, layers, &p);
+		CHECK_MSG(is == SSLM_OK, "CPU sslm_decode_params_init(greedy, layer budget %d): %d", layers, static_cast<int>(is));
+		if (is != SSLM_OK) return -1000 - static_cast<int32_t>(is);
 		int32_t out = -100;
 		const sslm_status st = sslm_decode_step_v2(M(), &s, 1, &p, nullptr, &out);
+		CHECK_MSG(st == SSLM_OK, "CPU sslm_decode_step_v2 (layer budget %d): %d", layers, static_cast<int>(st));
 		return st == SSLM_OK ? out : -1000 - static_cast<int32_t>(st);
 	}
 };

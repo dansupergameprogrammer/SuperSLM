@@ -62,6 +62,16 @@ release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB
   exists there, and is otherwise left to the `PATH` lookup. `docs/quickstart.md` also now states that Qwen3-0.6B,
   like Qwen3-Embedding-0.6B, needs `--channel-scale-headroom 1.25` (about 27.8 clipped per million at the default).
 
+### Build
+
+- **`build.bat` test and checker fixes.** It links `tests\test_batched_threading.cpp` into
+  `superslm_tests`, as CMake does (before, the link failed with `LNK2019` on `RunBatchedThreadingCells`). The T-2807
+  X2 export-slot check's consumer calls all 55 C verbs, including the 1.14.0 and 1.15.0 prefix save/restore and
+  jump-forward verbs it had missed. The schema fast-decode GPU tools (P2.16 reference, jump-forward bench, GX.3
+  bench) are compiled and linked by `build.bat`. `tests\t3094-multicommand-s0`, a red suite by design for work not
+  yet built, is allowlisted with its reason rather than run on every build, so both build-recipe checks pass.
+  `requirements.txt` now declares `capstone`, which the FP-free scan imports.
+
 ## [1.18.1] - 2026-10-31
 
 A GPU fix release. No token, save format, status, verb or shader changes. `SPX1` prefix blobs are bound to the engine

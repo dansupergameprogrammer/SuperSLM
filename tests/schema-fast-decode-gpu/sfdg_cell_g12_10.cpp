@@ -34,7 +34,9 @@ GSeq NewSeq(GRig& rig, bool pooled) {
 	CHECK_MSG(st == GS::SSLM_OK && s.h, "[G12.10] budgeted create: %s", Name(st));
 	if (!s.h) return s;
 	rig.seqs.push_back(s.h);
-	SslmGpuSeqSetSchemaForG5Bridge(rig.ctx(), s.h, rig.Index(kLongKey));
+	const int32_t i = rig.Index(kLongKey);
+	const GS b = SslmGpuSeqSetSchemaForG5Bridge(rig.ctx(), s.h, i);
+	CHECK_MSG(i >= 0 && b == GS::SSLM_OK, "[G12.10] budgeted bind %s: index %d, %s", kLongKey, i, Name(b));
 	return s;
 }
 
