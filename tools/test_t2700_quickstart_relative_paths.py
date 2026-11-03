@@ -272,3 +272,48 @@ def test_flow_as_the_quickstart_types_it_with_every_path_relative(tmp_path, monk
         "--capture", f"bin/{real['capture'].name}", "--verifier", f"bin/{real['verifier'].name}"],
         log)
     _assert_flow_used(log, real, caller / "result" / "model.sslm")
+
+
+# ==============================================================================
+# Bare name (no directory part). Added by the builder on the release owner's instruction
+# (2026-11-03): a bare name is the file of that name in the caller's working directory when
+# one exists there, and is otherwise left to the OS's PATH lookup.
+# ==============================================================================
+
+
+@pytest.mark.parametrize("flag", ["capture", "verifier"])
+def test_flow_runs_a_bare_name_from_the_callers_directory_when_the_file_is_there(
+        flag, tmp_path, monkeypatch, loaded):
+    """A bare `--<flag> <name>` typed in the directory that holds `<name>`: every launch is
+    that file, and the same-named decoy first on PATH never runs."""
+    checkpoint, model = loaded
+    real, log = _install(tmp_path, monkeypatch, model)
+    _stand_in_prepare_and_load(monkeypatch, checkpoint, model)
+    paths = {role: str(path) for role, path in real.items()}
+    paths[flag] = real[flag].name
+    out = tmp_path / "result" / "model.sslm"
+    _run_flow(monkeypatch, real[flag].parent, [
+        "--checkpoint", str(checkpoint), "--out", str(out), "--work", str(out.parent / "work"),
+        "--capture", paths["capture"], "--verifier", paths["verifier"]], log)
+    _assert_flow_used(log, real, out)
+
+
+@pytest.mark.parametrize("flag", ["capture", "verifier"])
+def test_flow_leaves_a_bare_name_to_the_path_lookup_when_the_callers_directory_lacks_it(
+        flag, tmp_path, monkeypatch, loaded):
+    """A bare `--<flag> <name>` typed in a directory with no file of that name: the OS's PATH
+    lookup decides. The working binary is put first on PATH (ahead of the decoy), so the flow
+    completes only if the bare name reached the PATH lookup unchanged."""
+    checkpoint, model = loaded
+    real, log = _install(tmp_path, monkeypatch, model)
+    _stand_in_prepare_and_load(monkeypatch, checkpoint, model)
+    monkeypatch.setenv("PATH", str(real[flag].parent) + os.pathsep + os.environ["PATH"])
+    paths = {role: str(path) for role, path in real.items()}
+    paths[flag] = real[flag].name
+    caller = tmp_path / "caller" / "elsewhere"
+    caller.mkdir(parents=True)
+    out = tmp_path / "result" / "model.sslm"
+    _run_flow(monkeypatch, caller, [
+        "--checkpoint", str(checkpoint), "--out", str(out), "--work", str(out.parent / "work"),
+        "--capture", paths["capture"], "--verifier", paths["verifier"]], log)
+    _assert_flow_used(log, real, out)

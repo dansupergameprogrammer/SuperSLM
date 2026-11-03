@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -275,7 +276,30 @@ def _flow_from_cache(args, source_cache: Path, inputs: Path, work: Path):
     return report
 
 
+def _resolve_tool_path(value: str) -> str:
+    """A `--capture`/`--verifier` value as the caller meant it, fixed against the caller's
+    working directory before anything uses it.
+
+    A value with a directory part (`./name`, `dir/name`) is made absolute against the working
+    directory: `str(Path("./name"))` is the bare `name`, which the OS would then look up on
+    PATH, and a relative path would also break under a later change of directory. A bare name
+    (`name`) is the file of that name in the working directory when one exists there, and is
+    otherwise left as typed, for the OS's PATH lookup. An absolute value is returned as is."""
+    path = Path(value)
+    if path.is_absolute():
+        return value
+    separators = [sep for sep in (os.sep, os.altsep) if sep]
+    if path.drive or any(sep in value for sep in separators):
+        return os.path.abspath(value)
+    candidate = Path.cwd() / value
+    if candidate.is_file():
+        return str(candidate)
+    return value
+
+
 def flow(args):
+    args.capture = _resolve_tool_path(args.capture)
+    args.verifier = _resolve_tool_path(args.verifier)
     work = Path(args.work)
     out = Path(args.out)
     if work.exists() or out.exists():

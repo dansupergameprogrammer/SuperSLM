@@ -30,8 +30,8 @@ QK-norm checkpoints, including Qwen3-Embedding-0.6B, use one conversion command.
 factored float calibration, makes the provisional table, captures the full 600-record corpus three
 times (A/B/C, one shared prefix per pass), rebuilds the table from `max(float, A)` then
 `max(float, A, B)`, verifies the final artifact, and writes every peak table plus pass-C clipping
-details to `<work>/flow-report.json` and `<work>/peak-tables.npz`. Qwen3-Embedding-0.6B requires
-`--channel-scale-headroom 1.25`; the default remains 1.0 for other models.
+details to `<work>/flow-report.json` and `<work>/peak-tables.npz`. Qwen3-Embedding-0.6B and
+Qwen3-0.6B both require `--channel-scale-headroom 1.25`; the default remains 1.0 for other models.
 
 The resulting QK artifact carries the `QKC1` channel table and header flag bit 2 (`0x4`). Its
 source scales are serialized as exact binary64 bits; the landing reciprocal, exponent, ratio, and
@@ -49,6 +49,11 @@ python tools/t2700_fused_k_calibration.py flow \
   --verifier build/sslm_verify
 ```
 
+Relative `--capture` and `--verifier` paths resolve against the working directory the command
+is run from, before anything uses them: `build/sslm_verify` and `./sslm_verify` name files there,
+never a program found on `PATH`. A bare name with no directory part is the file of that name in the
+working directory when one exists, and is otherwise looked up on `PATH`.
+
 `--out` and `--work` must not exist. The command refuses pass C only when clipped direct-K
 landings exceed one per million observations; at or below that rate its report records the count
 and every overshooting `(layer, head, channel)`. On the Ryzen 9 3950X, Qwen3-Embedding-0.6B took
@@ -56,6 +61,8 @@ about 5,226 s end to end at `--channel-scale-headroom 1.25`; A/B/C each took abo
 remained within the 30-minute bar. Its pass C clipped 7 of 282,103,808 callbacks
 (0.025 per million). At the default 1.0, pass C clipped 7,713 of 282,103,808
 (27.341 per million), exceeded the one-per-million limit, and raised `ChannelScaleDidNotConverge`.
+Qwen3-0.6B behaves the same way: at the default 1.0, pass C clipped about 27.8 per million and the
+command refused it, so pass `--channel-scale-headroom 1.25` for it too.
 
 ## 1a. Calibrate a non-QK-norm checkpoint
 

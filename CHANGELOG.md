@@ -46,7 +46,18 @@ release note (draft). No ABI, struct layout, status or save format (`SSB5`, `SSB
 
 - **sslm_verify checks the SchemaMasks section.** It refuses an SCM1 section the runtime loaders refuse; before, an
   attach could report "verified" for an artifact that would not map.
-- *Placeholder:* the Qwen3 converter fix (in progress).
+- **A tied checkpoint that also carries `lm_head.weight` converts** (Qwen3-0.6B ships one). When `config.json` sets
+  `tie_word_embeddings` and the checkpoint's `lm_head.weight` has the same dtype, shape and stored bytes as
+  `embed_tokens.weight`, the converter ignores it and the result is byte-identical to converting without it. Any
+  other `lm_head.weight` on a tied config is refused with `TiedLmHeadMismatch`, which names both tensors and what
+  differs (dtype, shape or stored bytes; the comparison is on stored bytes, so `-0.0` against `+0.0` or a BF16
+  embedding re-stored as F32 is refused). Before, every tied checkpoint carrying `lm_head.weight` was refused as an
+  unmapped tensor. Untied checkpoints are unchanged.
+- **The QK-norm conversion flow resolves `--capture` and `--verifier` against the working directory**
+  (`tools/t2700_fused_k_calibration.py flow`), before any use. `--capture ./name` ran a same-named program from
+  `PATH` instead, because the leading `./` was dropped. A bare name is the file in the working directory when one
+  exists there, and is otherwise left to the `PATH` lookup. `docs/quickstart.md` also now states that Qwen3-0.6B,
+  like Qwen3-Embedding-0.6B, needs `--channel-scale-headroom 1.25` (about 27.8 clipped per million at the default).
 
 ## [1.18.1] - 2026-10-31
 

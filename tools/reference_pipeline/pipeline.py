@@ -178,6 +178,14 @@ class UnsupportedOpSet(ValueError):
     """A model shape outside §5's operator set. Rejected, never floor-divided past."""
 
 
+class TiedLmHeadMismatch(UnsupportedOpSet):
+    """A tied config (`tie_word_embeddings: true`) whose checkpoint also carries an
+    `lm_head.weight` that is not a stored copy of the embedding: its dtype, shape or stored
+    bytes differ. A tied model has one weight for both ends, so a differing second copy is a
+    checkpoint that contradicts its own config, and either reading of it is a guess.
+    Subclasses `UnsupportedOpSet`, the class this input was refused with before 1.19."""
+
+
 class ExactnessEnvelopeExceeded(OverflowError):
     """An accumulation whose worst case is not exactly representable in float64."""
 
@@ -1425,6 +1433,17 @@ class _SafeTensors:
     def keys(self):
         return set(self._header)
 
+    def stored(self, name: str):
+        """One tensor as stored: `(dtype, shape, raw)`, where `raw` is the tensor's own byte
+        range, mapped and never widened. Raises KeyError if the checkpoint does not carry it."""
+        if name not in self._header:
+            raise KeyError(name)
+        spec = self._header[name]
+        start, end = spec["data_offsets"]
+        raw = np.memmap(self._path, dtype=np.uint8, mode="r",
+                        offset=self._offset + start, shape=(end - start,))
+        return spec["dtype"], tuple(spec["shape"]), raw
+
     def tensor(self, name: str):
         """One tensor, as float64. Raises KeyError if the checkpoint does not carry it."""
         if name not in self._header:
@@ -1843,6 +1862,11 @@ class _ShardedSafeTensors:
     def keys(self):
         return set(self._weight_map)
 
+    def stored(self, name: str):
+        if name not in self._weight_map:
+            raise KeyError(name)
+        return self._shard_readers[self._weight_map[name]].stored(name)
+
     def tensor(self, name: str):
         if name not in self._weight_map:
             raise KeyError(name)
@@ -1865,6 +1889,64 @@ def _open_checkpoint_tensors(checkpoint: Path):
     if index_path.exists():
         return _ShardedSafeTensors(checkpoint, index_path)
     return _SafeTensors(_checkpoint_tensor_file(checkpoint))
+
+
+_STORED_COMPARE_CHUNK = 1 << 24
+
+
+def _first_differing_byte(a, b):
+    """The offset of the first byte at which two equal-length byte arrays differ, or None.
+    Compared in chunks so a full-vocabulary embedding is never copied whole."""
+    for start in range(0, len(a), _STORED_COMPARE_CHUNK):
+        stop = start + _STORED_COMPARE_CHUNK
+        left = np.asarray(a[start:stop])
+        right = np.asarray(b[start:stop])
+        if not np.array_equal(left, right):
+            return start + int(np.flatnonzero(left != right)[0])
+    return None
+
+
+def _drop_tied_duplicate_lm_head(checkpoint, cfg: ModelConfig, tensors, present: set) -> set:
+    """`present` without `lm_head.weight` when the config is tied and the checkpoint's
+    `lm_head.weight` is a stored copy of the embedding: the same dtype, the same shape and
+    the same stored bytes. The load then proceeds exactly as if the tensor were absent.
+
+    Any other tied `lm_head.weight` raises `TiedLmHeadMismatch`, naming both tensors and
+    every property that differs. The comparison is on the stored header and bytes, never on
+    the widened values: +0.0 and -0.0 are equal values and different bytes, and a BF16
+    tensor re-stored as F32 widens to the same float64 while being a different tensor.
+    An untied config, or a checkpoint without `lm_head.weight`, returns `present` unchanged.
+    """
+    head = "lm_head.weight"
+    if not cfg.tie_word_embeddings or head not in present or head not in tensors.keys():
+        return present
+    embed = f"{detect_namespace(present)}embed_tokens.weight"
+    if embed not in tensors.keys():
+        return present
+    head_dtype, head_shape, head_raw = tensors.stored(head)
+    embed_dtype, embed_shape, embed_raw = tensors.stored(embed)
+    differences = []
+    if head_dtype != embed_dtype:
+        differences.append(f"dtype differs ({head} {head_dtype}, {embed} {embed_dtype})")
+    if head_shape != embed_shape:
+        differences.append(
+            f"shape differs ({head} {list(head_shape)}, {embed} {list(embed_shape)})")
+    if len(head_raw) != len(embed_raw):
+        differences.append(
+            f"stored bytes differ ({head} {len(head_raw)} bytes, {embed} {len(embed_raw)})")
+    else:
+        offset = _first_differing_byte(head_raw, embed_raw)
+        if offset is not None:
+            differences.append(f"stored bytes differ (first at byte {offset})")
+    if differences:
+        raise TiedLmHeadMismatch(
+            f"{checkpoint}: config.json sets tie_word_embeddings, and the checkpoint also "
+            f"carries {head}, which is not a stored copy of {embed}: "
+            f"{'; '.join(differences)}. A tied model has one weight for both ends; a "
+            f"duplicate is accepted only when its dtype, shape and stored bytes are identical "
+            f"to the embedding's"
+        )
+    return present - {head}
 
 
 def _checkpoint_tokenize_prompt(checkpoint):
@@ -1942,6 +2024,10 @@ def load_model(checkpoint, extra_tensors=None, require_tensors=(),
     untied), so this is an accepted, named residual on a hypothetical input, not a silent
     trap on a real one.
 
+    A tied config whose checkpoint also carries `lm_head.weight` (Qwen3-0.6B ships one) loads
+    exactly as if the tensor were absent when it is a stored copy of the embedding, and is
+    refused with `TiedLmHeadMismatch` otherwise (`_drop_tied_duplicate_lm_head`).
+
     `extra_tensors` and `require_tensors` exist for the rejection cells: they add names to
     the observed and to the demanded key sets respectively, so both directions of the map's
     totality can be driven without a corrupt checkpoint on disk. Since CKN-01 (T-2539),
@@ -1965,6 +2051,7 @@ def load_model(checkpoint, extra_tensors=None, require_tensors=(),
     tensors = _open_checkpoint_tensors(checkpoint)
     present = set(tensors.keys())
     present.update(extra_tensors or {})
+    present = _drop_tied_duplicate_lm_head(checkpoint, cfg, tensors, present)
 
     names = _upstream_names(cfg, present)
     demanded = set(names) | set(require_tensors)
