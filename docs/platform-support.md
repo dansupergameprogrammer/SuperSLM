@@ -82,7 +82,7 @@ tiers, and for decode, nothing changes.
 | GCC / Clang, AVX2 tier | on at M >= 8 | Bit-identity: full suite forced AVX2, tiled golden, cross-tier digest, save-blob equality against 1.9.0 on the in-tree fixture and on synthetic real-width artifacts |
 | GCC / Clang, AVX-512 tier | on at M >= 8 | Same evidence, forced AVX-512 and auto dispatch |
 | MSVC / clang-cl, AVX2 tier | on at M >= 8 | Full suite, auto and forced AVX2, green on the Windows CI legs and on a Zen 2 desktop (MSVC 19.33, clang-cl 15); digests equal to the GCC/Clang builds |
-| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_TILED_AVX512_MSVC=0`) | Held on the shipped per-row kernel until an MSVC AVX-512 build has executed the tiled kernel |
+| MSVC / clang-cl, AVX-512 tier | on at M >= 8 (`SUPERSLM_TILED_AVX512_MSVC`, default 1) | v1.19.0 run 2026-11-05 on an i7-1165G7 (MSVC 19.44): full suite forced AVX-512 and auto, 0 failures, GLOBAL digest equal to the GCC build's; clang-cl not yet executed on AVX-512. `=0` turns it off |
 
 **Measured, engine level, one GEMM, on a 4-vCPU cloud Xeon (AVX2 and
 AVX-512BW, shared host, best of N):** at the 1.5B `gate`/`up` shape
@@ -137,7 +137,7 @@ every width-1 row, and rarely a wider one.
 | GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the prob·V golden pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
 | GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
 | MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
-| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | Held on the 1.9.0 loop until an MSVC AVX-512 build has executed the fast path; the forced AVX-512 Windows legs build with it on |
+| MSVC / clang-cl, AVX-512 tier | on (`SUPERSLM_SITES_AVX512_MSVC`, default 1) | v1.19.0 run 2026-11-05 on an i7-1165G7 (MSVC 19.44): full suite forced AVX-512 and auto, 0 failures, GLOBAL digest equal to the GCC build's; clang-cl not yet executed on AVX-512. `=0` turns it off |
 
 **Measured, engine level, same host as above (best of 50, 9 interleaved
 rounds):** at head dimension 64 one call is 17-21x faster than 1.9.0's
@@ -169,7 +169,7 @@ run the v1.9.0 code.
 | GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the requant golden pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
 | GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
 | MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
-| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | The same switch as prob·V above |
+| MSVC / clang-cl, AVX-512 tier | on (`SUPERSLM_SITES_AVX512_MSVC`, default 1) | v1.19.0 run 2026-11-05 on an i7-1165G7 (MSVC 19.44): full suite forced AVX-512 and auto, 0 failures, GLOBAL digest equal to the GCC build's; clang-cl not yet executed on AVX-512. `=0` turns it off |
 
 **Measured, engine level, same host as above (best of 50, 9 interleaved
 rounds):** one funnel call at width 4,864 takes 31.5 µs on 1.9.0, 5.6 µs
@@ -198,7 +198,7 @@ stays floating-point-free.
 | GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the softmax golden pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
 | GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
 | MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
-| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | The same switch as prob·V above |
+| MSVC / clang-cl, AVX-512 tier | on (`SUPERSLM_SITES_AVX512_MSVC`, default 1) | v1.19.0 run 2026-11-05 on an i7-1165G7 (MSVC 19.44): full suite forced AVX-512 and auto, 0 failures, GLOBAL digest equal to the GCC build's; clang-cl not yet executed on AVX-512. `=0` turns it off |
 
 **Measured, engine level, same host as above (best of 30, 9 interleaved
 rounds):** a row of 512 keys takes 3.8 µs on 1.9.0, 1.06 µs on AVX2 and
@@ -230,7 +230,7 @@ is integer arithmetic only.
 | GCC / Clang, AVX2 tier | on | Bit-identity: full suite forced AVX2, the Q31 golden and the QK-norm fixture pinned from 1.9.0, cross-tier digest, save-blob equality against 1.9.0 |
 | GCC / Clang, AVX-512 tier | on | Same evidence, forced AVX-512 and auto dispatch |
 | MSVC / clang-cl, AVX2 tier | on | Built by the forced Windows legs; not yet executed on Windows |
-| MSVC / clang-cl, AVX-512 tier | **off** (`SUPERSLM_SITES_AVX512_MSVC=0`) | The same switch as prob·V above |
+| MSVC / clang-cl, AVX-512 tier | on (`SUPERSLM_SITES_AVX512_MSVC`, default 1) | v1.19.0 run 2026-11-05 on an i7-1165G7 (MSVC 19.44): full suite forced AVX-512 and auto, 0 failures, GLOBAL digest equal to the GCC build's; clang-cl not yet executed on AVX-512. `=0` turns it off |
 
 No real Qwen3 artifact has run the new kernel yet: a QK-norm artifact is
 still refused at map time on this host. The evidence is a QK-norm fixture

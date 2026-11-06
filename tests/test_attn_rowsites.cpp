@@ -642,7 +642,7 @@ GemmTier ExpectedGemmTier() {
 #if defined(SUPERSLM_SITES_AVX512_MSVC)
 constexpr int kTestSitesAvx512MsvcSwitch = SUPERSLM_SITES_AVX512_MSVC;
 #else
-constexpr int kTestSitesAvx512MsvcSwitch = 0;
+constexpr int kTestSitesAvx512MsvcSwitch = 1;  // the default, on since the flip
 #endif
 #if defined(_MSC_VER)
 constexpr bool kTestIsMsvcBuild = true;

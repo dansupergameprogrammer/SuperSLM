@@ -485,13 +485,14 @@ constexpr size_t kTiledMinTokens = static_cast<size_t>(SUPERSLM_TEST_TILED_MIN_T
 constexpr size_t kTiledMinTokens = 8;
 #endif
 
-// Plan §4.5, closure (c): in MSVC and clang-cl builds the AVX-512 tier keeps the DotRow loop until
-// an MSVC AVX-512 build has executed the tiled kernel. The forced AVX-512 Windows legs build with
-// SUPERSLM_TILED_AVX512_MSVC=1; the default flips in a follow-up release once one such run exists.
+// Plan §4.5, closure (c): MSVC and clang-cl builds held the AVX-512 tier on the DotRow loop until an
+// MSVC AVX-512 build had executed the tiled kernel. That run exists (v1.19.0, MSVC 19.44 on an
+// i7-1165G7, 2026-11-05: full suite forced and auto, 0 failures, GLOBAL digest equal to the GCC
+// build's), so the default is now on. SUPERSLM_TILED_AVX512_MSVC=0 restores the DotRow loop.
 #if defined(SUPERSLM_TILED_AVX512_MSVC)
 constexpr int kTiledAvx512MsvcSwitch = SUPERSLM_TILED_AVX512_MSVC;
 #else
-constexpr int kTiledAvx512MsvcSwitch = 0;
+constexpr int kTiledAvx512MsvcSwitch = 1;
 #endif
 #if defined(_MSC_VER)
 constexpr bool kIsMsvcBuild = true;  // MSVC and clang-cl
@@ -716,14 +717,14 @@ inline void RunTiledGemm(detail::GemmTier tier, const int16_t* a16, size_t kp, c
 
 // ---- Attention and per-row sites plan, slice S2: prob·V on int16 multiply-add (§4.2, §5.2) ----------
 //
-// Plan §3.2: in MSVC and clang-cl builds the AVX-512 tier keeps the v1.9.0 attention code until an MSVC
-// AVX-512 build has executed the new kernels. The forced AVX-512 Windows legs build with
-// SUPERSLM_SITES_AVX512_MSVC=1; the default flips in a follow-up release once one such run exists. A
-// separate switch from the tiled GEMM's, so one closure's executed run cannot enable the other's code.
+// Plan §3.2: MSVC and clang-cl builds held the AVX-512 tier on the v1.9.0 attention code until an MSVC
+// AVX-512 build had executed the new kernels. That run exists (v1.19.0, MSVC 19.44 on an i7-1165G7,
+// 2026-11-05, the same run as the tiled GEMM's), so the default is now on. SUPERSLM_SITES_AVX512_MSVC=0
+// restores the v1.9.0 code. A separate switch from the tiled GEMM's, so each can be turned off alone.
 #if defined(SUPERSLM_SITES_AVX512_MSVC)
 constexpr int kSitesAvx512MsvcSwitch = SUPERSLM_SITES_AVX512_MSVC;
 #else
-constexpr int kSitesAvx512MsvcSwitch = 0;
+constexpr int kSitesAvx512MsvcSwitch = 1;
 #endif
 
 // The shipped construction (v1.9.0's loop body), as an accumulate-into: out_ctx[d] += Sum_k p_k * v_k[d],

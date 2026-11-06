@@ -2,6 +2,19 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
+## [Unreleased]
+
+### Changed
+
+- **MSVC and clang-cl builds now use the fast AVX-512 kernels by default.** `SUPERSLM_TILED_AVX512_MSVC` (the tiled
+  prefill GEMM, since 1.10.0) and `SUPERSLM_SITES_AVX512_MSVC` (attention and per-row sites, since 1.10.0) now default
+  to 1. They were held at 0 until an MSVC AVX-512 build had executed the kernels. That run exists: v1.19.0 under MSVC
+  19.44 on an i7-1165G7, full suite forced AVX-512 and auto dispatch, 0 failures, `GLOBAL` digest `1aee5b59...` equal
+  to the GCC build's. Outputs are unchanged: the same tokens, save blobs and digest. On that laptop, a downstream
+  embedding query went from about 960 ms to about 430 ms per query, and opening the model from about 20 s to about
+  10 s. AVX2 machines and GCC/Clang builds are unaffected. Define either switch as 0 to restore the old code.
+  clang-cl has not yet executed these kernels on AVX-512 hardware.
+
 ## [1.19.0] - 2026-11-03
 
 JSON arrays in schema-constrained generation, and a clean stop at the schema's end. `docs/releases/1.19.0.md` is the

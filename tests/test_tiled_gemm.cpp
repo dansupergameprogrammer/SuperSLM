@@ -101,9 +101,9 @@ constexpr int64_t kCanary = 0x5A5A5A5A5A5A5A5All;
 constexpr size_t kPlanTiledMinTokens = 8;
 
 // Whether this build's AVX-512 tier is held on the DotRow loop (plan §4.5): MSVC or clang-cl with
-// SUPERSLM_TILED_AVX512_MSVC unset or 0. Read from the macros the test itself sees, not from the
-// build's selector.
-#if defined(_MSC_VER) && !(defined(SUPERSLM_TILED_AVX512_MSVC) && SUPERSLM_TILED_AVX512_MSVC)
+// SUPERSLM_TILED_AVX512_MSVC set to 0 (unset means on since the default flipped). Read from the macros
+// the test itself sees, not from the build's selector.
+#if defined(_MSC_VER) && defined(SUPERSLM_TILED_AVX512_MSVC) && !SUPERSLM_TILED_AVX512_MSVC
 constexpr bool kMsvcAvx512HeldOff = true;
 #else
 constexpr bool kMsvcAvx512HeldOff = false;
